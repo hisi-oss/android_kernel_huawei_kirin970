@@ -609,3 +609,7 @@ in your dentry operations instead.
 	nonwithstanding, failure exits in ->atomic_open() instances should
 	*NOT* fput() the file, no matter what.  Everything is handled by the
 	caller.
+--
+[mandatory]
+	__fd_install() & fd_install() can now sleep. Callers should not
+	hold a spinlock	or other resources that do not allow a schedule.
