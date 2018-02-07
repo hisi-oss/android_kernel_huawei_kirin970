@@ -550,7 +550,6 @@ bool rdr_init_done(void)
 static s32 __init rdr_init(void)
 {
 	struct task_struct *rdr_main = NULL;
-	struct task_struct *rdr_bootcheck = NULL;
 	struct task_struct *rdr_cleartext = NULL;
 	struct sched_param param;
 	int ret;
@@ -585,14 +584,6 @@ static s32 __init rdr_init(void)
 	param.sched_priority = BBOX_RT_PRIORITY;
 	if (sched_setscheduler(rdr_main, SCHED_FIFO, &param)) {
 		BB_PRINT_ERR("sched_setscheduler rdr_bootcheck_thread faild\n");
-		kthread_stop(rdr_main);
-		wakeup_source_trash(&blackbox_wl);
-		goto err;
-	}
-	rdr_bootcheck =
-	    kthread_run(rdr_bootcheck_thread_body, NULL, "bbox_bootcheck");
-	if (rdr_bootcheck == NULL) {
-		BB_PRINT_ERR("create thread rdr_bootcheck_thread faild\n");
 		kthread_stop(rdr_main);
 		wakeup_source_trash(&blackbox_wl);
 		goto err;

@@ -277,7 +277,6 @@ void rdr_field_baseinfo_reinit(void);
 int rdr_get_sr_state(void);
 int rdr_get_reboot_state(void);
 
-int rdr_bootcheck_thread_body(void *arg);
 char *rdr_get_reboot_logpath(void);
 struct cmdword *get_reboot_reason_map(void);
 u32 get_reboot_reason_map_size(void);
