@@ -72,7 +72,6 @@ endif
 obj-$(CONFIG_HISPIPP) += ipp/
 obj-$(CONFIG_ACCURATE_DELAY) += accurate_delay/
 obj-$(CONFIG_PERF_CTRL) += perf_ctrl/
-obj-$(CONFIG_HISI_DUMMY_KO) += hisi_dummy_ko/
 obj-$(CONFIG_VENDOR_RPMB) += rpmb/
 obj-$(CONFIG_PERFHUB) += perfhub/
 obj-$(CONFIG_HISI_ICS_IPU_PLATFORM) += ics/
