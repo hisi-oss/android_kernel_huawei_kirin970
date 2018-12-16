@@ -102,13 +102,13 @@ int always_use_hifi_usb(int val)
 
 int get_never_hifi_usb_value(void)
 {
-	return never_hifi_usb;
+	return 1;
 }
 EXPORT_SYMBOL(get_never_hifi_usb_value);
 
 int get_always_hifi_usb_value(void)
 {
-	return always_hifi_usb;
+	return 0;
 }
 EXPORT_SYMBOL(get_always_hifi_usb_value);
 
