@@ -57,9 +57,8 @@ C_h	.req	x12
 D_l	.req	x13
 D_h	.req	x14
 
-	.weak memmove
 ENTRY(__memmove)
-ENTRY_NOTAG(memmove)
+WEAK(memmove)
 	cmp	dstin, src
 #ifdef CONFIG_ARM64_HKRR
 	b.hs	4f
