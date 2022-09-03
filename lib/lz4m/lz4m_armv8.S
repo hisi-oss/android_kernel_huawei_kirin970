@@ -70,14 +70,6 @@
 
 .altmacro
 .macro lz4m_decompress_asm_generic       doprfm=1
-LOCAL Lz4m_decompress_begin, Decode_token, Get_literal_length
-LOCAL Copy_long_literal_hs_15, Copy_long_literal_loop
-LOCAL Copy_literal_lt_15, Decode_offset_matchlength
-LOCAL Get_long_matchlength, Copy_match_begin
-LOCAL Cond_offset_lt_matchlength, Copy_offset_lt_32
-LOCAL Copy_match_perm, Copy_offset_lt_32_loop
-LOCAL Cond_offset_ge_matchlength, Copy_offset_ge_match_loop
-LOCAL Copy_long_literal_hi_16
         establish_frame
         stp     x3, x0, [sp, #-16]!             /* push src and dst in stack */
         ldr     x3, [x3]                                /* x3 = *src_ptr */
@@ -85,7 +77,7 @@ LOCAL Copy_long_literal_hi_16
         adr     permtable_addr, Permtable
         adr     cplen_table_addr, Copylength_table
 
-Lz4m_decompress_begin:
+Lz4m_decompress_begin\@:
         /*
          * save current dst and src ,ensure when return from asm routine
          * current both of "dst" and "src" save good position.
@@ -100,7 +92,7 @@ Lz4m_decompress_begin:
 .endif
 
         /* Decode Token Byte: */
-Decode_token:
+Decode_token\@:
         ldrh    w_tmp, [x3], #2         /* read Token Byte */
         and w_offset,w_tmp,0x3ff
         lsr     literal_length, tmp, #13        /* get literal_length */
@@ -113,21 +105,21 @@ Decode_token:
          * or more bytes are liteal bytes.
          */
         cmp     literal_length,MASK
-        b.ls    Copy_long_literal_hi_16
+        b.ls    Copy_long_literal_hi_16\@
 
         /*
          * literal_length == 15 : more literal length bytes after TokenByte.
          * continue decoding more literal length bytes.
          */
-Get_literal_length:
+Get_literal_length\@:
         check_src_overflow
         ldrb    w_tmp, [x3], #1
         add     literal_length, literal_length, tmp,lsl #2
         cmp     tmp, #255
-        b.eq    Get_literal_length
+        b.eq    Get_literal_length\@
 
 /* literal copy */
-Copy_long_literal_hi_16:
+Copy_long_literal_hi_16\@:
         mov     copy_from_ptr, x3
         mov     copy_to_ptr, x0
         add     x3, x3, literal_length
@@ -135,17 +127,17 @@ Copy_long_literal_hi_16:
         check_dst_overflow
         check_src_overflow
 
-Copy_long_literal_loop:
+Copy_long_literal_loop\@:
         ldr     q0, [copy_from_ptr], #16
         str     q0, [copy_to_ptr], #16
 
         cmp     x0, copy_to_ptr
-        b.ls    Decode_offset_matchlength
-        b       Copy_long_literal_loop
+        b.ls    Decode_offset_matchlength\@
+        b       Copy_long_literal_loop\@
 
 
         /* Decode offset and match_length */
-Decode_offset_matchlength:
+Decode_offset_matchlength\@:
         cbz     offset,Done /* match_length == 0 is invalid */
         lsl offset,offset,#2
         sub     copy_from_ptr, x0, offset
@@ -157,67 +149,67 @@ Decode_offset_matchlength:
          */
         add     x0, x0, match_length
         cmp     match_length, MASK
-        b.lo    Copy_match_begin
+        b.lo    Copy_match_begin\@
         /*
          * continue decoding more match length bytes.
          */
-Get_long_matchlength:
+Get_long_matchlength\@:
         check_src_overflow
         ldrb    w_tmp, [x3], #1
         add     x0, x0, tmp,lsl #2
         add     match_length, match_length, tmp, lsl #2
         cmp     tmp, #255
-        b.eq    Get_long_matchlength
+        b.eq    Get_long_matchlength\@
         check_dst_overflow
         /*
          * here got the matchlength,start "match copy".
          */
-Copy_match_begin:
+Copy_match_begin\@:
         cmp offset , match_length
-        b.hs    Cond_offset_ge_matchlength
+        b.hs    Cond_offset_ge_matchlength\@
 
-Cond_offset_lt_matchlength:
+Cond_offset_lt_matchlength\@:
         cmp     offset , #32
-        b.hs    Cond_offset_ge_matchlength
+        b.hs    Cond_offset_ge_matchlength\@
 
-Copy_offset_lt_32:
+Copy_offset_lt_32\@:
         ldr     q1, [copy_from_ptr]
         add     tmp, permtable_addr, offset, lsl #5
         ldp     q2, q3, [tmp]
         tbl     v0.16b, {v1.16b}, v2.16b
         tbl     v1.16b, {v1.16b}, v3.16b
         cmp     offset , #16
-        b.lo    Copy_match_perm
+        b.lo    Copy_match_perm\@
         ldp     q0, q1, [copy_from_ptr]
-Copy_match_perm:
+Copy_match_perm\@:
         ldrb    w_tmp, [cplen_table_addr, offset]
         stp     q0, q1, [copy_to_ptr]
         add     copy_to_ptr, copy_to_ptr, tmp
         cmp     x0, copy_to_ptr
-        b.ls    Lz4m_decompress_begin
-Copy_offset_lt_32_loop:
+        b.ls    Lz4m_decompress_begin\@
+Copy_offset_lt_32\@_loop:
         stp     q0, q1, [copy_to_ptr]
         add     copy_to_ptr, copy_to_ptr, tmp
         stp     q0, q1, [copy_to_ptr]
         add     copy_to_ptr, copy_to_ptr, tmp
         cmp     x0, copy_to_ptr
-        b.hi    Copy_offset_lt_32_loop
-        b       Lz4m_decompress_begin
+        b.hi    Copy_offset_lt_32\@_loop
+        b       Lz4m_decompress_begin\@
 
 /* offset >= match */
-Cond_offset_ge_matchlength:
+Cond_offset_ge_matchlength\@:
         ldr     q0, [copy_from_ptr], #16
         str     q0, [copy_to_ptr], #16
 
         cmp     x0, copy_to_ptr
-        b.ls    Lz4m_decompress_begin
-Copy_offset_ge_match_loop:
+        b.ls    Lz4m_decompress_begin\@
+Copy_offset_ge_match_loop\@:
         ldp     q0, q1, [copy_from_ptr], #32
         stp     q0, q1, [copy_to_ptr], #32
 
         cmp     x0, copy_to_ptr
-        b.hi    Copy_offset_ge_match_loop
-        b       Lz4m_decompress_begin
+        b.hi    Copy_offset_ge_match_loop\@
+        b       Lz4m_decompress_begin\@
 .endm
 
 ENTRY(_lz4m_decode_asm)
