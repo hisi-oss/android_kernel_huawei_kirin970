@@ -49,7 +49,15 @@
  * TASK_UNMAPPED_BASE - the lower boundary of the mmap VM area.
  */
 #ifdef CONFIG_COMPAT
+#ifdef CONFIG_ARM64_64K_PAGES
+/*
+ * With CONFIG_ARM64_64K_PAGES enabled, the last page is occupied
+ * by the compat vectors page.
+ */
 #define TASK_SIZE_32		UL(0x100000000)
+#else
+#define TASK_SIZE_32		(UL(0x100000000) - PAGE_SIZE)
+#endif /* CONFIG_ARM64_64K_PAGES */
 #define TASK_SIZE		(test_thread_flag(TIF_32BIT) ? \
 				TASK_SIZE_32 : TASK_SIZE_64)
 #define TASK_SIZE_OF(tsk)	(test_tsk_thread_flag(tsk, TIF_32BIT) ? \
@@ -139,11 +147,29 @@ static inline void start_thread_common(struct pt_regs *regs, unsigned long pc)
 	regs->pc = pc;
 }
 
+static inline void set_ssbs_bit(struct pt_regs *regs)
+{
+	regs->pstate |= PSR_SSBS_BIT;
+}
+
+static inline void set_compat_ssbs_bit(struct pt_regs *regs)
+{
+	regs->pstate |= PSR_AA32_SSBS_BIT;
+}
+
 static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 				unsigned long sp)
 {
 	start_thread_common(regs, pc);
 	regs->pstate = PSR_MODE_EL0t;
+
+#ifdef CONFIG_HISI_BYPASS_SSBS
+	regs->pstate |= PSR_SSBS_BIT;
+#else
+	if (arm64_get_ssbd_state() != ARM64_SSBD_FORCE_ENABLE)
+		set_ssbs_bit(regs);
+#endif
+
 	regs->sp = sp;
 }
 
@@ -158,6 +184,13 @@ static inline void compat_start_thread(struct pt_regs *regs, unsigned long pc,
 
 #ifdef __AARCH64EB__
 	regs->pstate |= COMPAT_PSR_E_BIT;
+#endif
+
+#ifdef CONFIG_HISI_BYPASS_SSBS
+	regs->pstate |= PSR_AA32_SSBS_BIT;
+#else
+	if (arm64_get_ssbd_state() != ARM64_SSBD_FORCE_ENABLE)
+		set_compat_ssbs_bit(regs);
 #endif
 
 	regs->compat_sp = sp;

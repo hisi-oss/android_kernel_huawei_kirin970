@@ -19,6 +19,8 @@
 #include <linux/syscalls.h>
 #include <linux/file.h>
 #include <linux/mm_inline.h>
+#include <linux/hisi/pagecache_manage.h>
+#include <linux/file_map.h>
 
 #include "internal.h"
 
@@ -108,7 +110,7 @@ int read_cache_pages(struct address_space *mapping, struct list_head *pages,
 
 EXPORT_SYMBOL(read_cache_pages);
 
-static int read_pages(struct address_space *mapping, struct file *filp,
+int read_pages(struct address_space *mapping, struct file *filp,
 		struct list_head *pages, unsigned int nr_pages, gfp_t gfp)
 {
 	struct blk_plug plug;
@@ -159,12 +161,25 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 	int ret = 0;
 	loff_t isize = i_size_read(inode);
 	gfp_t gfp_mask = readahead_gfp_mask(mapping);
-
+#ifdef CONFIG_FILE_MAP
+	bool badpted = false;
+	unsigned long old_nr_to_read = nr_to_read;
+#endif
 	if (isize == 0)
 		goto out;
 
+	pgcache_log_path(BIT_DO_PAGECACHE_READAHEAD_DUMP, &(filp->f_path),
+			"__do_page_cache_read, offset, %ld, nr_to_read, %ld, lookahead_size, %ld",
+			offset, nr_to_read, lookahead_size);
+
 	end_index = ((isize - 1) >> PAGE_SHIFT);
 
+#ifdef CONFIG_FILE_MAP
+	badpted = file_map_ra_adapt();
+	if (badpted)
+		nr_to_read = file_map_data_analysis(inode, offset,
+					nr_to_read, end_index, false);
+#endif
 	/*
 	 * Preallocate as many pages as we will need.
 	 */
@@ -173,7 +188,13 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 
 		if (page_offset > end_index)
 			break;
-
+#ifdef CONFIG_FILE_MAP
+		if (badpted && (old_nr_to_read == nr_to_read) &&
+		!file_map_is_set(inode, page_offset)){
+			file_map_stat_ignore_inc(1);
+			continue;
+		}
+#endif
 		rcu_read_lock();
 		page = radix_tree_lookup(&mapping->page_tree, page_offset);
 		rcu_read_unlock();
@@ -190,6 +211,10 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 		ret++;
 	}
 
+#ifdef CONFIG_FILE_MAP
+	if (badpted)
+		file_map_stat_total_inc((long)ret);
+#endif
 	/*
 	 * Now start the IO.  We ignore I/O errors - if the page is not
 	 * uptodate then the caller will launch readpage again, and
@@ -201,6 +226,17 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 out:
 	return ret;
 }
+
+#ifdef CONFIG_FSCK_BOOST
+int force_page_cache_readahead_abs(struct address_space *mapping,
+	pgoff_t offset, unsigned long nr_to_read)
+{
+	if (unlikely(!mapping->a_ops->readpage && !mapping->a_ops->readpages))
+		return -EINVAL;
+
+	return __do_page_cache_readahead(mapping, NULL, offset, nr_to_read, 0);
+}
+#endif
 
 /*
  * Chunk the readahead into 2 megabyte units, so that we don't pin too much
@@ -256,6 +292,8 @@ static unsigned long get_init_ra_size(unsigned long size, unsigned long max)
 		newsize = newsize * 2;
 	else
 		newsize = max;
+
+	newsize = pch_shrink_read_pages(newsize);
 
 	return newsize;
 }
@@ -382,6 +420,12 @@ ondemand_readahead(struct address_space *mapping,
 	unsigned long max_pages = ra->ra_pages;
 	unsigned long add_pages;
 	pgoff_t prev_offset;
+#ifdef CONFIG_HISI_BUFFERED_READAHEAD
+	unsigned long ra_pages_cr = inode_to_bdi(mapping->host)->ra_pages_cr;
+
+	if ((!task_in_pagefault(current)) && ra_pages_cr)
+		max_pages = ra_pages_cr;
+#endif
 
 	/*
 	 * If the request exceeds the readahead window, allow the read to
@@ -510,10 +554,16 @@ void page_cache_sync_readahead(struct address_space *mapping,
 
 	/* be dumb */
 	if (filp && (filp->f_mode & FMODE_RANDOM)) {
+		pgcache_log_path(BIT_PAGECACHE_SYNC_READAHEAD_DUMP, &(filp->f_path),
+				"pagecache sync read(FMODE_RANDOM), pg_offset, %ld, req_size, %ld",
+				offset, req_size);
 		force_page_cache_readahead(mapping, filp, offset, req_size);
 		return;
 	}
-
+	if(filp)
+		pgcache_log_path(BIT_PAGECACHE_SYNC_READAHEAD_DUMP, &(filp->f_path),
+				"pagecache sync readahead, pg_offset, %ld, req_size, %ld",
+				offset, req_size);
 	/* do read-ahead */
 	ondemand_readahead(mapping, ra, filp, false, offset, req_size);
 }
@@ -558,6 +608,12 @@ page_cache_async_readahead(struct address_space *mapping,
 	if (inode_read_congested(mapping->host))
 		return;
 
+#ifdef CONFIG_MM_PAGECACHE_DEBUG
+	filp->f_path.dentry->mapping_stat.async_read_times++;
+#endif
+	pgcache_log_path(BIT_PAGECACHE_ASYNC_READAHEAD_DUMP, &(filp->f_path),
+			"pagecache async readahead, pg_offset, %ld, req_size, %ld",
+			offset, req_size);
 	/* do read-ahead */
 	ondemand_readahead(mapping, ra, filp, true, offset, req_size);
 }
@@ -594,6 +650,10 @@ SYSCALL_DEFINE3(readahead, int, fd, loff_t, offset, size_t, count)
 			pgoff_t start = offset >> PAGE_SHIFT;
 			pgoff_t end = (offset + count - 1) >> PAGE_SHIFT;
 			unsigned long len = end - start + 1;
+
+			pgcache_log_path(BIT_READAHEAD_SYSCALL_DUMP, &(f.file->f_path),
+					"syscall readahead(fd:%d offset:%ld count:%d)",
+					fd, offset, count);
 			ret = do_readahead(mapping, f.file, start, len);
 		}
 		fdput(f);

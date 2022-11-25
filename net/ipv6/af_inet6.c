@@ -66,7 +66,29 @@
 #include <linux/uaccess.h>
 #include <linux/mroute6.h>
 
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+#include <linux/android_aid.h>
+
+static inline int current_has_network(void)
+{
+	return in_egroup_p(AID_INET) || capable(CAP_NET_RAW);
+}
+#else
+static inline int current_has_network(void)
+{
+	return 1;
+}
+#endif
+
 #include "ip6_offload.h"
+
+#ifdef CONFIG_HW_DPIMARK_MODULE
+#include <hwnet/hw_dpi_mark/dpi_hw_hook.h>
+#endif
+
+#ifdef CONFIG_HUAWEI_XENGINE
+#include <emcom/emcom_xengine.h>
+#endif
 
 MODULE_AUTHOR("Cast of dozens");
 MODULE_DESCRIPTION("IPv6 protocol stack for Linux");
@@ -107,8 +129,10 @@ static __inline__ struct ipv6_pinfo *inet6_sk_generic(struct sock *sk)
 	return (struct ipv6_pinfo *)(((u8 *)sk) + offset);
 }
 
-static int inet6_create(struct net *net, struct socket *sock, int protocol,
-			int kern)
+#ifndef CONFIG_MPTCP
+static
+#endif
+int inet6_create(struct net *net, struct socket *sock, int protocol, int kern)
 {
 	struct inet_sock *inet;
 	struct ipv6_pinfo *np;
@@ -121,6 +145,9 @@ static int inet6_create(struct net *net, struct socket *sock, int protocol,
 
 	if (protocol < 0 || protocol >= IPPROTO_MAX)
 		return -EINVAL;
+
+	if (!current_has_network())
+		return -EACCES;
 
 	/* Look for the requested type/protocol pair. */
 lookup_protocol:
@@ -222,7 +249,12 @@ lookup_protocol:
 	inet->mc_index	= 0;
 	inet->mc_list	= NULL;
 	inet->rcv_tos	= 0;
-
+#if defined(CONFIG_HUAWEI_BASTET) || defined(CONFIG_HUAWEI_XENGINE)
+	sk->acc_state	= 0;
+#endif
+#if defined(CONFIG_HUAWEI_BASTET)
+	sk->discard_duration   = 0;
+#endif
 	if (net->ipv4.sysctl_ip_no_pmtu_disc)
 		inet->pmtudisc = IP_PMTUDISC_DONT;
 	else
@@ -266,6 +298,24 @@ lookup_protocol:
 		}
 	}
 out:
+#ifdef CONFIG_CGROUP_BPF
+	if (!err)
+		get_task_comm(sk->sk_process_name, current->group_leader);
+#endif
+
+#ifdef CONFIG_HUAWEI_KSTATE
+	if (!err)
+		sk->sk_pid = current->tgid;
+#endif
+
+#ifdef CONFIG_HW_DPIMARK_MODULE
+	if (!err)
+		mplk_try_nw_bind(sk);
+#endif
+#ifdef CONFIG_HUAWEI_XENGINE
+	if (!err)
+		emcom_xengine_bind(sk);
+#endif
 	return err;
 out_rcu_unlock:
 	rcu_read_unlock();
@@ -316,7 +366,6 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 
 	/* Check if the address belongs to the host. */
 	if (addr_type == IPV6_ADDR_MAPPED) {
-		struct net_device *dev = NULL;
 		int chk_addr_ret;
 
 		/* Binding to v4-mapped address on a v6-only socket
@@ -327,20 +376,9 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			goto out;
 		}
 
-		rcu_read_lock();
-		if (sk->sk_bound_dev_if) {
-			dev = dev_get_by_index_rcu(net, sk->sk_bound_dev_if);
-			if (!dev) {
-				err = -ENODEV;
-				goto out_unlock;
-			}
-		}
-
 		/* Reproduce AF_INET checks to make the bindings consistent */
 		v4addr = addr->sin6_addr.s6_addr32[3];
-		chk_addr_ret = inet_addr_type_dev_table(net, dev, v4addr);
-		rcu_read_unlock();
-
+		chk_addr_ret = inet_addr_type(net, v4addr);
 		if (!net->ipv4.sysctl_ip_nonlocal_bind &&
 		    !(inet->freebind || inet->transparent) &&
 		    v4addr != htonl(INADDR_ANY) &&

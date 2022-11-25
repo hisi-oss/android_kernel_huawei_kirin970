@@ -4,6 +4,7 @@ static struct kconf_id kconf_id_array[] = {
 	{ "menu",		T_MENU,			TF_COMMAND },
 	{ "endmenu",		T_ENDMENU,		TF_COMMAND },
 	{ "source",		T_SOURCE,		TF_COMMAND },
+        { "-source",            T_EXISTSOURCE,          TF_COMMAND },
 	{ "choice",		T_CHOICE,		TF_COMMAND },
 	{ "endchoice",		T_ENDCHOICE,		TF_COMMAND },
 	{ "comment",		T_COMMENT,		TF_COMMAND },

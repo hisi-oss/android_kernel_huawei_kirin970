@@ -441,11 +441,8 @@ static bool lmb_is_removable(struct of_drconf_cell *lmb)
 	phys_addr = lmb->base_addr;
 
 #ifdef CONFIG_FA_DUMP
-	/*
-	 * Don't hot-remove memory that falls in fadump boot memory area
-	 * and memory that is reserved for capturing old kernel memory.
-	 */
-	if (is_fadump_memory_area(phys_addr, block_sz))
+	/* Don't hot-remove memory that falls in fadump boot memory area */
+	if (is_fadump_boot_memory_area(phys_addr, block_sz))
 		return false;
 #endif
 
@@ -787,7 +784,7 @@ static int dlpar_add_lmb(struct of_drconf_cell *lmb)
 	nid = memory_add_physaddr_to_nid(lmb->base_addr);
 
 	/* Add the memory */
-	rc = add_memory(nid, lmb->base_addr, block_sz);
+	rc = __add_memory(nid, lmb->base_addr, block_sz);
 	if (rc) {
 		dlpar_remove_device_tree_lmb(lmb);
 		return rc;

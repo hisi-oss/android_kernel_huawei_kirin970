@@ -229,8 +229,8 @@ extern struct device_node *of_find_all_nodes(struct device_node *prev);
 static inline u64 of_read_number(const __be32 *cell, int size)
 {
 	u64 r = 0;
-	while (size--)
-		r = (r << 32) | be32_to_cpu(*(cell++));
+	for (; size--; cell++)
+		r = (r << 32) | be32_to_cpu(*cell);
 	return r;
 }
 
@@ -288,8 +288,6 @@ extern struct device_node *of_get_next_child(const struct device_node *node,
 extern struct device_node *of_get_next_available_child(
 	const struct device_node *node, struct device_node *prev);
 
-extern struct device_node *of_get_compatible_child(const struct device_node *parent,
-					const char *compatible);
 extern struct device_node *of_get_child_by_name(const struct device_node *node,
 					const char *name);
 
@@ -540,6 +538,8 @@ const char *of_prop_next_string(struct property *prop, const char *cur);
 
 bool of_console_check(struct device_node *dn, char *name, int index);
 
+extern int of_cpu_node_to_id(struct device_node *np);
+
 #else /* CONFIG_OF */
 
 static inline void of_core_init(void)
@@ -625,12 +625,6 @@ static inline struct device_node *of_find_node_with_property(
 static inline bool of_have_populated_dt(void)
 {
 	return false;
-}
-
-static inline struct device_node *of_get_compatible_child(const struct device_node *parent,
-					const char *compatible)
-{
-	return NULL;
 }
 
 static inline struct device_node *of_get_child_by_name(
@@ -878,6 +872,11 @@ static inline void of_property_set_flag(struct property *p, unsigned long flag)
 
 static inline void of_property_clear_flag(struct property *p, unsigned long flag)
 {
+}
+
+static inline int of_cpu_node_to_id(struct device_node *np)
+{
+	return -ENODEV;
 }
 
 #define of_match_ptr(_ptr)	NULL

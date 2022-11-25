@@ -38,6 +38,10 @@
 
 #include "rcu.h"
 
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/rdr_hisi_ap_hook.h>
+#endif
+
 /* Global control variables for rcupdate callback mechanism. */
 struct rcu_ctrlblk {
 	struct rcu_head *rcucblist;	/* List of pending callbacks (CBs). */
@@ -166,8 +170,14 @@ static void __rcu_process_callbacks(struct rcu_ctrlblk *rcp)
 
 static __latent_entropy void rcu_process_callbacks(struct softirq_action *unused)
 {
+#ifdef CONFIG_HISI_BB
+	softirq_hook(HK_RCU_SOFTIRQ, (u64)rcu_process_callbacks, 0);
+#endif
 	__rcu_process_callbacks(&rcu_sched_ctrlblk);
 	__rcu_process_callbacks(&rcu_bh_ctrlblk);
+#ifdef CONFIG_HISI_BB
+	softirq_hook(HK_RCU_SOFTIRQ, (u64)rcu_process_callbacks, 1);
+#endif
 }
 
 /*

@@ -16,6 +16,10 @@
 #include <linux/jhash.h>
 #include <net/tcp.h>
 
+#ifdef CONFIG_APP_ACCELERATOR
+#include <hwnet/booster/app_accelerator.h>
+#endif
+
 static DEFINE_SPINLOCK(tcp_cong_list_lock);
 static LIST_HEAD(tcp_cong_list);
 
@@ -397,6 +401,11 @@ int tcp_set_congestion_control(struct sock *sk, const char *name, bool load, boo
 u32 tcp_slow_start(struct tcp_sock *tp, u32 acked)
 {
 	u32 cwnd = min(tp->snd_cwnd + acked, tp->snd_ssthresh);
+
+#ifdef CONFIG_APP_ACCELERATOR
+	if (app_ul_acc_start_check((struct sock *)tp))
+		return tcp_slow_start_cubic_turbo((struct sock *)tp, acked);
+#endif
 
 	acked -= cwnd - tp->snd_cwnd;
 	tp->snd_cwnd = min(cwnd, tp->snd_cwnd_clamp);

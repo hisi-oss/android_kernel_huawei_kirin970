@@ -35,11 +35,11 @@ static void drop_pagecache_sb(struct super_block *sb, void *unused)
 		spin_unlock(&inode->i_lock);
 		spin_unlock(&sb->s_inode_list_lock);
 
-		cond_resched();
 		invalidate_mapping_pages(inode->i_mapping, 0, -1);
 		iput(toput_inode);
 		toput_inode = inode;
 
+		cond_resched();
 		spin_lock(&sb->s_inode_list_lock);
 	}
 	spin_unlock(&sb->s_inode_list_lock);
@@ -74,3 +74,16 @@ int drop_caches_sysctl_handler(struct ctl_table *table, int write,
 	}
 	return 0;
 }
+#ifdef CONFIG_ION_HISI_CPA
+void cpa_drop_pagecache(void)
+{
+	iterate_supers(drop_pagecache_sb, NULL);
+}
+#endif
+
+#ifdef CONFIG_HISI_MEM_OFFLINE
+void mem_offline_drop_pagecache(void)
+{
+	iterate_supers(drop_pagecache_sb, NULL);
+}
+#endif

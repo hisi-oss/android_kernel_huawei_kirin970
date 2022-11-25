@@ -201,7 +201,9 @@ int of_pci_get_host_bridge_resources(struct device_node *dev,
 	if (!bus_range)
 		return -ENOMEM;
 
+#if !defined(CONFIG_PCIE_KPORT) || defined(CONFIG_PCIE_KPORT_TEST)
 	pr_info("host bridge %pOF ranges:\n", dev);
+#endif
 
 	err = of_pci_parse_bus_range(dev, bus_range);
 	if (err) {
@@ -230,10 +232,11 @@ int of_pci_get_host_bridge_resources(struct device_node *dev,
 			snprintf(range_type, 4, "MEM");
 		else
 			snprintf(range_type, 4, "err");
+#if !defined(CONFIG_PCIE_KPORT) || defined(CONFIG_PCIE_PORT_TEST)
 		pr_info("  %s %#010llx..%#010llx -> %#010llx\n", range_type,
 			range.cpu_addr, range.cpu_addr + range.size - 1,
 			range.pci_addr);
-
+#endif
 		/*
 		 * If we failed translation or got a zero-sized region
 		 * then skip this range

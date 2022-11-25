@@ -36,7 +36,9 @@
 #include <linux/of_device.h>
 
 #include "rpmsg_internal.h"
-
+#ifdef CONFIG_HISP_REMOTEPROC
+#include <linux/platform_data/remoteproc_hisp.h>
+#endif
 /**
  * struct virtproc_info - virtual remote processor state
  * @vdev:	the virtio device
@@ -211,11 +213,10 @@ rpmsg_sg_init(struct scatterlist *sg, void *cpu_addr, unsigned int len)
 		sg_set_page(sg, vmalloc_to_page(cpu_addr), len,
 			    offset_in_page(cpu_addr));
 	} else {
-		WARN_ON(!virt_addr_valid(cpu_addr));
+		WARN_ON(!virt_addr_valid(cpu_addr)); /*lint !e146 !e665*/
 		sg_init_one(sg, cpu_addr, len);
 	}
 }
-
 /**
  * __ept_release() - deallocate an rpmsg endpoint
  * @kref: the ept's reference count
@@ -284,7 +285,7 @@ static struct rpmsg_endpoint *__rpmsg_create_ept(struct virtproc_info *vrp,
 free_ept:
 	mutex_unlock(&vrp->endpoints_lock);
 	kref_put(&ept->refcount, __ept_release);
-	return NULL;
+	return NULL;/*lint !e429*/
 }
 
 static struct rpmsg_endpoint *virtio_rpmsg_create_ept(struct rpmsg_device *rpdev,
@@ -440,9 +441,9 @@ static struct rpmsg_device *rpmsg_create_channel(struct virtproc_info *vrp,
 	rpdev->dev.release = virtio_rpmsg_release_device;
 	ret = rpmsg_register_device(rpdev);
 	if (ret)
-		return NULL;
+		return NULL;/*lint !e429*/
 
-	return rpdev;
+	return rpdev;/*lint !e429*/
 }
 
 /* super simple buffer "allocator" that is just enough for now */
@@ -458,8 +459,8 @@ static void *get_a_tx_buf(struct virtproc_info *vrp)
 	 * either pick the next unused tx buffer
 	 * (half of our buffers are used for sending messages)
 	 */
-	if (vrp->last_sbuf < vrp->num_bufs / 2)
-		ret = vrp->sbufs + vrp->buf_size * vrp->last_sbuf++;
+	if (vrp->last_sbuf < vrp->num_bufs / 2)/*lint !e574*/
+		ret = vrp->sbufs + vrp->buf_size * vrp->last_sbuf++;/*lint !e679*/
 	/* or recycle a used one */
 	else
 		ret = virtqueue_get_buf(vrp->svq, &len);
@@ -585,7 +586,7 @@ static int rpmsg_send_offchannel_raw(struct rpmsg_device *rpdev,
 	 * messaging), or to improve the buffer allocator, to support
 	 * variable-length buffer sizes.
 	 */
-	if (len > vrp->buf_size - sizeof(struct rpmsg_hdr)) {
+	if (len > vrp->buf_size - sizeof(struct rpmsg_hdr)) {/*lint !e574*/
 		dev_err(dev, "message is too big (%d)\n", len);
 		return -EMSGSIZE;
 	}
@@ -608,7 +609,7 @@ static int rpmsg_send_offchannel_raw(struct rpmsg_device *rpdev,
 		 */
 		err = wait_event_interruptible_timeout(vrp->sendq,
 					(msg = get_a_tx_buf(vrp)),
-					msecs_to_jiffies(15000));
+					msecs_to_jiffies(15000));/*lint !e666*/
 
 		/* disable "tx-complete" interrupts if we're the last sleeper */
 		rpmsg_downref_sleepers(vrp);
@@ -635,7 +636,6 @@ static int rpmsg_send_offchannel_raw(struct rpmsg_device *rpdev,
 #endif
 
 	rpmsg_sg_init(&sg, msg, sizeof(*msg) + len);
-
 	mutex_lock(&vrp->tx_lock);
 
 	/* add message to the remote processor's virtqueue */
@@ -745,7 +745,6 @@ static int rpmsg_recv_single(struct virtproc_info *vrp, struct device *dev,
 	if (ept) {
 		/* make sure ept->cb doesn't go away while we use it */
 		mutex_lock(&ept->cb_lock);
-
 		if (ept->cb)
 			ept->cb(ept->rpdev, msg->data, msg->len, ept->priv,
 				msg->src);
@@ -779,7 +778,7 @@ static void rpmsg_recv_done(struct virtqueue *rvq)
 	unsigned int len, msgs_received = 0;
 	int err;
 
-	msg = virtqueue_get_buf(rvq, &len);
+	msg = (struct rpmsg_hdr *)virtqueue_get_buf(rvq, &len);
 	if (!msg) {
 		dev_err(dev, "uhm, incoming signal, but no used buffer ?\n");
 		return;
@@ -792,7 +791,7 @@ static void rpmsg_recv_done(struct virtqueue *rvq)
 
 		msgs_received++;
 
-		msg = virtqueue_get_buf(rvq, &len);
+		msg = (struct rpmsg_hdr *)virtqueue_get_buf(rvq, &len);
 	}
 
 	dev_dbg(dev, "Received %u messages\n", msgs_received);
@@ -906,7 +905,7 @@ static int rpmsg_probe(struct virtio_device *vdev)
 	vrp->svq = vqs[1];
 
 	/* we expect symmetric tx/rx vrings */
-	WARN_ON(virtqueue_get_vring_size(vrp->rvq) !=
+	WARN_ON(virtqueue_get_vring_size(vrp->rvq) != /*lint !e146 !e665*/
 		virtqueue_get_vring_size(vrp->svq));
 
 	/* we need less buffers if vrings are small */
@@ -917,18 +916,27 @@ static int rpmsg_probe(struct virtio_device *vdev)
 
 	vrp->buf_size = MAX_RPMSG_BUF_SIZE;
 
-	total_buf_space = vrp->num_bufs * vrp->buf_size;
+	total_buf_space = vrp->num_bufs * vrp->buf_size;/*lint !e647*/
 
 	/* allocate coherent memory for the buffers */
+#ifdef CONFIG_HISP_REMOTEPROC_DMAALLOC_DEBUG
+	if (rpmsg_mem_alloc_beforehand(vdev))
+		bufs_va = get_vring_dma_addr(&vrp->bufs_dma, total_buf_space, 2);
+	else
+		bufs_va = dma_alloc_coherent(vdev->dev.parent->parent,
+					     total_buf_space, &vrp->bufs_dma,
+					     GFP_KERNEL);
+#else
 	bufs_va = dma_alloc_coherent(vdev->dev.parent->parent,
 				     total_buf_space, &vrp->bufs_dma,
 				     GFP_KERNEL);
+#endif
 	if (!bufs_va) {
 		err = -ENOMEM;
 		goto vqs_del;
 	}
 
-	dev_dbg(&vdev->dev, "buffers: va %p, dma %pad\n",
+	dev_dbg(&vdev->dev, "buffers: va %pK, dma %pad\n",
 		bufs_va, &vrp->bufs_dma);
 
 	/* half of the buffers is dedicated for RX */
@@ -938,15 +946,14 @@ static int rpmsg_probe(struct virtio_device *vdev)
 	vrp->sbufs = bufs_va + total_buf_space / 2;
 
 	/* set up the receive buffers */
-	for (i = 0; i < vrp->num_bufs / 2; i++) {
+	for (i = 0; i < vrp->num_bufs / 2; i++) {/*lint !e574*/
 		struct scatterlist sg;
-		void *cpu_addr = vrp->rbufs + i * vrp->buf_size;
+		void *cpu_addr = vrp->rbufs + i * vrp->buf_size;/*lint !e679*/
 
 		rpmsg_sg_init(&sg, cpu_addr, vrp->buf_size);
-
 		err = virtqueue_add_inbuf(vrp->rvq, &sg, 1, cpu_addr,
 					  GFP_KERNEL);
-		WARN_ON(err); /* sanity check; this can't really happen */
+		WARN_ON(err); /* sanity check; this can't really happen */ /*lint !e146 !e665*/
 	}
 
 	/* suppress "tx-complete" interrupts */
@@ -988,8 +995,14 @@ static int rpmsg_probe(struct virtio_device *vdev)
 	return 0;
 
 free_coherent:
+#ifdef CONFIG_HISP_REMOTEPROC_DMAALLOC_DEBUG
+	if (!rpmsg_mem_alloc_beforehand(vdev))
+		dma_free_coherent(vdev->dev.parent->parent, total_buf_space,
+				  bufs_va, vrp->bufs_dma);
+#else
 	dma_free_coherent(vdev->dev.parent->parent, total_buf_space,
 			  bufs_va, vrp->bufs_dma);
+#endif
 vqs_del:
 	vdev->config->del_vqs(vrp->vdev);
 free_vrp:
@@ -1007,7 +1020,7 @@ static int rpmsg_remove_device(struct device *dev, void *data)
 static void rpmsg_remove(struct virtio_device *vdev)
 {
 	struct virtproc_info *vrp = vdev->priv;
-	size_t total_buf_space = vrp->num_bufs * vrp->buf_size;
+	size_t total_buf_space = vrp->num_bufs * vrp->buf_size;/*lint !e647*/
 	int ret;
 
 	vdev->config->reset(vdev);
@@ -1022,10 +1035,14 @@ static void rpmsg_remove(struct virtio_device *vdev)
 	idr_destroy(&vrp->endpoints);
 
 	vdev->config->del_vqs(vrp->vdev);
-
+#ifdef CONFIG_HISP_REMOTEPROC_DMAALLOC_DEBUG
+	if (!rpmsg_mem_alloc_beforehand(vdev))
+		dma_free_coherent(vdev->dev.parent->parent, total_buf_space,
+				  vrp->rbufs, vrp->bufs_dma);
+#else
 	dma_free_coherent(vdev->dev.parent->parent, total_buf_space,
 			  vrp->rbufs, vrp->bufs_dma);
-
+#endif
 	kfree(vrp);
 }
 
@@ -1042,7 +1059,7 @@ static struct virtio_driver virtio_ipc_driver = {
 	.feature_table	= features,
 	.feature_table_size = ARRAY_SIZE(features),
 	.driver.name	= KBUILD_MODNAME,
-	.driver.owner	= THIS_MODULE,
+	.driver.owner	= THIS_MODULE,/*lint !e485*/
 	.id_table	= id_table,
 	.probe		= rpmsg_probe,
 	.remove		= rpmsg_remove,

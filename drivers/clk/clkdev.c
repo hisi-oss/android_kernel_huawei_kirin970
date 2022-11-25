@@ -28,6 +28,31 @@ static LIST_HEAD(clocks);
 static DEFINE_MUTEX(clocks_mutex);
 
 #if defined(CONFIG_OF) && defined(CONFIG_COMMON_CLK)
+#if defined(CONFIG_ARCH_HISI_CLK_EXTREME)
+static struct clk *__of_clk_get(struct device_node *np, int index,
+			       const char *dev_id, const char *con_id)
+{
+	struct of_phandle_args clkspec, hisi_clkspec;
+	struct clk *clk = NULL;
+	int rc;
+
+	if (index < 0)
+		return ERR_PTR(-EINVAL);
+	rc = of_parse_phandle_with_args(np, "clocks", "#clock-cells", index,
+					&hisi_clkspec);
+	if (rc)
+		return ERR_PTR(rc);
+	rc = of_parse_phandle_with_args(hisi_clkspec.np, "clocks", "#clock-cells", 0,
+					&clkspec);
+	if (rc)
+		return ERR_PTR(rc);
+	clk = __of_clk_get_from_provider(&clkspec, dev_id, con_id);
+	of_node_put(clkspec.np);
+	of_node_put(hisi_clkspec.np);
+
+	return clk;
+}
+#else
 static struct clk *__of_clk_get(struct device_node *np, int index,
 			       const char *dev_id, const char *con_id)
 {
@@ -48,6 +73,7 @@ static struct clk *__of_clk_get(struct device_node *np, int index,
 
 	return clk;
 }
+#endif
 
 struct clk *of_clk_get(struct device_node *np, int index)
 {
@@ -242,7 +268,7 @@ void clkdev_add_table(struct clk_lookup *cl, size_t num)
 }
 
 #define MAX_DEV_ID	20
-#define MAX_CON_ID	16
+#define MAX_CON_ID	20
 
 struct clk_lookup_alloc {
 	struct clk_lookup cl;

@@ -167,6 +167,7 @@ void scsi_proc_host_rm(struct Scsi_Host *shost)
 	sprintf(name,"%d", shost->host_no);
 	remove_proc_entry(name, shost->hostt->proc_dir);
 }
+
 /**
  * proc_print_scsidevice - return data about this host
  * @dev: A scsi device
@@ -177,6 +178,7 @@ void scsi_proc_host_rm(struct Scsi_Host *shost)
  */
 static int proc_print_scsidevice(struct device *dev, void *data)
 {
+#ifdef CONFIG_HISI_DEBUG_FS
 	struct scsi_device *sdev;
 	struct seq_file *s = data;
 	int i;
@@ -222,6 +224,7 @@ static int proc_print_scsidevice(struct device *dev, void *data)
 		seq_putc(s, '\n');
 
 out:
+#endif
 	return 0;
 }
 

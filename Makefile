@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0
+export TARGET_ARM_TYPE = arm64
+export extra_modem := 
+export product_type := 
+export chip_type := 
+export CFG_PLATFORM := kirin970
+export OBB_PRODUCT_NAME := kirin970
+export TARGET_BOARD_PLATFORM := kirin970
 VERSION = 4
 PATCHLEVEL = 14
 SUBLEVEL = 116
 EXTRAVERSION =
 NAME = Petit Gorille
 
+TARGET_ARM_TYPE := arm64
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
 # More info can be located in ./README
@@ -28,6 +36,8 @@ export LC_COLLATE LC_NUMERIC
 
 # Avoid interference with shell env settings
 unexport GREP_OPTIONS
+TARGET_BUILD_VARIANT := user
+export TARGET_BUILD_VARIANT
 
 # We are using a recursive build, so we need to do a little thinking
 # to get the ordering right.
@@ -201,13 +211,14 @@ endif
 
 export KBUILD_CHECKSRC KBUILD_EXTMOD KBUILD_SRC
 
-objtree		:= .
+objtree		:= $(CURDIR)
+kernel_system_tree := $(CURDIR)
 src		:= $(srctree)
 obj		:= $(objtree)
 
 VPATH		:= $(srctree)$(if $(KBUILD_EXTMOD),:$(KBUILD_EXTMOD))
 
-export srctree objtree VPATH
+export srctree objtree kernel_system_tree VPATH
 
 # To make sure we do not include .config for any of the *config targets
 # catch them early, and hand them over to scripts/kconfig/Makefile
@@ -275,6 +286,20 @@ include scripts/Kbuild.include
 # Read KERNELRELEASE from include/config/kernel.release (if it exists)
 KERNELRELEASE = $(shell cat include/config/kernel.release 2> /dev/null)
 KERNELVERSION = $(VERSION)$(if $(PATCHLEVEL),.$(PATCHLEVEL)$(if $(SUBLEVEL),.$(SUBLEVEL)))$(EXTRAVERSION)
+
+# build drv only config
+OBB_SEPARATE        ?=$(separate)
+ifeq ($(strip $(OBB_SEPARATE)),true)
+KBUILD_CFLAGS += -DDRV_BUILD_SEPARATE
+KBUILD_AFLAGS += -DDRV_BUILD_SEPARATE
+KBUILD_CPPFLAGS += -DDRV_BUILD_SEPARATE
+endif
+
+#add SLT FEATURE to ap
+ifeq ($(strip $(hitest_type)),slt)
+KBUILD_CFLAGS += -D__SLT_FEATURE__
+endif
+
 export VERSION PATCHLEVEL SUBLEVEL KERNELRELEASE KERNELVERSION
 
 # SUBARCH tells the usermode build what the underlying arch is.  That is set
@@ -360,9 +385,16 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 HOST_LFS_CFLAGS := $(shell getconf LFS_CFLAGS 2>/dev/null)
 HOST_LFS_LDFLAGS := $(shell getconf LFS_LDFLAGS 2>/dev/null)
 HOST_LFS_LIBS := $(shell getconf LFS_LIBS 2>/dev/null)
+ifeq ($(strip $(cfi_check)),true)
+CLANG_PREBUILTS_PATH ?= $(srctree)/../../prebuilts/cfi_clang/linux-x86/cfi_clang/
+else
+CLANG_PREBUILTS_PATH ?= $(srctree)/../../prebuilts/clang/host/linux-x86/clang-r353983c/
+endif
+CLANG_PREBUILT_BIN := $(CLANG_PREBUILTS_PATH)bin/
+export CLANG_PREBUILTS_PATH
 
-HOSTCC       = gcc
-HOSTCXX      = g++
+HOSTCC       = $(CLANG_PREBUILT_BIN)clang
+HOSTCXX      = $(CLANG_PREBUILT_BIN)clang++
 HOSTCFLAGS   := -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 \
 		-fomit-frame-pointer -std=gnu89 $(HOST_LFS_CFLAGS)
 HOSTCXXFLAGS := -O2 $(HOST_LFS_CFLAGS)
@@ -373,7 +405,10 @@ HOST_LOADLIBES := $(HOST_LFS_LIBS)
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
 LDGOLD		= $(CROSS_COMPILE)ld.gold
-CC		= $(CROSS_COMPILE)gcc
+ifeq (,$(strip $(KP_PATCH)))
+CCACHE		?= $(srctree)/../../prebuilts/misc/linux-x86/ccache/ccache
+endif
+CC		= $(SOURCEANALYZER) $(wildcard $(CCACHE)) $(CLANG_PREBUILT_BIN)clang
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -414,6 +449,31 @@ LINUXINCLUDE    := \
 		$(if $(KBUILD_SRC), -I$(srctree)/include) \
 		-I$(objtree)/include \
 		$(USERINCLUDE)
+
+LINUXINCLUDE += -I$(srctree)/mm \
+               -I$(srctree)/include \
+			   -I$(srctree)/include/linux/hisi \
+			   -I$(srctree)/drivers \
+			   -I$(srctree)/drivers/huawei_platform \
+			   -I$(srctree)/drivers/huawei_armpc_platform \
+			   -I$(srctree)/fs/proc \
+			   -I$(srctree)/lib/libc_sec/securec_v2/include
+
+ifeq ($(CFG_LCD_KIT),true)
+LINUXINCLUDE += -I$(objtree)/drivers/devkit/lcdkit/lcdkit3.0
+else
+LINUXINCLUDE += -I$(objtree)/drivers/devkit/lcdkit/lcdkit1.0
+endif
+
+ifeq ($(chip_type),es)
+LINUXINCLUDE += -I$(srctree)/drivers/hisi/ap/platform/$(TARGET_BOARD_PLATFORM)_es
+else
+ifeq ($(chip_type),cs2)
+LINUXINCLUDE += -I$(srctree)/drivers/hisi/ap/platform/$(TARGET_BOARD_PLATFORM)_cs2
+else
+LINUXINCLUDE += -I$(srctree)/drivers/hisi/ap/platform/$(TARGET_BOARD_PLATFORM)
+endif
+endif
 
 KBUILD_AFLAGS   := -D__ASSEMBLY__
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
@@ -480,22 +540,16 @@ endif
 
 ifeq ($(cc-name),clang)
 ifneq ($(CROSS_COMPILE),)
-CLANG_TRIPLE	?= $(CROSS_COMPILE)
-CLANG_FLAGS	:= --target=$(notdir $(CLANG_TRIPLE:%-=%))
-ifeq ($(shell $(srctree)/scripts/clang-android.sh $(CC) $(CLANG_FLAGS)), y)
-$(error "Clang with Android --target detected. Did you specify CLANG_TRIPLE?")
-endif
-GCC_TOOLCHAIN_DIR := $(dir $(shell which $(CROSS_COMPILE)elfedit))
-CLANG_FLAGS	+= --prefix=$(GCC_TOOLCHAIN_DIR)
-GCC_TOOLCHAIN	:= $(realpath $(GCC_TOOLCHAIN_DIR)/..)
+CLANG_TRIPLE	?= aarch64-linux-gnu-
+CLANG_TARGET	:= --target=$(notdir $(CLANG_TRIPLE:%-=%))
+GCC_TOOLCHAIN	:= $(realpath $(dir $(shell which $(LD)))/..)
 endif
 ifneq ($(GCC_TOOLCHAIN),)
-CLANG_FLAGS	+= --gcc-toolchain=$(GCC_TOOLCHAIN)
+#CLANG_GCC_TC	:= --gcc-toolchain=$(GCC_TOOLCHAIN)
+CLANG_GCC_TC	:= --gcc-toolchain=$(shell perl -e 'use File::Spec; print File::Spec->abs2rel(@ARGV) . "\n"' $(GCC_TOOLCHAIN) $(CURDIR))
 endif
-CLANG_FLAGS	+= -no-integrated-as
-KBUILD_CFLAGS	+= $(CLANG_FLAGS)
-KBUILD_AFLAGS	+= $(CLANG_FLAGS)
-export CLANG_FLAGS
+KBUILD_CFLAGS += $(CLANG_TARGET) $(CLANG_GCC_TC)
+KBUILD_AFLAGS += $(CLANG_TARGET) $(CLANG_GCC_TC)
 endif
 
 RETPOLINE_CFLAGS_GCC := -mindirect-branch=thunk-extern -mindirect-branch-register
@@ -590,6 +644,8 @@ ifeq ($(dot-config),1)
 -include include/config/auto.conf
 
 ifeq ($(KBUILD_EXTMOD),)
+include/config/auto.conf.cmd: check-clang-specific-options
+
 # Read in dependencies to all Kconfig* files, make sure to run
 # oldconfig if changes are detected.
 -include include/config/auto.conf.cmd
@@ -639,21 +695,30 @@ all: vmlinux
 
 KBUILD_CFLAGS	+= $(call cc-option,-fno-PIE)
 KBUILD_AFLAGS	+= $(call cc-option,-fno-PIE)
-CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage -fno-tree-loop-im $(call cc-disable-warning,maybe-uninitialized,)
-CFLAGS_KCOV	:= $(call cc-option,-fsanitize-coverage=trace-pc,)
+CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage \
+	$(call cc-option, -fno-tree-loop-im) \
+	$(call cc-disable-warning,maybe-uninitialized,)
+CFLAGS_KCOV	:= $(call cc-option,-fsanitize-coverage=no-prune) \
+	$(call cc-option,-fsanitize-coverage=trace-pc,)
 export CFLAGS_GCOV CFLAGS_KCOV
 
 # Make toolchain changes before including arch/$(SRCARCH)/Makefile to ensure
 # ar/cc/ld-* macros return correct values.
 ifdef CONFIG_LTO_CLANG
+LD_LIBRARY_PATH := $(CLANG_PREBUILTS_PATH)lib64/
+
 # use GNU gold with LLVMgold for LTO linking, and LD for vmlinux_link
 LDFINAL_vmlinux := $(LD)
 LD		:= $(LDGOLD)
-LDFLAGS		+= -plugin LLVMgold.so
+LDFLAGS		+= -plugin $(LD_LIBRARY_PATH)LLVMgold.so
 # use llvm-ar for building symbol tables from IR files, and llvm-dis instead
 # of objdump for processing symbol versions and exports
-LLVM_AR		:= llvm-ar
-LLVM_DIS	:= llvm-dis
+LLVM_AR		:= $(CLANG_PREBUILT_BIN)llvm-ar
+LLVM_DIS	:= $(CLANG_PREBUILT_BIN)llvm-dis
+ifdef CONFIG_ARM64_HKRR
+LLVM_OBJCOPY	:= $(CLANG_PREBUILT_BIN)llvm-objcopy
+export LLVM_OBJCOPY
+endif
 export LLVM_AR LLVM_DIS
 endif
 
@@ -669,6 +734,7 @@ KBUILD_CFLAGS	+= $(call cc-disable-warning,frame-address,)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-truncation)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-overflow)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, int-in-bool-context)
+KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
@@ -693,6 +759,24 @@ ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC) $(KBUILD_CFLA
 	KBUILD_AFLAGS += -DCC_HAVE_ASM_GOTO
 endif
 
+ifeq ($(SET_SYSTEM_PARTITION), oversea)
+	    KBUILD_CFLAGS += -DCONFIG_MARKET_OVERSEA
+endif
+ifeq ($(SET_SYSTEM_PARTITION), internal)
+    KBUILD_CFLAGS += -DCONFIG_MARKET_INTERNAL
+endif
+ifeq ($(SANITIZE_SUPPORT), true)
+    KBUILD_CFLAGS += -DCONFIG_ASAN_SUPPORT_ENABLE
+endif
+ifeq ($(strip $(gcov)),y)
+    KBUILD_CFLAGS += -DCONFIG_GCOV_PARTITION_SUPPORT_ENABLE
+endif
+ifeq ($(ap_cust_spec), 2g_mem)
+    KBUILD_CFLAGS += -DCONFIG_16G_STORAGE
+endif
+ifeq ($(NEW_PRODUCT_OCE), true)
+    KBUILD_CFLAGS += -DCONFIG_NEW_PRODUCT_OCE
+endif
 include scripts/Makefile.gcc-plugins
 
 ifdef CONFIG_READABLE_ASM
@@ -707,6 +791,14 @@ endif
 
 ifneq ($(CONFIG_FRAME_WARN),0)
 KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
+endif
+
+ifdef CONFIG_HUAWEI_CFI
+KBUILD_CFLAGS += -fplugin=$(srctree)/../../prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/libexec/gcc/aarch64-linux-android/4.9.x/cfi.so -fplugin-arg-cfi-abortfn=__cfi_report
+KBUILD_CFLAGS += -fplugin-arg-cfi-tagvalue=$(CONFIG_HUAWEI_CFI_TAG)
+ifeq ($(CONFIG_HUAWEI_CFI_DEBUG),y)
+KBUILD_CFLAGS += -DHW_SAVE_CFI_LOG
+endif
 endif
 
 # This selects the stack protector compiler flag. Testing it is delayed
@@ -735,15 +827,18 @@ ifeq ($(cc-name),clang)
 KBUILD_CPPFLAGS += $(call cc-option,-Qunused-arguments,)
 KBUILD_CFLAGS += $(call cc-disable-warning, format-invalid-specifier)
 KBUILD_CFLAGS += $(call cc-disable-warning, gnu)
-KBUILD_CFLAGS += $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
+KBUILD_CFLAGS += -Wno-error=typedef-redefinition
+KBUILD_CFLAGS += -Wno-error=return-type
 # CLANG uses a _MergedGlobals as optimization, but this breaks modpost, as the
 # source of a reference will be _MergedGlobals and not on of the whitelisted names.
 # See modpost pattern 2
 KBUILD_CFLAGS += $(call cc-option, -mno-global-merge,)
 KBUILD_CFLAGS += $(call cc-option, -fcatch-undefined-behavior)
+KBUILD_CFLAGS += $(call cc-option, -no-integrated-as)
+KBUILD_AFLAGS += $(call cc-option, -no-integrated-as)
 else
 
 # These warnings generated too much noise in a regular build.
@@ -833,14 +928,15 @@ export LDFINAL_vmlinux LDFLAGS_FINAL_vmlinux
 endif
 
 ifdef CONFIG_CFI_CLANG
-cfi-clang-flags	+= -fsanitize=cfi $(call cc-option, -fsplit-lto-unit)
+ifeq ($(strip $(cfi_check)),true)
+cfi-clang-flags	+= -fsanitize=cfi $(call cc-option, -fsplit-lto-unit) -fsanitize-recover=cfi -fno-sanitize-trap=cfi
+else
+cfi-clang-flags	+= -fsanitize=cfi -fsanitize-recover=cfi -fno-sanitize-trap=cfi
+endif
 DISABLE_CFI_CLANG := -fno-sanitize=cfi
 ifdef CONFIG_MODULES
 cfi-clang-flags	+= -fsanitize-cfi-cross-dso
 DISABLE_CFI_CLANG += -fno-sanitize-cfi-cross-dso
-endif
-ifdef CONFIG_CFI_PERMISSIVE
-cfi-clang-flags	+= -fsanitize-recover=cfi -fno-sanitize-trap=cfi
 endif
 
 # also disable CFI when LTO is disabled
@@ -852,11 +948,21 @@ endif
 ifdef CONFIG_CFI
 # cfi-flags are re-tested in prepare-compiler-check
 cfi-flags	:= $(cfi-clang-flags)
+ifeq ($(strip $(cfi_check)),true)
+cfi-flags       += -fsanitize-cfi-typecheck=$(objtree)/cfi_raw_log
+endif
 KBUILD_CFLAGS	+= $(cfi-flags)
 
 DISABLE_CFI	:= $(DISABLE_CFI_CLANG)
 DISABLE_LTO	+= $(DISABLE_CFI)
 export DISABLE_CFI
+endif
+
+ifdef CONFIG_SHADOW_CALL_STACK
+scs-flags	:= -fsanitize=shadow-call-stack
+KBUILD_CFLAGS	+= $(scs-flags)
+DISABLE_SCS	:= -fno-sanitize=shadow-call-stack
+export DISABLE_SCS
 endif
 
 # arch Makefile may override CC so keep this after arch Makefile is included
@@ -868,9 +974,6 @@ KBUILD_CFLAGS += $(call cc-option,-Wdeclaration-after-statement,)
 
 # disable pointer signed / unsigned warnings in gcc 4.0
 KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
-
-# disable stringop warnings in gcc 8+
-KBUILD_CFLAGS += $(call cc-disable-warning, stringop-truncation)
 
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
@@ -900,10 +1003,13 @@ KBUILD_CFLAGS   += $(call cc-option,-Werror=strict-prototypes)
 KBUILD_CFLAGS   += $(call cc-option,-Werror=date-time)
 
 # enforce correct pointer usage
-KBUILD_CFLAGS   += $(call cc-option,-Werror=incompatible-pointer-types)
+#KBUILD_CFLAGS   += $(call cc-option,-Werror=incompatible-pointer-types)
 
 # Require designated initializers for all marked structures
 KBUILD_CFLAGS   += $(call cc-option,-Werror=designated-init)
+
+# change __FILE__ to the relative path from the srctree
+KBUILD_CFLAGS	+= $(call cc-option,-fmacro-prefix-map=$(srctree)/=)
 
 # use the deterministic mode of AR if available
 KBUILD_ARFLAGS := $(call ar-option,D)
@@ -1007,24 +1113,35 @@ INITRD_COMPRESS-$(CONFIG_RD_LZ4)   := lz4
 
 ifdef CONFIG_MODULE_SIG_ALL
 $(eval $(call config_filename,MODULE_SIG_KEY))
-
+ifneq ($(CONFIG_MODULE_SIG_KEY),"huawei_signing_key.pem")
 mod_sign_cmd = scripts/sign-file $(CONFIG_MODULE_SIG_HASH) $(MODULE_SIG_KEY_SRCPREFIX)$(CONFIG_MODULE_SIG_KEY) certs/signing_key.x509
+else
+mod_sign_cmd = $(CONFIG_SHELL) $(srctree)/../../vendor/huawei/chipset_common/build/signkernel/sign-kernel.sh
+endif
 else
 mod_sign_cmd = true
 endif
 export mod_sign_cmd
 
+HOST_LIBELF_LIBS = $(shell pkg-config libelf --libs 2>/dev/null || echo -lelf)
+
 ifdef CONFIG_STACK_VALIDATION
   has_libelf := $(call try-run,\
-		echo "int main() {}" | $(HOSTCC) -xc -o /dev/null -lelf -,1,0)
+		echo "int main() {}" | $(HOSTCC) -xc -o /dev/null $(HOST_LIBELF_LIBS) -,1,0)
   ifeq ($(has_libelf),1)
     objtool_target := tools/objtool FORCE
   else
+    ifdef CONFIG_UNWINDER_ORC
+      $(error "Cannot generate ORC metadata for CONFIG_UNWINDER_ORC=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel")
+    else
+      $(warning "Cannot use CONFIG_STACK_VALIDATION=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel")
+    endif
     SKIP_STACK_VALIDATION := 1
     export SKIP_STACK_VALIDATION
   endif
 endif
 
+PHONY += prepare0
 
 ifeq ($(KBUILD_EXTMOD),)
 core-y		+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/
@@ -1043,6 +1160,10 @@ net-y		:= $(patsubst %/, %/built-in.o, $(net-y))
 libs-y1		:= $(patsubst %/, %/lib.a, $(libs-y))
 libs-y2		:= $(filter-out %.a, $(patsubst %/, %/built-in.o, $(libs-y)))
 virt-y		:= $(patsubst %/, %/built-in.o, $(virt-y))
+
+vmlinux-init := $(head-y) $(init-y)
+vmlinux-main := $(core-y) $(libs-y) $(drivers-y) $(net-y) $(virt-y)
+vmlinux-all  := $(vmlinux-init) $(vmlinux-main)
 
 # Externally visible symbols (used by link-vmlinux.sh)
 export KBUILD_VMLINUX_INIT := $(head-y) $(init-y)
@@ -1083,7 +1204,15 @@ cmd_link-vmlinux =                                                 \
 	$(if $(ARCH_POSTLINK), $(MAKE) -f $(ARCH_POSTLINK) $@, true)
 
 vmlinux: scripts/link-vmlinux.sh vmlinux_prereq $(vmlinux-deps) FORCE
+ifeq ($(OBB_PRINT_CMD), true)
+	$(call if_changed,link-vmlinux)
+else
+ifeq ($(link_kernel),false)
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/gen-link-vmlinux.sh $(vmlinux-deps)
+else
 	+$(call if_changed,link-vmlinux)
+endif
+endif
 
 # Build samples along the rest of the kernel
 ifdef CONFIG_SAMPLES
@@ -1119,8 +1248,7 @@ include/config/kernel.release: include/config/auto.conf FORCE
 # archprepare is used in arch Makefiles and when processed asm symlink,
 # version.h and scripts_basic is processed / created.
 
-# Listed in dependency order
-PHONY += prepare archprepare prepare0 prepare1 prepare2 prepare3
+PHONY += prepare archprepare prepare1 prepare2 prepare3
 
 # prepare3 is used to check if we are building in a separate output directory,
 # and if so do:
@@ -1163,12 +1291,20 @@ uapi-asm-generic:
 
 PHONY += prepare-objtool
 prepare-objtool: $(objtool_target)
-ifeq ($(SKIP_STACK_VALIDATION),1)
-ifdef CONFIG_UNWINDER_ORC
-	@echo "error: Cannot generate ORC metadata for CONFIG_UNWINDER_ORC=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel" >&2
-	@false
-else
-	@echo "warning: Cannot use CONFIG_STACK_VALIDATION=y, please install libelf-dev, libelf-devel or elfutils-libelf-devel" >&2
+
+# Disable clang-specific config options when using a different compiler
+clang-specific-configs := LTO_CLANG CFI_CLANG SHADOW_CALL_STACK
+
+PHONY += check-clang-specific-options
+check-clang-specific-options: $(KCONFIG_CONFIG) FORCE
+ifneq ($(cc-name),clang)
+ifneq ($(findstring y,$(shell $(CONFIG_SHELL) \
+	$(srctree)/scripts/config --file $(KCONFIG_CONFIG) \
+		$(foreach c,$(clang-specific-configs),-s $(c)))),)
+	@echo WARNING: Disabling clang-specific options with $(cc-name) >&2
+	$(Q)$(srctree)/scripts/config --file $(KCONFIG_CONFIG) \
+		$(foreach c,$(clang-specific-configs),-d $(c)) && \
+	$(MAKE) -f $(srctree)/Makefile olddefconfig
 endif
 endif
 
@@ -1215,6 +1351,11 @@ endif
 ifdef cfi-flags
   ifeq ($(call cc-option, $(cfi-flags)),)
 	@echo Cannot use CONFIG_CFI: $(cfi-flags) not supported by compiler >&2 && exit 1
+  endif
+endif
+ifdef scs-flags
+  ifeq ($(call cc-option, $(scs-flags)),)
+	@echo Cannot use CONFIG_SHADOW_CALL_STACK: $(scs-flags) not supported by compiler >&2 && exit 1
   endif
 endif
 	@:
@@ -1309,6 +1450,15 @@ kselftest-merge:
 		-m $(objtree)/.config \
 		$(srctree)/tools/testing/selftests/*/config
 	+$(Q)$(MAKE) -f $(srctree)/Makefile olddefconfig
+
+# ---------------------------------------------------------------------------
+# Enable huawei version CC for specific optimization
+ifneq ($(strip $(cfi_check)),true)
+ifeq ($(CONFIG_OPT_COMPILER),y)
+CC		= $(SOURCEANALYZER) $(wildcard $(CCACHE)) $(CLANG_PREBUILTS_PATH)/../../linux-x86-huawei/clang-r353983c-huawei/bin/clang
+export CLANG_PREBUILTS_PATH
+endif
+endif
 
 # ---------------------------------------------------------------------------
 # Modules
@@ -1837,3 +1987,8 @@ FORCE:
 # Declare the contents of the .PHONY variable as phony.  We keep that
 # information in a variable so we can use it in if_changed and friends.
 .PHONY: $(PHONY)
+do_pc_lint_all : build = -f $(if $(KBUILD_SRC),$(srctree)/)scripts/Makefile.build new_pc_lint obj
+do_pc_lint_all : $(vmlinux-all) FORCE
+	@:
+
+pc_lint_all : do_pc_lint_all

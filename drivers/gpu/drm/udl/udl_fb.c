@@ -432,11 +432,9 @@ static void udl_fbdev_destroy(struct drm_device *dev,
 {
 	drm_fb_helper_unregister_fbi(&ufbdev->helper);
 	drm_fb_helper_fini(&ufbdev->helper);
-	if (ufbdev->ufb.obj) {
-		drm_framebuffer_unregister_private(&ufbdev->ufb.base);
-		drm_framebuffer_cleanup(&ufbdev->ufb.base);
-		drm_gem_object_put_unlocked(&ufbdev->ufb.obj->base);
-	}
+	drm_framebuffer_unregister_private(&ufbdev->ufb.base);
+	drm_framebuffer_cleanup(&ufbdev->ufb.base);
+	drm_gem_object_put_unlocked(&ufbdev->ufb.obj->base);
 }
 
 int udl_fbdev_init(struct drm_device *dev)

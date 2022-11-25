@@ -44,7 +44,10 @@ struct mmc_ioc_cmd {
 	/* DAT buffer */
 	__u64 data_ptr;
 };
+
+/*lint -esym(773,*)*/
 #define mmc_ioc_cmd_set_data(ic, ptr) ic.data_ptr = (__u64)(unsigned long) ptr
+/*lint +esym(773,*)*/
 
 /**
  * struct mmc_ioc_multi_cmd - multi command information
@@ -64,12 +67,21 @@ struct mmc_ioc_multi_cmd {
  *	commands in array in sequence to card.
  */
 #define MMC_IOC_MULTI_CMD _IOWR(MMC_BLOCK_MAJOR, 1, struct mmc_ioc_multi_cmd)
+
+#define MMC_IOC_MAX_RPMB_CMD    3
+struct mmc_ioc_rpmb {
+            struct mmc_ioc_cmd cmds[MMC_IOC_MAX_RPMB_CMD];
+};
+
+#define MMC_IOC_RPMB_CMD _IOWR(MMC_BLOCK_MAJOR, 0, struct mmc_ioc_rpmb)
+
 /*
  * Since this ioctl is only meant to enhance (and not replace) normal access
  * to the mmc bus device, an upper data transfer limit of MMC_IOC_MAX_BYTES
  * is enforced per ioctl call.  For larger data transfers, use the normal
  * block device operations.
  */
-#define MMC_IOC_MAX_BYTES  (512L * 1024)
+
+#define MMC_IOC_MAX_BYTES  (1024L * 1024)
 #define MMC_IOC_MAX_CMDS    255
 #endif /* LINUX_MMC_IOCTL_H */

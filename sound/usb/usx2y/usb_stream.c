@@ -56,7 +56,7 @@ check:
 		    lb, s->period_size);
 }
 
-static int init_pipe_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
+static void init_pipe_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
 			   struct urb **urbs, char *transfer,
 			   struct usb_device *dev, int pipe)
 {
@@ -77,8 +77,6 @@ static int init_pipe_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
 		urb->interval = 1;
 		if (usb_pipeout(pipe))
 			continue;
-		if (usb_urb_ep_type_check(urb))
-			return -EINVAL;
 
 		urb->transfer_buffer_length = transfer_length;
 		desc = urb->iso_frame_desc;
@@ -89,11 +87,9 @@ static int init_pipe_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
 			desc[p].length = maxpacket;
 		}
 	}
-
-	return 0;
 }
 
-static int init_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
+static void init_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
 		      struct usb_device *dev, int in_pipe, int out_pipe)
 {
 	struct usb_stream	*s = sk->s;
@@ -107,12 +103,9 @@ static int init_urbs(struct usb_stream_kernel *sk, unsigned use_packsize,
 		sk->outurb[u] = usb_alloc_urb(sk->n_o_ps, GFP_KERNEL);
 	}
 
-	if (init_pipe_urbs(sk, use_packsize, sk->inurb, indata, dev, in_pipe) ||
-	    init_pipe_urbs(sk, use_packsize, sk->outurb, sk->write_page, dev,
-			   out_pipe))
-		return -EINVAL;
-
-	return 0;
+	init_pipe_urbs(sk, use_packsize, sk->inurb, indata, dev, in_pipe);
+	init_pipe_urbs(sk, use_packsize, sk->outurb, sk->write_page, dev,
+		       out_pipe);
 }
 
 
@@ -233,11 +226,7 @@ struct usb_stream *usb_stream_new(struct usb_stream_kernel *sk,
 	else
 		sk->freqn = get_usb_high_speed_rate(sample_rate);
 
-	if (init_urbs(sk, use_packsize, dev, in_pipe, out_pipe) < 0) {
-		usb_stream_free(sk);
-		return NULL;
-	}
-
+	init_urbs(sk, use_packsize, dev, in_pipe, out_pipe);
 	sk->s->state = usb_stream_stopped;
 out:
 	return sk->s;

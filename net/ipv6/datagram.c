@@ -34,6 +34,9 @@
 
 #include <linux/errqueue.h>
 #include <linux/uaccess.h>
+#ifdef CONFIG_HW_NETWORK_SLICE
+#include <hwnet/booster/network_slice_route.h>
+#endif
 
 static bool ipv6_mapped_addr_any(const struct in6_addr *a)
 {
@@ -277,6 +280,10 @@ int ip6_datagram_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
 	int res;
 
+#ifdef CONFIG_HW_NETWORK_SLICE
+	if (sk)
+		slice_rules_lookup(sk, uaddr, sk->sk_protocol);
+#endif
 	lock_sock(sk);
 	res = __ip6_datagram_connect(sk, uaddr, addr_len);
 	release_sock(sk);
@@ -709,15 +716,17 @@ void ip6_datagram_recv_specific_ctl(struct sock *sk, struct msghdr *msg,
 	}
 	if (np->rxopt.bits.rxorigdstaddr) {
 		struct sockaddr_in6 sin6;
-		__be16 _ports[2], *ports;
+		__be16 *ports;
+		int end;
 
-		ports = skb_header_pointer(skb, skb_transport_offset(skb),
-					   sizeof(_ports), &_ports);
-		if (ports) {
+		end = skb_transport_offset(skb) + 4;
+		if (end <= 0 || pskb_may_pull(skb, end)) {
 			/* All current transport protocols have the port numbers in the
 			 * first four bytes of the transport header and this function is
 			 * written with this assumption in mind.
 			 */
+			ports = (__be16 *)skb_transport_header(skb);
+
 			sin6.sin6_family = AF_INET6;
 			sin6.sin6_addr = ipv6_hdr(skb)->daddr;
 			sin6.sin6_port = ports[1];

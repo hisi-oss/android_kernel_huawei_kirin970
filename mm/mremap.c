@@ -24,6 +24,9 @@
 #include <linux/uaccess.h>
 #include <linux/mm-arch-hooks.h>
 #include <linux/userfaultfd_k.h>
+#ifdef CONFIG_VM_COPY
+#include <linux/vm_copy.h>
+#endif
 
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
@@ -223,7 +226,7 @@ unsigned long move_page_tables(struct vm_area_struct *vma,
 		new_pmd = alloc_new_pmd(vma->vm_mm, vma, new_addr);
 		if (!new_pmd)
 			break;
-		if (is_swap_pmd(*old_pmd) || pmd_trans_huge(*old_pmd)) {
+		if (is_swap_pmd(*old_pmd) || pmd_trans_huge(*old_pmd) || pmd_devmap(*old_pmd)) {
 			if (extent == HPAGE_PMD_SIZE) {
 				bool moved;
 				/* See comment in move_ptes() */
@@ -298,6 +301,15 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 	if (!new_vma)
 		return -ENOMEM;
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	/* new_vma is returned protected by copy_vma, to prevent speculative
+	 * page fault to be done in the destination area before we move the pte.
+	 * Now, we must also protect the source VMA since we don't want pages
+	 * to be mapped in our back while we are copying the PTEs.
+	 */
+	if (vma != new_vma)
+		vm_raw_write_begin(vma);
+#endif
 	moved_len = move_page_tables(vma, old_addr, new_vma, new_addr, old_len,
 				     need_rmap_locks);
 	if (moved_len < old_len) {
@@ -314,6 +326,10 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 		 */
 		move_page_tables(new_vma, new_addr, vma, old_addr, moved_len,
 				 true);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+		if (vma != new_vma)
+			vm_raw_write_end(vma);
+#endif
 		vma = new_vma;
 		old_len = new_len;
 		old_addr = new_addr;
@@ -322,8 +338,14 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 		mremap_userfaultfd_prep(new_vma, uf);
 		arch_remap(mm, old_addr, old_addr + old_len,
 			   new_addr, new_addr + new_len);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+		if (vma != new_vma)
+			vm_raw_write_end(vma);
+#endif
 	}
-
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_raw_write_end(new_vma);
+#endif
 	/* Conceal VM_ACCOUNT so old reservation is not undone */
 	if (vm_flags & VM_ACCOUNT) {
 		vma->vm_flags &= ~VM_ACCOUNT;
@@ -509,6 +531,41 @@ static int vma_expandable(struct vm_area_struct *vma, unsigned long delta)
 	return 1;
 }
 
+#ifdef CONFIG_VM_COPY
+static unsigned long vm_copy_check_paras(unsigned long addr,
+				unsigned long new_addr,
+				unsigned long new_len,
+				unsigned long old_len)
+{
+	if (!PAGE_ALIGNED(addr) || !PAGE_ALIGNED(new_addr)) {
+		pr_err("[VM_COPY:]no PAGE align\n");
+		return -EINVAL; /*lint !e570 */
+	}
+
+	if (new_len != old_len) {
+		pr_err("[VM_COPY:]dst size is not equal to src size\n");
+		return -EINVAL; /*lint !e570 */
+	}
+
+	if (new_len < SZ_2M) {
+		pr_err("[VM_COPY:]size < 2MB\n");
+		return -EINVAL; /*lint !e570 */
+	}
+
+	return 0;
+}
+static unsigned long vm_copy_call(struct mm_struct *mm, unsigned long src,
+				unsigned long dst, unsigned long size)
+{
+	unsigned long ret = -EINVAL; /*lint !e570 */
+
+	size = PAGE_ALIGN(size);
+	ret = vm_copy(mm, src, dst, size);
+
+	return ret;
+}
+#endif
+
 /*
  * Expand (or shrink) an existing mapping, potentially moving it at the
  * same time (controlled by the MREMAP_MAYMOVE flag and available VM space)
@@ -529,6 +586,20 @@ SYSCALL_DEFINE5(mremap, unsigned long, addr, unsigned long, old_len,
 	LIST_HEAD(uf_unmap_early);
 	LIST_HEAD(uf_unmap);
 
+	addr = untagged_addr(addr);
+	new_addr = untagged_addr(new_addr);
+
+#ifdef CONFIG_VM_COPY
+	if (flags & MREMAP_VM_COPY) {
+		ret = vm_copy_check_paras(addr, new_addr, new_len, old_len);
+		if (ret)
+			return ret;
+
+		ret = vm_copy_call(mm, addr, new_addr, new_len);
+
+		return ret;
+	}
+#endif
 	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE))
 		return ret;
 

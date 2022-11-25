@@ -143,7 +143,7 @@ config DMA_JZ4740
 
 config DMA_JZ4780
 	tristate "JZ4780 DMA support"
-	depends on MACH_JZ4780 || COMPILE_TEST
+	depends on MIPS || COMPILE_TEST
 	select DMA_ENGINE
 	select DMA_VIRTUAL_CHANNELS
 	help
@@ -565,6 +565,25 @@ config XGENE_DMA
 	select ASYNC_TX_ENABLE_CHANNEL_SWITCH
 	help
 	  Enable support for the APM X-Gene SoC DMA engine.
+config HISI_DMA
+	tristate "peri DMA support"
+	depends on ARCH_HISI
+	select DMA_ENGINE
+	select DMA_VIRTUAL_CHANNELS
+	help
+	  Support the DMA engine for some platform
+	  devices.
+
+config HISI_DMA_NO_CCI
+	bool "peri DMA CCI support"
+	depends on (HISI_DMA)
+	help
+	  peri DMA CCI switch
+config HISI_DMA_PM_RUNTIME
+	bool "peri DMA pm runtime support"
+	depends on (HISI_DMA && PM_RUNTIME)
+	help
+	  peri DMA pm runtime switch.
 
 config XILINX_DMA
 	tristate "Xilinx AXI DMAS Engine"

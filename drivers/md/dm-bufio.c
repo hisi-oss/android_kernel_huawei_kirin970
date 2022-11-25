@@ -50,6 +50,10 @@
  */
 #define DM_BUFIO_DEFAULT_RETAIN_BYTES   (256 * 1024)
 
+#ifdef CONFIG_DM_HUAWEI_USE_OPT_PARAMETER
+#define DM_BUFIO_RETAIN_PERCENT       (0)
+#endif
+
 /*
  * The number of bvec entries that are embedded directly in the buffer.
  * If the chunk size is larger, dm-io is used to do the io.
@@ -236,6 +240,9 @@ static unsigned long dm_bufio_allocated_get_free_pages;
 static unsigned long dm_bufio_allocated_vmalloc;
 static unsigned long dm_bufio_current_allocated;
 
+#ifdef CONFIG_DM_HUAWEI_USE_OPT_PARAMETER
+static unsigned int dm_bufio_retain_ratio = DM_BUFIO_RETAIN_PERCENT;
+#endif
 /*----------------------------------------------------------------*/
 
 /*
@@ -1597,8 +1604,24 @@ static bool __try_evict_buffer(struct dm_buffer *b, gfp_t gfp)
 
 static unsigned long get_retain_buffers(struct dm_bufio_client *c)
 {
+#ifdef CONFIG_DM_HUAWEI_USE_OPT_PARAMETER
+	unsigned long retain_bytes = ACCESS_ONCE(dm_bufio_retain_bytes);
+	unsigned long retain_buf_cnt = retain_bytes >> (c->sectors_per_block_bits + SECTOR_SHIFT);
+	unsigned long retain_ratio = ACCESS_ONCE(dm_bufio_retain_ratio);
+	if (retain_ratio > 0 && retain_ratio < 100) {
+		unsigned long count = c->n_buffers[LIST_CLEAN] +c->n_buffers[LIST_DIRTY];
+		unsigned long new_cnt = 0;
+		new_cnt = (count * retain_ratio)/100;
+		if (new_cnt < retain_buf_cnt)
+			new_cnt = retain_buf_cnt;
+		return new_cnt;
+	}else {
+		return retain_buf_cnt;
+	}
+#else
         unsigned long retain_bytes = ACCESS_ONCE(dm_bufio_retain_bytes);
         return retain_bytes >> (c->sectors_per_block_bits + SECTOR_SHIFT);
+#endif
 }
 
 static unsigned long __scan(struct dm_bufio_client *c, unsigned long nr_to_scan,
@@ -2009,6 +2032,13 @@ MODULE_PARM_DESC(allocated_vmalloc_bytes, "Memory allocated with vmalloc");
 
 module_param_named(current_allocated_bytes, dm_bufio_current_allocated, ulong, S_IRUGO);
 MODULE_PARM_DESC(current_allocated_bytes, "Memory currently used by the cache");
+
+#ifdef CONFIG_DM_HUAWEI_USE_OPT_PARAMETER
+module_param_named(cache_size_per_client, dm_bufio_cache_size_per_client, ulong, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(cache_size_per_client, "dm_bufio cache size per client");
+module_param_named(retain_ajust_ratio, dm_bufio_retain_ratio, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(retain_ajust_ratio, "Ajust retain ratio, 0 is disable");
+#endif
 
 MODULE_AUTHOR("Mikulas Patocka <dm-devel@redhat.com>");
 MODULE_DESCRIPTION(DM_NAME " buffered I/O library");

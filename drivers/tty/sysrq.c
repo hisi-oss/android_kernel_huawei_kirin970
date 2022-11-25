@@ -54,6 +54,10 @@
 #include <asm/ptrace.h>
 #include <asm/irq_regs.h>
 
+#ifdef CONFIG_DETECT_HUAWEI_HUNG_TASK
+#include <linux/huawei_hung_task.h>
+#endif
+
 /* Whether we react on sysrq keys or just ignore them */
 static int __read_mostly sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
 static bool __read_mostly sysrq_always_enabled;
@@ -225,10 +229,19 @@ static void showacpu(void *dummy)
 	if (idle_cpu(smp_processor_id()))
 		return;
 
+#ifdef CONFIG_HISI_SHOWACPU_FLUSH_CACHE
+	pr_info("showacpu lock irq:owner %u next %u\n", show_lock.rlock.raw_lock.owner,
+			show_lock.rlock.raw_lock.next);
+#endif
 	spin_lock_irqsave(&show_lock, flags);
 	pr_info("CPU%d:\n", smp_processor_id());
 	show_stack(NULL, NULL);
 	spin_unlock_irqrestore(&show_lock, flags);
+#ifdef CONFIG_HISI_SHOWACPU_FLUSH_CACHE
+	pr_info("showacpu unlock:owner %u next %u\n", show_lock.rlock.raw_lock.owner,
+			show_lock.rlock.raw_lock.next);
+	flush_cache_all();
+#endif
 }
 
 static void sysrq_showregs_othercpus(struct work_struct *dummy)
@@ -297,7 +310,17 @@ static struct sysrq_key_op sysrq_showstate_op = {
 
 static void sysrq_handle_showstate_blocked(int key)
 {
+#ifdef CONFIG_DETECT_HUAWEI_HUNG_TASK
+    hwhungtask_show_state_filter(TASK_UNINTERRUPTIBLE);
+#else
+#ifdef CONFIG_HUAWEI_PRINTK_CTRL
+	printk_level_setup(LOGLEVEL_DEBUG);
+#endif
 	show_state_filter(TASK_UNINTERRUPTIBLE);
+#ifdef CONFIG_HUAWEI_PRINTK_CTRL
+	printk_level_setup(sysctl_printk_level);
+#endif
+#endif
 }
 static struct sysrq_key_op sysrq_showstate_blocked_op = {
 	.handler	= sysrq_handle_showstate_blocked,
@@ -546,7 +569,6 @@ void __handle_sysrq(int key, bool check_mask)
 	 */
 	orig_log_level = console_loglevel;
 	console_loglevel = CONSOLE_LOGLEVEL_DEFAULT;
-	pr_info("SysRq : ");
 
         op_p = __sysrq_get_key_op(key);
         if (op_p) {
@@ -555,14 +577,15 @@ void __handle_sysrq(int key, bool check_mask)
 		 * should not) and is the invoked operation enabled?
 		 */
 		if (!check_mask || sysrq_on_mask(op_p->enable_mask)) {
-			pr_cont("%s\n", op_p->action_msg);
+			pr_info("%s\n", op_p->action_msg);
 			console_loglevel = orig_log_level;
 			op_p->handler(key);
 		} else {
-			pr_cont("This sysrq operation is disabled.\n");
+			pr_info("This sysrq operation is disabled.\n");
+			console_loglevel = orig_log_level;
 		}
 	} else {
-		pr_cont("HELP : ");
+		pr_info("HELP : ");
 		/* Only print the help msg once per handler */
 		for (i = 0; i < ARRAY_SIZE(sysrq_key_table); i++) {
 			if (sysrq_key_table[i]) {

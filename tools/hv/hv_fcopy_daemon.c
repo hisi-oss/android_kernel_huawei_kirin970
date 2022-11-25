@@ -233,7 +233,6 @@ int main(int argc, char *argv[])
 			break;
 
 		default:
-			error = HV_E_FAIL;
 			syslog(LOG_ERR, "Unknown operation: %d",
 				buffer.hdr.operation);
 

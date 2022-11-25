@@ -235,6 +235,37 @@ config ARM_SP805_WATCHDOG
 	  ARM Primecell SP805 Watchdog timer. This will reboot your system when
 	  the timeout is reached.
 
+#
+# Hisilicon Watchdog
+#
+config HISI_SR_AP_WATCHDOG
+    tristate "suspend and resume to be monitored by the watchdog"
+    depends on HISI_SP805_WATCHDOG || HI_V500_WATCHDOG
+    help
+      In the case of hung during the suspend and resume process,
+      it needs to be monitored by the watchdog.
+
+config HISI_SR_AP_WATCHDOG
+    tristate "suspend and resume to be monitored by the watchdog"
+    depends on HISI_SP805_WATCHDOG || HI_V500_WATCHDOG
+    help
+      In the case of hung during the suspend and resume process,
+      it needs to be monitored by the watchdog.
+
+config HISI_SP805_WATCHDOG
+    tristate "HISILICON SP805 Watchdog"
+    depends on (ARM || ARM64) && ARM_AMBA
+    select WATCHDOG_CORE
+    help
+      Hisilicon SP805 Watchdog Based on ARM SP805 Watchdog.
+
+config HI_V500_WATCHDOG
+    tristate "HISI V500 Watchdog"
+    depends on (ARM || ARM64)
+    select WATCHDOG_CORE
+    help
+      Hisi V500 Watchdog Was Self-developed Watchdog.
+
 config ARM_SBSA_WATCHDOG
 	tristate "ARM SBSA Generic Watchdog"
 	depends on ARM64
@@ -563,6 +594,7 @@ config MAX63XX_WATCHDOG
 config MAX77620_WATCHDOG
 	tristate "Maxim Max77620 Watchdog Timer"
 	depends on MFD_MAX77620 || COMPILE_TEST
+	select WATCHDOG_CORE
 	help
 	 This is the driver for the Max77620 watchdog timer.
 	 Say 'Y' here to enable the watchdog timer support for
@@ -1941,6 +1973,7 @@ comment "Watchdog Pretimeout Governors"
 
 config WATCHDOG_PRETIMEOUT_GOV
 	bool "Enable watchdog pretimeout governors"
+	depends on WATCHDOG_CORE
 	help
 	  The option allows to select watchdog pretimeout governors.
 

@@ -140,6 +140,28 @@ config MMC_SDHCI_OF_ARASAN
 
 	  If unsure, say N.
 
+config MMC_SDHCI_HISI_SCORPIO
+	tristate "SDHCI OF support for the hisi SDHCI controllers"
+	depends on MMC_SDHCI_PLTFM
+	depends on OF
+	depends on COMMON_CLK
+	help
+	  This selects the Arasan Secure Digital Host Controller Interface
+	  (SDHCI). This hardware is found e.g. in Xilinx' Zynq SoC.
+
+	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_SDHCI_MUX_SDSIM
+	tristate "SDHCI MUX SDSIM supoort"
+	depends on MMC_SDHCI_PLTFM
+	default n
+	help
+	  this select supoort for sdhci controller for sd/sim
+
+	  If unsure, say N.
+
 config MMC_SDHCI_OF_AT91
 	tristate "SDHCI OF support for the Atmel SDMMC controller"
 	depends on MMC_SDHCI_PLTFM
@@ -680,6 +702,13 @@ config MMC_DW
 	  This selects support for the Synopsys DesignWare Mobile Storage IP
 	  block, this provides host support for SD and MMC interfaces, in both
 	  PIO, internal DMA mode and external DMA mode.
+config MMC_DW_IDMAC
+	bool "Internal DMAC interface"
+	depends on MMC_DW
+	help
+	  This selects support for the internal DMAC block within the Synopsys
+	  Designware Mobile Storage IP block. This disables the external DMA
+	  interface.
 
 config MMC_DW_PLTFM
 	tristate "Synopsys Designware MCI Support as platform device"
@@ -712,6 +741,59 @@ config MMC_DW_K3
 	  This selects support for Hisilicon K3 SoC specific extensions to the
 	  Synopsys DesignWare Memory Card Interface driver. Select this option
 	  for platforms based on Hisilicon K3 SoC's.
+
+config MMC_DW_HISILICON
+	tristate "Hisilicon specific extensions for Synopsys DW Memory Card Interface"
+	depends on MMC_DW
+	select MMC_DW_PLTFM
+	select MMC_DW_IDMAC
+	help
+	  This selects support for Hisilicon SoC specific extensions to the
+	  Synopsys DesignWare Memory Card Interface driver. DONOT select this.
+
+config MMC_DW_HI3XXX
+	tristate "Hisilicon 9Serial specific extensions for Synopsys DW Memory Card Interface"
+	depends on MMC_DW
+	select MMC_DW_PLTFM
+	select MMC_DW_IDMAC
+	default n
+	help
+	  This selects support for Hisilicon SoC specific extensions to the
+	  Synopsys DesignWare Memory Card Interface driver. Select this option
+	  for platforms based on Kirin 9 serial SoC's.
+
+config MMC_DW_MUX_SDSIM
+	tristate "MUX SDSIM support"
+	depends on MMC_DW
+	default n
+	help
+	  This selects support for MMC_DW MUX_SDSIM.
+
+config MMC_DW_MUX_SDSIM_LIBRA
+	tristate "MUX SDSIM support for libra platform"
+	depends on MMC_DW && MMC_DW_MUX_SDSIM
+	default n
+	help
+	  This selects support for MMC_DW MUX_SDSIM in libra platform.
+
+config MMC_DW_EMMC_USED_AS_MODEM
+	tristate "Hisilicon eMMC used as third_party modem for Synopsys DW Memory Card Interface"
+	depends on MMC_DW && MMC_DW_HI3XXX
+	default n
+	help
+	  This selects support for Hisilicon SoC use eMMC IP as the third_party to the
+	  Synopsys DesignWare Memory Card Interface driver.
+
+
+config MMC_DW_SD_CLK_SLOWDOWN
+	tristate "Hisilicon specific extensions for Synopsys DW Memory Card Interface"
+	depends on MMC_DW && MMC_DW_HI3XXX
+	select MMC_DW_PLTFM
+	default n
+	help
+	  This selects support for Hisilicon SoC specific extensions to the
+	  Synopsys DesignWare Memory Card Interface driver. Select this option
+	  for platforms based on Kirin 9 serial SoC's.
 
 config MMC_DW_PCI
 	tristate "Synopsys Designware MCI support on PCI bus"
@@ -863,6 +945,33 @@ config MMC_BCM2835
 
 	  If unsure, say N.
 
+config MMC_CQ_HCI
+	tristate "Command Queue Support"
+	depends on HAS_DMA && ZODIAC_MMC
+	help
+	  This selects the Command Queue Host Controller Interface (CQHCI)
+	  support present in host controllers of Qualcomm Technologies, Inc
+	  amongst others.
+	  This controller supports eMMC devices with command queue support.
+
+	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_MQ_CQ_HCI
+        tristate "Command Queue Support mq"
+        depends on MAS_BLK
+	default n
+        help
+          This selects the Command Queue Host Controller Interface (CQHCI)
+          support present in host controllers of Qualcomm Technologies, Inc
+          amongst others.
+          This controller supports eMMC devices with command queue support.
+
+          If you have a controller with this interface, say Y or M here.
+
+          If unsure, say N.
+
 config MMC_MTK
 	tristate "MediaTek SD/MMC Card Interface support"
 	depends on HAS_DMA
@@ -870,6 +979,33 @@ config MMC_MTK
 	  This selects the MediaTek(R) Secure digital and Multimedia card Interface.
 	  If you have a machine with a integrated SD/MMC card reader, say Y or M here.
 	  This is needed if support for any SD/SDIO/MMC devices is required.
+	  If unsure, say N.
+
+config MMC_SDHCI_DWC_MSHC
+	tristate "SDHCI OF support for the Synopsys controllers"
+	depends on MMC_SDHCI_PLTFM
+	depends on ZODIAC_MMC
+	help
+	  This selects Synopsys DesignWare Cores Mobile Storage Host
+	  Controller(SDHCI protocol compliance). This hardware is found
+	  e.g. in Hisi Kirin SoC.
+
+	  If you have a controller with this interface, say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_SDHCI_MSHC_LIBRA
+	tristate "controllers for LIBRA"
+	depends on MMC_SDHCI_DWC_MSHC
+	help
+	  If you have a controller for libra, say Y or M here.
+	  If unsure, say N.
+
+config MMC_SDHCI_MSHC_CAPRICORN
+	tristate "controllers for CAPRICORN"
+	depends on MMC_SDHCI_DWC_MSHC
+	help
+	  If you have a controller for capricorn, say Y or M here.
 	  If unsure, say N.
 
 config MMC_SDHCI_MICROCHIP_PIC32
@@ -899,4 +1035,14 @@ config MMC_SDHCI_XENON
 	help
 	  This selects Marvell Xenon eMMC/SD/SDIO SDHCI.
 	  If you have a controller with this interface, say Y or M here.
+	  If unsure, say N.
+
+config EMMC_FAULT_INJECT
+	tristate "eMMC Fault Inject"
+	depends on FAULT_INJECTION_DEBUG_FS
+	help
+	  The infrastructure can be used for debugging the driver from user space
+	  by injecting fault to the driver.
+
+	  Select this if you want to enable fault injection.
 	  If unsure, say N.

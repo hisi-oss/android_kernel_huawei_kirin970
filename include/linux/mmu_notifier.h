@@ -144,7 +144,26 @@ struct mmu_notifier_ops {
 	void (*invalidate_range_end)(struct mmu_notifier *mn,
 				     struct mm_struct *mm,
 				     unsigned long start, unsigned long end);
+#ifdef CONFIG_VM_COPY
+	/* same as change_pte, for vm_copy */
+	void (*change_pte_vmcpy)(struct mmu_notifier *mn,
+				struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long address,
+				pte_t pte);
 
+	/* for vm_copy */
+	void (*invalidate_range_start_vmcpy)(struct mmu_notifier *mn,
+				struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end);
+
+	/* for vm_copy */
+	void (*invalidate_range_end_vmcpy)(struct mmu_notifier *mn,
+				struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end);
+#endif
 	/*
 	 * invalidate_range() is either called between
 	 * invalidate_range_start() and invalidate_range_end() when the
@@ -214,6 +233,17 @@ extern void __mmu_notifier_invalidate_range_start(struct mm_struct *mm,
 				  unsigned long start, unsigned long end);
 extern void __mmu_notifier_invalidate_range_end(struct mm_struct *mm,
 				  unsigned long start, unsigned long end);
+#ifdef CONFIG_VM_COPY
+extern void __mmu_notifier_change_pte_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long address, pte_t pte);
+extern void __mmu_notifier_invalidate_range_start_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end);
+extern void __mmu_notifier_invalidate_range_end_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end);
+#endif
 extern void __mmu_notifier_invalidate_range(struct mm_struct *mm,
 				  unsigned long start, unsigned long end);
 
@@ -270,6 +300,33 @@ static inline void mmu_notifier_invalidate_range_end(struct mm_struct *mm,
 		__mmu_notifier_invalidate_range_end(mm, start, end);
 }
 
+#ifdef CONFIG_VM_COPY
+static inline void mmu_notifier_change_pte_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long address, pte_t pte)
+{
+	if (mm_has_notifiers(mm))
+		__mmu_notifier_change_pte_vmcpy(mm, vma, address, pte);
+}
+
+static inline void mmu_notifier_invalidate_range_end_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end)
+{
+	if (mm_has_notifiers(mm))
+		__mmu_notifier_invalidate_range_end_vmcpy(mm, vma, start, end);
+}
+
+static inline void mmu_notifier_invalidate_range_start_vmcpy(
+				struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end)
+{
+	if (mm_has_notifiers(mm))
+		__mmu_notifier_invalidate_range_start_vmcpy(mm, vma,
+				start, end);
+}
+#endif
 static inline void mmu_notifier_invalidate_range(struct mm_struct *mm,
 				  unsigned long start, unsigned long end)
 {
@@ -438,6 +495,26 @@ static inline void mmu_notifier_invalidate_range_end(struct mm_struct *mm,
 {
 }
 
+#ifdef CONFIG_VM_COPY
+static inline void mmu_notifier_change_pte_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long address, pte_t pte)
+{
+}
+
+static inline void mmu_notifier_invalidate_range_start_vmcpy(
+				struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end)
+{
+}
+
+static inline void mmu_notifier_invalidate_range_end_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end)
+{
+}
+#endif
 static inline void mmu_notifier_invalidate_range(struct mm_struct *mm,
 				  unsigned long start, unsigned long end)
 {

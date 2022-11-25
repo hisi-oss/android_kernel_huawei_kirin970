@@ -429,12 +429,13 @@ config I2C_BCM_KONA
 	  If you do not need KONA I2C interface, say N.
 
 config I2C_BRCMSTB
-	tristate "BRCM Settop I2C controller"
-	depends on ARCH_BRCMSTB || BMIPS_GENERIC || COMPILE_TEST
+	tristate "BRCM Settop/DSL I2C controller"
+	depends on ARCH_BRCMSTB || BMIPS_GENERIC || ARCH_BCM_63XX || \
+		   COMPILE_TEST
 	default y
 	help
 	  If you say yes to this option, support will be included for the
-	  I2C interface on the Broadcom Settop SoCs.
+	  I2C interface on the Broadcom Settop/DSL SoCs.
 
 	  If you do not need I2C interface, say N.
 
@@ -532,6 +533,15 @@ config I2C_DESIGNWARE_PCI
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-designware-pci.
 
+config HISI_I2C_DESIGNWARE
+	tristate "Synopsys DesignWare Hisilicon"
+	depends on HAVE_CLK
+	select I2C_DESIGNWARE_CORE
+	help
+	  If you say yes to this option, support will be included for the
+	  Synopsys DesignWare I2C adapter on Hisilicon.
+	  Only master mode is supported.
+
 config I2C_DESIGNWARE_BAYTRAIL
 	bool "Intel Baytrail I2C semaphore support"
 	depends on ACPI
@@ -543,6 +553,13 @@ config I2C_DESIGNWARE_BAYTRAIL
 	  the host to request uninterrupted access to the PMIC's I2C bus from
 	  the platform firmware controlling it. You should say Y if running on
 	  a BayTrail system using the AXP288.
+
+config HISI_I2C_MASTER
+	tristate "Hisilicon I2C MASTR"
+	depends on HAVE_CLK
+	help
+	  If you say yes to this option, support will be included for the
+	  I2C adapter on Hisilicon.
 
 config I2C_DIGICOLOR
 	tristate "Conexant Digicolor I2C driver"

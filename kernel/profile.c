@@ -16,6 +16,7 @@
 
 #include <linux/export.h>
 #include <linux/profile.h>
+#include <asm/bitsperlong.h>
 #include <linux/bootmem.h>
 #include <linux/notifier.h>
 #include <linux/mm.h>
@@ -105,6 +106,10 @@ int __ref profile_init(void)
 	if (!prof_on)
 		return 0;
 
+	if (prof_shift >= BITS_PER_LONG) {
+		pr_err("prof_shift %ld invalid\n", prof_shift);
+		return 0;
+	}
 	/* only text is profiled */
 	prof_len = (_etext - _stext) >> prof_shift;
 	buffer_bytes = prof_len*sizeof(atomic_t);
@@ -287,6 +292,10 @@ static void do_profile_hits(int type, void *__pc, unsigned int nr_hits)
 	int i, j, cpu;
 	struct profile_hit *hits;
 
+	if (prof_shift >= BITS_PER_LONG) {
+		pr_err("prof_shift %ld invalid\n", prof_shift);
+		return;
+	}
 	pc = min((pc - (unsigned long)_stext) >> prof_shift, prof_len - 1);
 	i = primary = (pc & (NR_PROFILE_GRP - 1)) << PROFILE_GRPSHIFT;
 	secondary = (~(pc << 1) & (NR_PROFILE_GRP - 1)) << PROFILE_GRPSHIFT;
@@ -385,6 +394,11 @@ static int profile_online_cpu(unsigned int cpu)
 static void do_profile_hits(int type, void *__pc, unsigned int nr_hits)
 {
 	unsigned long pc;
+
+	if (prof_shift >= BITS_PER_LONG) {
+		pr_err("prof_shift %ld invalid\n", prof_shift);
+		return;
+	}
 	pc = ((unsigned long)__pc - (unsigned long)_stext) >> prof_shift;
 	atomic_add(nr_hits, &prof_buffer[min(pc, prof_len - 1)]);
 }
@@ -467,7 +481,13 @@ read_profile(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 	unsigned long p = *ppos;
 	ssize_t read;
 	char *pnt;
-	unsigned int sample_step = 1 << prof_shift;
+	unsigned int sample_step;
+
+	if (prof_shift >= sizeof(sample_step) * 8) {
+		pr_err("prof_shift %ld invalid\n", prof_shift);
+		return -EINVAL;
+	}
+	sample_step = 1 << prof_shift;
 
 	profile_flip_buffers();
 	if (p >= (prof_len+1)*sizeof(unsigned int))

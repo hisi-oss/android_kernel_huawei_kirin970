@@ -92,5 +92,21 @@ nl80211_radar_notify(struct cfg80211_registered_device *rdev,
 void nl80211_send_ap_stopped(struct wireless_dev *wdev);
 
 void cfg80211_rdev_free_coalesce(struct cfg80211_registered_device *rdev);
+#if (defined(CONFIG_HW_VOWIFI) || defined(CONFIG_HW_ABS))
+void
+cfg80211_do_drv_private(struct net_device *dev,
+	gfp_t gfp, enum nl80211_commands command);
+#endif
+#if (defined(CONFIG_HW_WIFI_MSS) || defined(CONFIG_HW_WIFI_RSSI))
+void cfg80211_do_drv_private_params(struct net_device *dev, gfp_t gfp,
+	enum nl80211_commands command, u32 subcmd, const u8 *ie, size_t ie_len);
+#endif
 
+#ifdef CONFIG_HW_NETWORK_QOE
+int get_wifi_para_for_booster(struct wifi_info *w_info, int w_info_len);
+#endif
+
+#ifdef CONFIG_MPTCP
+extern enum nl80211_band cfg80211_get_chanband_by_dev(const struct net_device *dev);
+#endif
 #endif /* __NET_WIRELESS_NL80211_H */

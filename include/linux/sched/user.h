@@ -41,6 +41,21 @@ struct user_struct {
     defined(CONFIG_NET)
 	atomic_long_t locked_vm;
 #endif
+
+#ifdef CONFIG_SECURITY_KSHIELD
+	unsigned int kshield_flags;
+	unsigned int kshield_weight;
+	bool kshield_cha_reported;
+	bool kshield_exp_reported;
+	/* Generic Heap Spray */
+	atomic64_t spray_count;
+	unsigned long spray_tick;
+	/* sock Heap Spray */
+	atomic64_t sock_spray_count;
+	unsigned long sock_spray_tick;
+	/* last modified time*/
+	unsigned long last_mod_tick;
+#endif
 };
 
 extern int uids_sysfs_init(void);

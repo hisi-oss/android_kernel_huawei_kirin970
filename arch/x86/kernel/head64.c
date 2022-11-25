@@ -31,7 +31,6 @@
 #include <asm/bootparam_utils.h>
 #include <asm/microcode.h>
 #include <asm/kasan.h>
-#include <asm/fixmap.h>
 
 /*
  * Manage page tables very early on.
@@ -94,8 +93,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	pud[511] += load_delta;
 
 	pmd = fixup_pointer(level2_fixmap_pgt, physaddr);
-	for (i = FIXMAP_PMD_TOP; i > FIXMAP_PMD_TOP - FIXMAP_PMD_NUM; i--)
-		pmd[i] += load_delta;
+	pmd[506] += load_delta;
 
 	/*
 	 * Set up the identity mapping for the switchover.  These

@@ -41,6 +41,12 @@
 /* PTWs cacheable, inner/outer WBWA */
 #define TCR_CACHE_FLAGS	TCR_IRGN_WBWA | TCR_ORGN_WBWA
 
+#ifdef CONFIG_KASAN_SW_TAGS
+#define TCR_KASAN_FLAGS TCR_TBI1
+#else
+#define TCR_KASAN_FLAGS 0
+#endif
+
 #define MAIR(attr, mt)	((attr) << ((mt) * 8))
 
 /*
@@ -77,7 +83,7 @@ alternative_else
 alternative_endif
 	mrs	x12, sp_el0
 	stp	x2, x3, [x0]
-	stp	x4, xzr, [x0, #16]
+	stp	x4, x18, [x0, #16]
 	stp	x5, x6, [x0, #32]
 	stp	x7, x8, [x0, #48]
 	stp	x9, x10, [x0, #64]
@@ -93,7 +99,7 @@ ENDPROC(cpu_do_suspend)
 	.pushsection ".idmap.text", "awx"
 ENTRY(cpu_do_resume)
 	ldp	x2, x3, [x0]
-	ldp	x4, x5, [x0, #16]
+	ldp	x4, x18, [x0, #16]
 	ldp	x6, x8, [x0, #32]
 	ldp	x9, x10, [x0, #48]
 	ldp	x11, x12, [x0, #64]
@@ -243,13 +249,13 @@ ENTRY(idmap_kpti_install_ng_mappings)
 	/* We're the boot CPU. Wait for the others to catch up */
 	sevl
 1:	wfe
-	ldaxr	w18, [flag_ptr]
-	eor	w18, w18, num_cpus
-	cbnz	w18, 1b
+	ldaxr	w17, [flag_ptr]
+	eor	w17, w17, num_cpus
+	cbnz	w17, 1b
 
 	/* We need to walk swapper, so turn off the MMU. */
-	mrs	x18, sctlr_el1
-	bic	x18, x18, #SCTLR_ELx_M
+	mrs	x17, sctlr_el1
+	bic	x17, x17, #SCTLR_ELx_M
 	msr	sctlr_el1, x18
 	isb
 
@@ -273,9 +279,18 @@ skip_pgd:
 	isb
 
 	/* We're done: fire up the MMU again */
-	mrs	x18, sctlr_el1
-	orr	x18, x18, #SCTLR_ELx_M
-	msr	sctlr_el1, x18
+	mrs	x17, sctlr_el1
+	orr	x17, x17, #SCTLR_ELx_M
+	msr	sctlr_el1, x17
+	isb
+
+	/*
+	 * Invalidate the local I-cache so that any instructions fetched
+	 * speculatively from the PoC are discarded, since they may have
+	 * been dynamically patched at the PoU.
+	 */
+	ic	iallu
+	dsb	nsh
 	isb
 
 	/* Set the flag to zero to indicate that we're all done */
@@ -336,33 +351,9 @@ skip_pte:
 	b.ne	do_pte
 	b	next_pmd
 
-	/* Secondary CPUs end up here */
-__idmap_kpti_secondary:
-	/* Uninstall swapper before surgery begins */
-	__idmap_cpu_set_reserved_ttbr1 x18, x17
-
-	/* Increment the flag to let the boot CPU we're ready */
-1:	ldxr	w18, [flag_ptr]
-	add	w18, w18, #1
-	stxr	w17, w18, [flag_ptr]
-	cbnz	w17, 1b
-
-	/* Wait for the boot CPU to finish messing around with swapper */
-	sevl
-1:	wfe
-	ldxr	w18, [flag_ptr]
-	cbnz	w18, 1b
-
-	/* All done, act like nothing happened */
-	msr	ttbr1_el1, swapper_ttb
-	isb
-	ret
-
 	.unreq	cpu
 	.unreq	num_cpus
 	.unreq	swapper_pa
-	.unreq	swapper_ttb
-	.unreq	flag_ptr
 	.unreq	cur_pgdp
 	.unreq	end_pgdp
 	.unreq	pgd
@@ -375,6 +366,31 @@ __idmap_kpti_secondary:
 	.unreq	cur_ptep
 	.unreq	end_ptep
 	.unreq	pte
+
+	/* Secondary CPUs end up here */
+__idmap_kpti_secondary:
+	/* Uninstall swapper before surgery begins */
+	__idmap_cpu_set_reserved_ttbr1 x16, x17
+
+	/* Increment the flag to let the boot CPU we're ready */
+1:	ldxr	w16, [flag_ptr]
+	add	w16, w16, #1
+	stxr	w17, w16, [flag_ptr]
+	cbnz	w17, 1b
+
+	/* Wait for the boot CPU to finish messing around with swapper */
+	sevl
+1:	wfe
+	ldxr	w16, [flag_ptr]
+	cbnz	w16, 1b
+
+	/* All done, act like nothing happened */
+	msr	ttbr1_el1, swapper_ttb
+	isb
+	ret
+
+	.unreq	swapper_ttb
+	.unreq	flag_ptr
 ENDPROC(idmap_kpti_install_ng_mappings)
 	.popsection
 #endif
@@ -419,17 +435,23 @@ ENTRY(__cpu_setup)
 	/*
 	 * Prepare SCTLR
 	 */
-	adr	x5, crval
-	ldp	w5, w6, [x5]
-	mrs	x0, sctlr_el1
-	bic	x0, x0, x5			// clear bits
-	orr	x0, x0, x6			// set bits
+	mov_q	x0, SCTLR_EL1_SET
+#ifdef CONFIG_ARM64_ERRATUM_1392324
+	mrs x5, midr_el1
+	lsr x5, x5, #0x4
+	and x5, x5, #0xFFF
+	cmp x5, #0xD40       //the 0xD40 is partnum of enyo core
+	b.ne 1f
+	bic x0, x0, SCTLR_ELx_IESB
+1:
+#endif
 	/*
 	 * Set/prepare TCR and TTBR. We use 512GB (39-bit) address range for
 	 * both user and kernel.
 	 */
 	ldr	x10, =TCR_TxSZ(VA_BITS) | TCR_CACHE_FLAGS | TCR_SMP_FLAGS | \
-			TCR_TG_FLAGS | TCR_ASID16 | TCR_TBI0 | TCR_A1
+			TCR_TG_FLAGS | TCR_ASID16 | TCR_TBI0 | TCR_A1 | \
+			TCR_KASAN_FLAGS
 	tcr_set_idmap_t0sz	x10, x9
 
 	/*
@@ -459,21 +481,3 @@ ENTRY(__cpu_setup)
 	msr	tcr_el1, x10
 	ret					// return to head.S
 ENDPROC(__cpu_setup)
-
-	/*
-	 * We set the desired value explicitly, including those of the
-	 * reserved bits. The values of bits EE & E0E were set early in
-	 * el2_setup, which are left untouched below.
-	 *
-	 *                 n n            T
-	 *       U E      WT T UD     US IHBS
-	 *       CE0      XWHW CZ     ME TEEA S
-	 * .... .IEE .... NEAI TE.I ..AD DEN0 ACAM
-	 * 0011 0... 1101 ..0. ..0. 10.. .0.. .... < hardware reserved
-	 * .... .1.. .... 01.1 11.1 ..01 0.01 1101 < software settings
-	 */
-	.type	crval, #object
-crval:
-	.word	0xfcffffff			// clear
-	.word	0x34d5d91d			// set
-	.popsection

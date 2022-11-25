@@ -36,6 +36,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
+#include <linux/hisi/hisi_pstore.h>
 
 #include "internal.h"
 
@@ -382,6 +383,10 @@ int pstore_mkfile(struct dentry *root, struct pstore_record *record)
 			  record->type, record->psi->name, record->id);
 		break;
 	}
+
+#ifdef CONFIG_HISI_BB
+	hisi_save_pstore_log(name, record->buf, record->size);
+#endif
 
 	dentry = d_alloc_name(root, name);
 	if (!dentry)

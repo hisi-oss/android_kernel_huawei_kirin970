@@ -52,7 +52,11 @@
 #include <linux/zpool.h>
 #include <linux/mount.h>
 #include <linux/migrate.h>
+#include <linux/wait.h>
 #include <linux/pagemap.h>
+#ifdef CONFIG_HISI_MEM_OFFLINE
+#include "hisi/mem_offline.h"
+#endif
 
 #define ZSPAGE_MAGIC	0x58
 
@@ -68,7 +72,7 @@
  * A single 'zspage' is composed of up to 2^N discontiguous 0-order (single)
  * pages. ZS_MAX_ZSPAGE_ORDER defines upper limit on N.
  */
-#define ZS_MAX_ZSPAGE_ORDER 2
+#define ZS_MAX_ZSPAGE_ORDER 3
 #define ZS_MAX_PAGES_PER_ZSPAGE (_AC(1, UL) << ZS_MAX_ZSPAGE_ORDER)
 
 #define ZS_HANDLE_SIZE (sizeof(unsigned long))
@@ -169,6 +173,11 @@ struct zs_size_stat {
 
 #ifdef CONFIG_ZSMALLOC_STAT
 static struct dentry *zs_stat_root;
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+static atomic_long_t migrate_zspage_count;
+static atomic_long_t compact_zspage_count;
+static atomic_long_t zsmalloc_count;
+#endif
 #endif
 
 #ifdef CONFIG_COMPACTION
@@ -207,6 +216,13 @@ struct size_class {
 	unsigned int index;
 	struct zs_size_stat stats;
 };
+
+#ifdef CONFIG_ZS_MALLOC_EXT
+struct size_class_ext {
+	struct size_class *class;
+	void *priv;
+};
+#endif
 
 /* huge object: pages_per_zspage == 1 && maxobj_per_zspage == 1 */
 static void SetPageHugeObject(struct page *page)
@@ -268,7 +284,17 @@ struct zs_pool {
 #ifdef CONFIG_COMPACTION
 	struct inode *inode;
 	struct work_struct free_work;
+	/* A wait queue for when migration races with async_free_zspage() */
+	struct wait_queue_head migration_wait;
+	atomic_long_t isolated_pages;
+	bool destroying;
 #endif
+#ifdef CONFIG_ZS_MALLOC_EXT
+	int ext_flag;
+	ext_size_parse_fn *size_parse;
+	ext_zsmalloc_fn *ext_zsmalloc;
+#endif
+
 };
 
 struct zspage {
@@ -664,6 +690,32 @@ static const struct file_operations zs_stat_size_ops = {
 	.release        = single_release,
 };
 
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+static int zs_stats_count_show(struct seq_file *s, void *v)
+{
+	seq_printf(s, "Total zsmalloc count: %ld\n",
+		   atomic_long_read(&zsmalloc_count));
+	seq_printf(s, "Total migrate zspage count: %ld\n",
+		   atomic_long_read(&migrate_zspage_count));
+	seq_printf(s, "Total compact zspage count: %ld\n",
+		   atomic_long_read(&compact_zspage_count));
+
+	return 0;
+}
+
+static int zs_stats_count_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, zs_stats_count_show, inode->i_private);
+}
+
+static const struct file_operations zs_stat_count_ops = {
+	.open           = zs_stats_count_open,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+	.release        = single_release,
+};
+#endif
+
 static void zs_pool_stat_create(struct zs_pool *pool, const char *name)
 {
 	struct dentry *entry;
@@ -688,6 +740,19 @@ static void zs_pool_stat_create(struct zs_pool *pool, const char *name)
 		debugfs_remove_recursive(pool->stat_dentry);
 		pool->stat_dentry = NULL;
 	}
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+	if (!entry)
+		return;
+
+	entry = debugfs_create_file("status", S_IFREG | S_IRUGO,
+			pool->stat_dentry, pool, &zs_stat_count_ops);
+	if (!entry) {
+		pr_warn("%s: debugfs file entry <%s> creation failed\n",
+				name, "status");
+		debugfs_remove_recursive(pool->stat_dentry);
+		pool->stat_dentry = NULL;
+	}
+#endif
 }
 
 static void zs_pool_stat_destroy(struct zs_pool *pool)
@@ -1110,6 +1175,14 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 	int i;
 	struct page *pages[ZS_MAX_PAGES_PER_ZSPAGE];
 	struct zspage *zspage = cache_alloc_zspage(pool, gfp);
+#ifdef CONFIG_ZS_MALLOC_EXT
+	struct size_class_ext *ext = NULL;
+
+	if (pool->ext_flag) {
+		ext = (struct size_class_ext *)class;
+		class = ext->class;
+	}
+#endif
 
 	if (!zspage)
 		return NULL;
@@ -1120,8 +1193,12 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 
 	for (i = 0; i < class->pages_per_zspage; i++) {
 		struct page *page;
-
+#ifdef CONFIG_ZS_MALLOC_EXT
+		page = pool->ext_flag ? pool->ext_zsmalloc(ext->priv, gfp)
+						: alloc_page(gfp);
+#else
 		page = alloc_page(gfp);
+#endif
 		if (!page) {
 			while (--i >= 0) {
 				dec_zone_page_state(pages[i], NR_ZSPAGES);
@@ -1132,6 +1209,9 @@ static struct zspage *alloc_zspage(struct zs_pool *pool,
 		}
 
 		inc_zone_page_state(page, NR_ZSPAGES);
+#ifdef CONFIG_HISI_PAGE_TRACE
+		SetPageZspage(page);
+#endif
 		pages[i] = page;
 	}
 
@@ -1446,6 +1526,72 @@ size_t zs_huge_class_size(struct zs_pool *pool)
 }
 EXPORT_SYMBOL_GPL(zs_huge_class_size);
 
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+static void zs_check_valid_handle(struct size_class *class,
+			unsigned long handle)
+{
+	unsigned long obj;
+	struct link_free *link = NULL;
+	struct zspage *zspage = NULL;
+	struct page *f_page = NULL;
+	unsigned long f_offset;
+	unsigned int f_objidx;
+	void *vaddr = NULL;
+	unsigned long org_handle;
+
+	obj = handle_to_obj(handle);
+	obj &= ~OBJ_ALLOCATED_TAG;
+	obj_to_location(obj, &f_page, &f_objidx);
+	zspage = get_zspage(f_page);
+	handle |= OBJ_ALLOCATED_TAG;
+
+	if (unlikely(PageHugeObject(f_page))) {
+		if (zspage->first_page->index != handle) {
+			pr_err("%s:invalid handle, user handle 0x%lx, actual handle 0x%lx\n",
+			    __func__, handle, zspage->first_page->index);
+			pr_err("%s:zspage info, fullness %u class %u isolated %u"
+			    " magic %u inuse %u freeobj %u\n", __func__,
+			    zspage->fullness, zspage->class, zspage->isolated,
+			    zspage->magic, zspage->inuse, zspage->freeobj);
+			BUG_ON(1);
+		}
+	} else {
+		f_offset = (class->size * f_objidx) & ~PAGE_MASK;
+		vaddr = kmap_atomic(f_page);
+		link = (struct link_free *)(vaddr + f_offset);
+		org_handle = link->next;
+		kunmap_atomic(vaddr);
+		if (org_handle != handle) {
+			pr_err("%s:invalid handle, user handle 0x%lx, actual handle 0x%lx\n",
+			    __func__, handle, org_handle);
+			pr_err("%s:zspage info, fullness %u class %u isolated %u"
+			    " magic %u inuse %u freeobj %u\n", __func__,
+			    zspage->fullness, zspage->class, zspage->isolated,
+			    zspage->magic, zspage->inuse, zspage->freeobj);
+			BUG_ON(1);
+		}
+	}
+}
+
+static void zs_check_valid_objidx(struct size_class *class, unsigned int objidx,
+			struct zspage *zspage)
+{
+	/* this is last obj alloc or free */
+	if (objidx == 0xFFFFFFFF || objidx == 0x7FFFFFFF)
+		return;
+
+	if (objidx > (unsigned int)class->objs_per_zspage) {
+		pr_err("%s:invalid objidx %u to handle, max objidx is %d\n",
+			__func__, objidx, class->objs_per_zspage);
+		pr_err("%s:zspage info, fullness %u class %u isolated %u"
+			" magic %u inuse %u freeobj %u\n", __func__,
+			zspage->fullness, zspage->class, zspage->isolated,
+			zspage->magic, zspage->inuse, zspage->freeobj);
+		BUG_ON(1);
+	}
+}
+#endif
+
 static unsigned long obj_malloc(struct size_class *class,
 				struct zspage *zspage, unsigned long handle)
 {
@@ -1470,6 +1616,9 @@ static unsigned long obj_malloc(struct size_class *class,
 
 	vaddr = kmap_atomic(m_page);
 	link = (struct link_free *)vaddr + m_offset / sizeof(*link);
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+	zs_check_valid_objidx(class, link->next >> OBJ_TAG_BITS, zspage);
+#endif
 	set_freeobj(zspage, link->next >> OBJ_TAG_BITS);
 	if (likely(!PageHugeObject(m_page)))
 		/* record handle in the header of allocated chunk */
@@ -1505,9 +1654,24 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 	enum fullness_group newfg;
 	struct zspage *zspage;
 
+#ifdef CONFIG_ZS_MALLOC_EXT
+	struct size_class_ext ext;
+
+	if (pool->ext_flag) {
+		ext.priv = (void *)(uintptr_t)size;
+		size = pool->size_parse(ext.priv);
+	}
+#endif
+
 	if (unlikely(!size || size > ZS_MAX_ALLOC_SIZE))
 		return 0;
 
+#ifdef CONFIG_HISI_MEM_OFFLINE
+	if (mem_offline_enable_status()) {
+		gfp &= ~__GFP_HIGHMEM;
+		gfp |= __GFP_DMA;
+	}
+#endif
 	handle = cache_alloc_handle(pool, gfp);
 	if (!handle)
 		return 0;
@@ -1530,7 +1694,16 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 
 	spin_unlock(&class->lock);
 
+#ifdef CONFIG_ZS_MALLOC_EXT
+	if (pool->ext_flag) {
+		ext.class = class;
+		zspage = alloc_zspage(pool, (struct size_class *)&ext, gfp);
+	} else {
+		zspage = alloc_zspage(pool, class, gfp);
+	}
+#else
 	zspage = alloc_zspage(pool, class, gfp);
+#endif
 	if (!zspage) {
 		cache_free_handle(pool, handle);
 		return 0;
@@ -1549,7 +1722,9 @@ unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp)
 	/* We completely set up zspage so mark them as movable */
 	SetZsPageMovable(pool, zspage);
 	spin_unlock(&class->lock);
-
+#if defined(CONFIG_ZSMALLOC_STAT) && defined(CONFIG_ZSMALLOC_HANDLE_CHECK)
+	atomic_long_inc(&zsmalloc_count);
+#endif
 	return handle;
 }
 EXPORT_SYMBOL_GPL(zs_malloc);
@@ -1572,6 +1747,9 @@ static void obj_free(struct size_class *class, unsigned long obj)
 
 	/* Insert this object in containing zspage's freelist */
 	link = (struct link_free *)(vaddr + f_offset);
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+	zs_check_valid_objidx(class, f_objidx, zspage);
+#endif
 	link->next = get_freeobj(zspage) << OBJ_TAG_BITS;
 	kunmap_atomic(vaddr);
 	set_freeobj(zspage, f_objidx);
@@ -1602,7 +1780,9 @@ void zs_free(struct zs_pool *pool, unsigned long handle)
 
 	get_zspage_mapping(zspage, &class_idx, &fullness);
 	class = pool->size_class[class_idx];
-
+#ifdef CONFIG_ZSMALLOC_HANDLE_CHECK
+	zs_check_valid_handle(class, handle);
+#endif
 	spin_lock(&class->lock);
 	obj_free(class, obj);
 	fullness = fix_fullness_group(class, zspage);
@@ -1780,7 +1960,10 @@ static int migrate_zspage(struct zs_pool *pool, struct size_class *class,
 	/* Remember last position in this iteration */
 	cc->s_page = s_page;
 	cc->obj_idx = obj_idx;
-
+#if defined(CONFIG_ZSMALLOC_STAT) && defined(CONFIG_ZSMALLOC_HANDLE_CHECK)
+	if (!ret)
+		atomic_long_inc(&compact_zspage_count);
+#endif
 	return ret;
 }
 
@@ -1898,6 +2081,31 @@ static void dec_zspage_isolation(struct zspage *zspage)
 	zspage->isolated--;
 }
 
+static void putback_zspage_deferred(struct zs_pool *pool,
+				    struct size_class *class,
+				    struct zspage *zspage)
+{
+	enum fullness_group fg;
+
+	fg = putback_zspage(class, zspage);
+	if (fg == ZS_EMPTY)
+		schedule_work(&pool->free_work);
+
+}
+
+static inline void zs_pool_dec_isolated(struct zs_pool *pool)
+{
+	VM_BUG_ON(atomic_long_read(&pool->isolated_pages) <= 0);
+	atomic_long_dec(&pool->isolated_pages);
+	/*
+	 * There's no possibility of racing, since wait_for_isolated_drain()
+	 * checks the isolated count under &class->lock after enqueuing
+	 * on migration_wait.
+	 */
+	if (atomic_long_read(&pool->isolated_pages) == 0 && pool->destroying)
+		wake_up_all(&pool->migration_wait);
+}
+
 static void replace_sub_page(struct size_class *class, struct zspage *zspage,
 				struct page *newpage, struct page *oldpage)
 {
@@ -1929,6 +2137,12 @@ bool zs_page_isolate(struct page *page, isolate_mode_t mode)
 	enum fullness_group fullness;
 	struct zspage *zspage;
 	struct address_space *mapping;
+
+#ifndef CONFIG_HISI_MEM_OFFLINE
+#ifndef CONFIG_ZS_COMPACTION
+	return false;
+#endif
+#endif
 
 	/*
 	 * Page is locked so zspage couldn't be destroyed. For detail, look at
@@ -1967,6 +2181,7 @@ bool zs_page_isolate(struct page *page, isolate_mode_t mode)
 	 */
 	if (!list_empty(&zspage->list) && !is_zspage_isolated(zspage)) {
 		get_zspage_mapping(zspage, &class_idx, &fullness);
+		atomic_long_inc(&pool->isolated_pages);
 		remove_zspage(class, zspage, fullness);
 	}
 
@@ -2066,14 +2281,30 @@ int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	 * Page migration is done so let's putback isolated zspage to
 	 * the list if @page is final isolated subpage in the zspage.
 	 */
-	if (!is_zspage_isolated(zspage))
-		putback_zspage(class, zspage);
+	if (!is_zspage_isolated(zspage)) {
+		/*
+		 * We cannot race with zs_destroy_pool() here because we wait
+		 * for isolation to hit zero before we start destroying.
+		 * Also, we ensure that everyone can see pool->destroying before
+		 * we start waiting.
+		 */
+		putback_zspage_deferred(pool, class, zspage);
+		zs_pool_dec_isolated(pool);
+	}
+
+	if (page_zone(newpage) != page_zone(page)) {
+		dec_zone_page_state(page, NR_ZSPAGES);
+		inc_zone_page_state(newpage, NR_ZSPAGES);
+	}
 
 	reset_page(page);
 	put_page(page);
 	page = newpage;
 
 	ret = MIGRATEPAGE_SUCCESS;
+#if defined(CONFIG_ZSMALLOC_STAT) && defined(CONFIG_ZSMALLOC_HANDLE_CHECK)
+	atomic_long_inc(&migrate_zspage_count);
+#endif
 unpin_objects:
 	for (addr = s_addr + offset; addr < s_addr + pos;
 						addr += class->size) {
@@ -2113,13 +2344,12 @@ void zs_page_putback(struct page *page)
 	spin_lock(&class->lock);
 	dec_zspage_isolation(zspage);
 	if (!is_zspage_isolated(zspage)) {
-		fg = putback_zspage(class, zspage);
 		/*
 		 * Due to page_lock, we cannot free zspage immediately
 		 * so let's defer.
 		 */
-		if (fg == ZS_EMPTY)
-			schedule_work(&pool->free_work);
+		putback_zspage_deferred(pool, class, zspage);
+		zs_pool_dec_isolated(pool);
 	}
 	spin_unlock(&class->lock);
 }
@@ -2143,8 +2373,36 @@ static int zs_register_migration(struct zs_pool *pool)
 	return 0;
 }
 
+static bool pool_isolated_are_drained(struct zs_pool *pool)
+{
+	return atomic_long_read(&pool->isolated_pages) == 0;
+}
+
+/* Function for resolving migration */
+static void wait_for_isolated_drain(struct zs_pool *pool)
+{
+
+	/*
+	 * We're in the process of destroying the pool, so there are no
+	 * active allocations. zs_page_isolate() fails for completely free
+	 * zspages, so we need only wait for the zs_pool's isolated
+	 * count to hit zero.
+	 */
+	wait_event(pool->migration_wait,
+		   pool_isolated_are_drained(pool));
+}
+
 static void zs_unregister_migration(struct zs_pool *pool)
 {
+	pool->destroying = true;
+	/*
+	 * We need a memory barrier here to ensure global visibility of
+	 * pool->destroying. Thus pool->isolated pages will either be 0 in which
+	 * case we don't care, or it will be > 0 and pool->destroying will
+	 * ensure that we wake up once isolation hits 0.
+	 */
+	smp_mb();
+	wait_for_isolated_drain(pool); /* This can block */
 	flush_work(&pool->free_work);
 	iput(pool->inode);
 }
@@ -2385,6 +2643,10 @@ struct zs_pool *zs_create_pool(const char *name)
 	if (!pool->name)
 		goto err;
 
+#ifdef CONFIG_COMPACTION
+	init_waitqueue_head(&pool->migration_wait);
+#endif
+
 	if (create_cache(pool))
 		goto err;
 
@@ -2511,6 +2773,26 @@ void zs_destroy_pool(struct zs_pool *pool)
 	kfree(pool);
 }
 EXPORT_SYMBOL_GPL(zs_destroy_pool);
+
+#ifdef CONFIG_ZS_MALLOC_EXT
+bool is_ext_pool(struct zs_pool *pool)
+{
+	return pool->ext_flag;
+}
+void zs_pool_enable_ext(struct zs_pool *pool, bool enable,
+					ext_size_parse_fn *parse_fn)
+{
+	pool->ext_flag = enable ? 1 : 0;
+	pool->size_parse = enable ? parse_fn : NULL;
+}
+
+void zs_pool_ext_malloc_register(struct zs_pool *pool,
+						ext_zsmalloc_fn *fn)
+{
+	pool->ext_zsmalloc = fn;
+}
+#endif
+
 
 static int __init zs_init(void)
 {

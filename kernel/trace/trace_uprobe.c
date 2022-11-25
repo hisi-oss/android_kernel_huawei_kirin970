@@ -17,7 +17,7 @@
  * Copyright (C) IBM Corporation, 2010-2012
  * Author:	Srikar Dronamraju <srikar@linux.vnet.ibm.com>
  */
-#define pr_fmt(fmt)	"trace_uprobe: " fmt
+#define pr_fmt(fmt)	"trace_kprobe: " fmt
 
 #include <linux/module.h>
 #include <linux/uaccess.h>
@@ -611,7 +611,7 @@ static int probes_seq_show(struct seq_file *m, void *v)
 
 	/* Don't print "0x  (null)" when offset is 0 */
 	if (tu->offset) {
-		seq_printf(m, "0x%px", (void *)tu->offset);
+		seq_printf(m, "0x%p", (void *)tu->offset);
 	} else {
 		switch (sizeof(void *)) {
 		case 4:

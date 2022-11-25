@@ -7,6 +7,11 @@
  */
 
 #include "fat.h"
+#include <linux/blk_types.h>
+
+#ifdef CONFIG_HUAWEI_SDCARD_DSM
+#include <linux/mmc/dsm_sdcard.h>
+#endif
 
 /*
  * fat_fs_error reports a file system problem that might indicate fa data
@@ -35,6 +40,9 @@ void __fat_fs_error(struct super_block *sb, int report, const char *fmt, ...)
 	else if (opts->errors == FAT_ERRORS_RO && !sb_rdonly(sb)) {
 		sb->s_flags |= MS_RDONLY;
 		fat_msg(sb, KERN_ERR, "Filesystem has been set read-only");
+#ifdef CONFIG_HUAWEI_SDCARD_DSM
+		dsm_sdcard_report(DSM_SDCARD_STATUS_FILESYSTEM_ERR, DSM_SDCARD_FILESYSTEM_ERR);
+#endif
 	}
 }
 EXPORT_SYMBOL_GPL(__fat_fs_error);
@@ -81,10 +89,12 @@ int fat_clusters_flush(struct super_block *sb)
 		       le32_to_cpu(fsinfo->signature2),
 		       sbi->fsinfo_sector);
 	} else {
+		/*lint -e650*/
 		if (sbi->free_clusters != -1)
 			fsinfo->free_clusters = cpu_to_le32(sbi->free_clusters);
 		if (sbi->prev_free != -1)
 			fsinfo->next_cluster = cpu_to_le32(sbi->prev_free);
+		/*lint +e650*/
 		mark_buffer_dirty(bh);
 	}
 	brelse(bh);
@@ -155,7 +165,9 @@ int fat_chain_add(struct inode *inode, int new_dclus, int nr_cluster)
 			     (llu)(inode->i_blocks >> (sbi->cluster_bits - 9)));
 		fat_cache_inval_inode(inode);
 	}
-	inode->i_blocks += nr_cluster << (sbi->cluster_bits - 9);
+	/*lint -e647*/
+	inode->i_blocks += (unsigned int)nr_cluster << (sbi->cluster_bits - 9);
+	/*lint +e647*/
 
 	return 0;
 }
@@ -209,10 +221,12 @@ void fat_time_fat2unix(struct msdos_sb_info *sbi, struct timespec *ts,
 		   + days_in_year[month] + day
 		   + DAYS_DELTA) * SECS_PER_DAY;
 
+	/*lint -e647*/
 	if (!sbi->options.tz_set)
 		second += sys_tz.tz_minuteswest * SECS_PER_MIN;
 	else
 		second -= sbi->options.time_offset * SECS_PER_MIN;
+	/*lint +e647*/
 
 	if (time_cs) {
 		ts->tv_sec = second + (time_cs / 100);
@@ -267,7 +281,7 @@ int fat_sync_bhs(struct buffer_head **bhs, int nr_bhs)
 	int i, err = 0;
 
 	for (i = 0; i < nr_bhs; i++)
-		write_dirty_buffer(bhs[i], 0);
+		write_dirty_buffer(bhs[i], REQ_SYNC);
 
 	for (i = 0; i < nr_bhs; i++) {
 		wait_on_buffer(bhs[i]);

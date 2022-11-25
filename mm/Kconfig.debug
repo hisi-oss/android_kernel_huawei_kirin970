@@ -94,3 +94,11 @@ config DEBUG_RODATA_TEST
     depends on STRICT_KERNEL_RWX
     ---help---
       This option enables a testcase for the setting rodata read-only.
+config DEBUG_HKIP_EARLY_RODATA_PROTECTION
+	bool "Enable testing of the early protection of const data"
+	default n
+	---help---
+	  This feature will attempt to modify a const value, in a way that would
+	  succeed, if it was not for the HKIP protection.
+	  To confirm this, also a control variable (unprotected) is
+	  modified, to prove that the protection works.

@@ -836,8 +836,7 @@ void __init initialize_ivt(const void *iva)
 	if (pdc_instr(&instr) == PDC_OK)
 		ivap[0] = instr;
 
-	/* Setup IVA and compute checksum for HPMC handler */
-	ivap[6] = (u32)__pa(os_hpmc);
+	/* Compute Checksum for HPMC handler */
 	length = os_hpmc_size;
 	ivap[7] = length;
 

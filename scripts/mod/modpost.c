@@ -1222,13 +1222,11 @@ static int secref_whitelist(const struct sectioncheck *mismatch,
 	    match(tosec, init_sections) &&
 	    match(fromsym, optim_symbols))
 		return 0;
-
 	/* Check for pattern 6 */
 	if (match(fromsec, text_sections) &&
 	    match(tosec, init_exit_sections) &&
 	    match(tosym, cfi_symbols))
 		return 0;
-
 	return 1;
 }
 
@@ -2187,7 +2185,7 @@ static void add_intree_flag(struct buffer *b, int is_intree)
 /* Cannot check for assembler */
 static void add_retpoline(struct buffer *b)
 {
-	buf_printf(b, "\n#ifdef CONFIG_RETPOLINE\n");
+	buf_printf(b, "\n#ifdef RETPOLINE\n");
 	buf_printf(b, "MODULE_INFO(retpoline, \"Y\");\n");
 	buf_printf(b, "#endif\n");
 }

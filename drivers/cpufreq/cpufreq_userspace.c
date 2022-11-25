@@ -22,6 +22,22 @@
 static DEFINE_PER_CPU(unsigned int, cpu_is_managed);
 static DEFINE_MUTEX(userspace_mutex);
 
+#ifdef CONFIG_HISI_CPUFREQ
+unsigned int cpufreq_userspace_gov_started(unsigned int cpu)
+{
+	struct cpufreq_policy *policy = NULL;
+
+	if (cpu >= nr_cpu_ids)
+		return 0;
+
+	policy = cpufreq_cpu_get_raw(cpu);
+	if (!policy)
+		return 0;
+
+	return per_cpu(cpu_is_managed, policy->cpu);
+}
+#endif
+
 /**
  * cpufreq_set - set the CPU frequency
  * @policy: pointer to policy struct where freq is being set

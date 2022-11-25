@@ -78,8 +78,7 @@ static inline void  PRINTF(3, 4) check_msg(struct check *c, struct dt_info *dti,
 	va_list ap;
 	va_start(ap, fmt);
 
-	if ((c->warn && (quiet < 1))
-	    || (c->error && (quiet < 2))) {
+	if (c->error && (quiet < 2)) {
 		fprintf(stderr, "%s: %s (%s): ",
 			strcmp(dti->outname, "-") ? dti->outname : "<stdout>",
 			(c->error) ? "ERROR" : "Warning", c->name);

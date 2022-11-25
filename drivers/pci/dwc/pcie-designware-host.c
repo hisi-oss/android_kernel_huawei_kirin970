@@ -18,6 +18,7 @@
 #include <linux/platform_device.h>
 
 #include "pcie-designware.h"
+#include "pcie-kport-idle.h"
 
 static struct pci_ops dw_pcie_ops;
 
@@ -45,19 +46,8 @@ static int dw_pcie_wr_own_conf(struct pcie_port *pp, int where, int size,
 	return dw_pcie_write(pci->dbi_base + where, size, val);
 }
 
-static void dwc_irq_ack(struct irq_data *d)
-{
-	struct msi_desc *msi = irq_data_get_msi_desc(d);
-	struct pcie_port *pp = msi_desc_to_pci_sysdata(msi);
-	int pos = d->hwirq % 32;
-	int i = d->hwirq / 32;
-
-	dw_pcie_wr_own_conf(pp, PCIE_MSI_INTR0_STATUS + i * 12, 4, BIT(pos));
-}
-
 static struct irq_chip dw_msi_irq_chip = {
 	.name = "PCI-MSI",
-	.irq_ack = dwc_irq_ack,
 	.irq_enable = pci_msi_unmask_irq,
 	.irq_disable = pci_msi_mask_irq,
 	.irq_mask = pci_msi_mask_irq,
@@ -68,6 +58,7 @@ static struct irq_chip dw_msi_irq_chip = {
 irqreturn_t dw_handle_msi_irq(struct pcie_port *pp)
 {
 	u32 val;
+	unsigned long msi_status;
 	int i, pos, irq;
 	irqreturn_t ret = IRQ_NONE;
 
@@ -79,9 +70,11 @@ irqreturn_t dw_handle_msi_irq(struct pcie_port *pp)
 
 		ret = IRQ_HANDLED;
 		pos = 0;
-		while ((pos = find_next_bit((unsigned long *) &val, 32,
-					    pos)) != 32) {
+		msi_status = val;
+		while ((pos = find_next_bit(&msi_status, 32, pos)) != 32) {
 			irq = irq_find_mapping(pp->irq_domain, i * 32 + pos);
+			dw_pcie_wr_own_conf(pp, PCIE_MSI_INTR0_STATUS + i * 12,
+					    4, 1 << pos);
 			generic_handle_irq(irq);
 			pos++;
 		}
@@ -272,7 +265,7 @@ static struct msi_controller dw_pcie_msi_chip = {
 static int dw_pcie_msi_map(struct irq_domain *domain, unsigned int irq,
 			   irq_hw_number_t hwirq)
 {
-	irq_set_chip_and_handler(irq, &dw_msi_irq_chip, handle_edge_irq);
+	irq_set_chip_and_handler(irq, &dw_msi_irq_chip, handle_simple_irq);
 	irq_set_chip_data(irq, domain->host_data);
 
 	return 0;
@@ -281,6 +274,27 @@ static int dw_pcie_msi_map(struct irq_domain *domain, unsigned int irq,
 static const struct irq_domain_ops msi_domain_ops = {
 	.map = dw_pcie_msi_map,
 };
+
+#ifdef CONFIG_PCIE_KPORT
+int plat_pcie_host_init(struct pcie_port *pp, struct device *dev,
+			struct list_head *resources)
+{
+	struct resource_entry *win = NULL;
+	int ret = 0;
+
+	if (pp->ops->host_init)
+		ret = pp->ops->host_init(pp);
+
+	if (ret){
+		resource_list_for_each_entry(win, resources) {
+			if (resource_type(win->res) == IORESOURCE_MEM)
+				devm_release_resource(dev, win->res);
+		}
+	}
+
+	return ret;
+}
+#endif
 
 int dw_pcie_host_init(struct pcie_port *pp)
 {
@@ -410,11 +424,17 @@ int dw_pcie_host_init(struct pcie_port *pp)
 		}
 	}
 
+#ifdef CONFIG_PCIE_KPORT
+	ret = plat_pcie_host_init(pp, &pdev->dev, &bridge->windows);
+	if (ret)
+		goto error;
+#else
 	if (pp->ops->host_init) {
 		ret = pp->ops->host_init(pp);
 		if (ret)
 			goto error;
 	}
+#endif
 
 	pp->root_bus_nr = pp->busn->start;
 
@@ -479,6 +499,7 @@ static int dw_pcie_rd_other_conf(struct pcie_port *pp, struct pci_bus *bus,
 		va_cfg_base = pp->va_cfg1_base;
 	}
 
+	pcie_refclk_host_vote(pp, 1);
 	dw_pcie_prog_outbound_atu(pci, PCIE_ATU_REGION_INDEX1,
 				  type, cpu_addr,
 				  busdev, cfg_size);
@@ -487,6 +508,7 @@ static int dw_pcie_rd_other_conf(struct pcie_port *pp, struct pci_bus *bus,
 		dw_pcie_prog_outbound_atu(pci, PCIE_ATU_REGION_INDEX1,
 					  PCIE_ATU_TYPE_IO, pp->io_base,
 					  pp->io_bus_addr, pp->io_size);
+	pcie_refclk_host_vote(pp, 0);
 
 	return ret;
 }
@@ -518,6 +540,7 @@ static int dw_pcie_wr_other_conf(struct pcie_port *pp, struct pci_bus *bus,
 		va_cfg_base = pp->va_cfg1_base;
 	}
 
+	pcie_refclk_host_vote(pp, 1);
 	dw_pcie_prog_outbound_atu(pci, PCIE_ATU_REGION_INDEX1,
 				  type, cpu_addr,
 				  busdev, cfg_size);
@@ -526,6 +549,7 @@ static int dw_pcie_wr_other_conf(struct pcie_port *pp, struct pci_bus *bus,
 		dw_pcie_prog_outbound_atu(pci, PCIE_ATU_REGION_INDEX1,
 					  PCIE_ATU_TYPE_IO, pp->io_base,
 					  pp->io_bus_addr, pp->io_size);
+	pcie_refclk_host_vote(pp, 0);
 
 	return ret;
 }

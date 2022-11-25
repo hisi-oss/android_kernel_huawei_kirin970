@@ -17,15 +17,6 @@
 #define mmc_card_id(c)		(dev_name(&(c)->dev))
 #define mmc_dev_to_card(d)	container_of(d, struct mmc_card, dev)
 
-/* Card states */
-#define MMC_STATE_PRESENT	(1<<0)		/* present in sysfs */
-#define MMC_STATE_READONLY	(1<<1)		/* card is read-only */
-#define MMC_STATE_BLOCKADDR	(1<<2)		/* card uses block-addressing */
-#define MMC_CARD_SDXC		(1<<3)		/* card is SDXC */
-#define MMC_CARD_REMOVED	(1<<4)		/* card has been removed */
-#define MMC_STATE_DOING_BKOPS	(1<<5)		/* card is doing BKOPS */
-#define MMC_STATE_SUSPENDED	(1<<6)		/* card is suspended */
-
 #define mmc_card_present(c)	((c)->state & MMC_STATE_PRESENT)
 #define mmc_card_readonly(c)	((c)->state & MMC_STATE_READONLY)
 #define mmc_card_blockaddr(c)	((c)->state & MMC_STATE_BLOCKADDR)
@@ -43,6 +34,26 @@
 #define mmc_card_clr_doing_bkops(c)	((c)->state &= ~MMC_STATE_DOING_BKOPS)
 #define mmc_card_set_suspended(c) ((c)->state |= MMC_STATE_SUSPENDED)
 #define mmc_card_clr_suspended(c) ((c)->state &= ~MMC_STATE_SUSPENDED)
+
+#ifdef CONFIG_MMC_PASSWORDS	
+#define mmc_card_locked(c)		((c)->state & MMC_STATE_LOCKED)
+#define mmc_card_encrypt(c)		((c)->state & MMC_STATE_ENCRYPT)
+#define mmc_card_set_locked(c)		((c)->state |= MMC_STATE_LOCKED)
+#define mmc_card_set_encrypted(c)	((c)->state |= MMC_STATE_ENCRYPT)
+#define mmc_card_clr_locked(c)		((c)->state &= ~MMC_STATE_LOCKED)
+#define mmc_card_clr_encrypted(c)	((c)->state &= ~MMC_STATE_ENCRYPT)
+#endif
+
+#define mmc_sd_card_uhs(c)		((c)->state & MMC_STATE_ULTRAHIGHSPEED)
+#define mmc_sd_card_set_uhs(c)		((c)->state |= MMC_STATE_ULTRAHIGHSPEED)
+
+#define mmc_card_set_highspeed(c)	((c)->state |= MMC_STATE_HIGHSPEED)
+
+#define mmc_card_set_cmdq(c)		((c)->state |= MMC_STATE_CMDQ)
+#define mmc_card_clr_cmdq(c)		((c)->state &= ~MMC_STATE_CMDQ)
+
+#define mmc_card_removable_mmc(c)  (mmc_card_mmc((c)) && mmc_card_is_removable((c)->host))
+#define mmc_card_support_deferred_resume(c) (mmc_card_sd((c)) || mmc_card_removable_mmc((c)))
 
 /*
  * The world is not perfect and supplies us with broken mmc/sdio devices.
@@ -64,7 +75,7 @@ struct mmc_fixup {
 	/* for MMC cards */
 	unsigned int ext_csd_rev;
 
-	void (*vendor_fixup)(struct mmc_card *card, int data);
+	void (*vendor_fixup)(struct mmc_card *card, unsigned int data);
 	int data;
 };
 
@@ -75,6 +86,7 @@ struct mmc_fixup {
 #define EXT_CSD_REV_ANY (-1u)
 
 #define CID_MANFID_SANDISK      0x2
+#define CID_MANFID_SANDISK_V2	0x45
 #define CID_MANFID_ATP          0x9
 #define CID_MANFID_TOSHIBA      0x11
 #define CID_MANFID_MICRON       0x13
@@ -139,12 +151,12 @@ struct mmc_fixup {
 /*
  * Unconditionally quirk add/remove.
  */
-static inline void __maybe_unused add_quirk(struct mmc_card *card, int data)
+static inline void __maybe_unused add_quirk(struct mmc_card *card, unsigned int data)
 {
 	card->quirks |= data;
 }
 
-static inline void __maybe_unused remove_quirk(struct mmc_card *card, int data)
+static inline void __maybe_unused remove_quirk(struct mmc_card *card, unsigned int data)
 {
 	card->quirks &= ~data;
 }
@@ -152,14 +164,14 @@ static inline void __maybe_unused remove_quirk(struct mmc_card *card, int data)
 /*
  * Quirk add/remove for MMC products.
  */
-static inline void __maybe_unused add_quirk_mmc(struct mmc_card *card, int data)
+static inline void __maybe_unused add_quirk_mmc(struct mmc_card *card, unsigned int data)
 {
 	if (mmc_card_mmc(card))
 		card->quirks |= data;
 }
 
 static inline void __maybe_unused remove_quirk_mmc(struct mmc_card *card,
-						   int data)
+						   unsigned int data)
 {
 	if (mmc_card_mmc(card))
 		card->quirks &= ~data;
@@ -168,14 +180,14 @@ static inline void __maybe_unused remove_quirk_mmc(struct mmc_card *card,
 /*
  * Quirk add/remove for SD products.
  */
-static inline void __maybe_unused add_quirk_sd(struct mmc_card *card, int data)
+static inline void __maybe_unused add_quirk_sd(struct mmc_card *card, unsigned int data)
 {
 	if (mmc_card_sd(card))
 		card->quirks |= data;
 }
 
 static inline void __maybe_unused remove_quirk_sd(struct mmc_card *card,
-						   int data)
+						  unsigned int data)
 {
 	if (mmc_card_sd(card))
 		card->quirks &= ~data;

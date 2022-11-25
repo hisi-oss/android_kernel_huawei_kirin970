@@ -138,10 +138,13 @@ static bool blk_flush_queue_rq(struct request *rq, bool add_front)
 		blk_mq_add_to_requeue_list(rq, add_front, true);
 		return false;
 	} else {
-		if (add_front)
+		if (add_front) {
 			list_add(&rq->queuelist, &rq->q->queue_head);
-		else
+			queue_throtl_add_request(rq->q, rq, true);
+		} else {
 			list_add_tail(&rq->queuelist, &rq->q->queue_head);
+			queue_throtl_add_request(rq->q, rq, false);
+		}
 		return true;
 	}
 }
@@ -181,6 +184,12 @@ static bool blk_flush_complete_seq(struct request *rq,
 	switch (seq) {
 	case REQ_FSEQ_PREFLUSH:
 	case REQ_FSEQ_POSTFLUSH:
+#ifdef CONFIG_MAS_BLK
+		if (seq == REQ_FSEQ_PREFLUSH)
+			mas_blk_latency_req_check(rq, REQ_PROC_STAGE_FSEQ_PREFLUSH);
+		else
+			mas_blk_latency_req_check(rq, REQ_PROC_STAGE_FSEQ_POSTFLUSH);
+#endif
 		/* queue for flush */
 		if (list_empty(pending))
 			fq->flush_pending_since = jiffies;
@@ -188,11 +197,17 @@ static bool blk_flush_complete_seq(struct request *rq,
 		break;
 
 	case REQ_FSEQ_DATA:
+#ifdef CONFIG_MAS_BLK
+		mas_blk_latency_req_check(rq, REQ_PROC_STAGE_FSEQ_DATA);
+#endif
 		list_move_tail(&rq->flush.list, &fq->flush_data_in_flight);
 		queued = blk_flush_queue_rq(rq, true);
 		break;
 
 	case REQ_FSEQ_DONE:
+#ifdef CONFIG_MAS_BLK
+		mas_blk_latency_req_check(rq, REQ_PROC_STAGE_FSEQ_DONE);
+#endif
 		/*
 		 * @rq was previously adjusted by blk_flush_issue() for
 		 * flush sequencing and may already have gone through the
@@ -316,7 +331,9 @@ static bool blk_kick_flush(struct request_queue *q, struct blk_flush_queue *fq)
 	fq->flush_pending_idx ^= 1;
 
 	blk_rq_init(q, flush_rq);
-
+#ifdef CONFIG_MAS_BLK
+	mas_blk_latency_req_check(flush_rq, REQ_PROC_STAGE_INIT_FROM_BIO);
+#endif
 	/*
 	 * Borrow tag from the first request since they can't
 	 * be in flight at the same time. And acquire the tag's
@@ -326,6 +343,9 @@ static bool blk_kick_flush(struct request_queue *q, struct blk_flush_queue *fq)
 		struct blk_mq_hw_ctx *hctx;
 
 		flush_rq->mq_ctx = first_rq->mq_ctx;
+#ifdef CONFIG_MAS_BLK
+		flush_rq->mas_req.mq_ctx_generate = first_rq->mq_ctx;
+#endif
 		flush_rq->tag = first_rq->tag;
 		fq->orig_rq = first_rq;
 
@@ -337,6 +357,9 @@ static bool blk_kick_flush(struct request_queue *q, struct blk_flush_queue *fq)
 	flush_rq->rq_flags |= RQF_FLUSH_SEQ;
 	flush_rq->rq_disk = first_rq->rq_disk;
 	flush_rq->end_io = flush_end_io;
+#ifdef CONFIG_MAS_BLK
+	flush_rq->cmd_flags |= REQ_SYNC;
+#endif
 
 	return blk_flush_queue_rq(flush_rq, false);
 }
@@ -402,7 +425,7 @@ static void mq_flush_data_end_io(struct request *rq, blk_status_t error)
 	blk_flush_complete_seq(rq, fq, REQ_FSEQ_DATA, error);
 	spin_unlock_irqrestore(&fq->mq_flush_lock, flags);
 
-	blk_mq_sched_restart(hctx);
+	blk_mq_run_hw_queue(hctx, true);
 }
 
 /**
@@ -464,8 +487,10 @@ void blk_insert_flush(struct request *rq)
 	    !(policy & (REQ_FSEQ_PREFLUSH | REQ_FSEQ_POSTFLUSH))) {
 		if (q->mq_ops)
 			blk_mq_sched_insert_request(rq, false, true, false, false);
-		else
+		else {
 			list_add_tail(&rq->queuelist, &q->queue_head);
+			queue_throtl_add_request(q, rq, false);
+		}
 		return;
 	}
 

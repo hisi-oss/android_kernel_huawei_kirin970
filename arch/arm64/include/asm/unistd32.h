@@ -817,7 +817,9 @@ __SYSCALL(__NR_pkey_alloc, sys_pkey_alloc)
 __SYSCALL(__NR_pkey_free, sys_pkey_free)
 #define __NR_statx 397
 __SYSCALL(__NR_statx, sys_statx)
-
+/* add for hrdelay */
+#define __NR_delay 400
+__SYSCALL(__NR_delay, compat_sys_delay)
 /*
  * Please add new compat syscalls above this comment and update
  * __NR_compat_syscalls in asm/unistd.h.

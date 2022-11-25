@@ -14,8 +14,22 @@ obj-$(CONFIG_PCI_LAYERSCAPE) += pci-layerscape.o
 obj-$(CONFIG_PCIE_QCOM) += pcie-qcom.o
 obj-$(CONFIG_PCIE_ARMADA_8K) += pcie-armada8k.o
 obj-$(CONFIG_PCIE_ARTPEC6) += pcie-artpec6.o
-obj-$(CONFIG_PCIE_KIRIN) += pcie-kirin.o
-
+obj-$(CONFIG_PCIE_KPORT) += pcie-kport.o
+obj-$(CONFIG_PCIE_KPORT_V1) += pcie-kport-v1.o
+obj-$(CONFIG_PCIE_KPORT) += pcie-kport-common.o
+obj-$(CONFIG_PCIE_KPORT_PHY_XW) += pcie-kport-phy-xw.o
+obj-$(CONFIG_PCIE_KPORT_PHY) += pcie-kport-phy.o
+obj-$(CONFIG_PCIE_KPORT_MNTN) += pcie-mntn.o
+obj-$(CONFIG_PCIE_KPORT_TEST) += pcie-kport-test.o
+obj-$(CONFIG_PCIE_KPORT_SLT) += pcie-slt.o
+obj-$(CONFIG_PCIE_KPORT_FEB) += pcie-feb.o
+obj-$(CONFIG_PCIE_KPORT_MAR) += pcie-mar.o
+obj-$(CONFIG_PCIE_KPORT_APR) += pcie-apr.o
+obj-$(CONFIG_PCIE_KPORT_MAY) += pcie-may.o
+obj-$(CONFIG_PCIE_KPORT_SEP) += pcie-sep.o
+obj-$(CONFIG_PCIE_KPORT_BURB) += pcie-burb.o
+obj-$(CONFIG_PCIE_KPORT_JUN) += pcie-jun.o
+obj-$(CONFIG_PCIE_KPORT_IDLE) += pcie-kport-idle.o
 # The following drivers are for devices that use the generic ACPI
 # pci_root.c driver but don't support standard ECAM config access.
 # They contain MCFG quirks to replace the generic ECAM accessors with

@@ -32,7 +32,71 @@
 #include <linux/pm_runtime.h>
 
 #include "i2c-designware-core.h"
+#include <linux/arm-smccc.h>
 
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+#define ABRT_HS_ACKDET		6
+#endif
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+#define ABRT_HS_NORSTRT		8
+#endif
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+#define ABRT_USER_ABRT		16
+#endif
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+
+#define HISI_I2C_READ_REG               0xc5010000
+#define HISI_I2C_WRITE_REG              0xc5010001
+#define HISI_I2C_XFER_LOCK              0xc5010002
+#define HISI_I2C_XFER_UNLOCK            0xc5010003
+
+
+static u32 secure_dw_readl(u32 base_addr, u32 offset)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_smc(HISI_I2C_READ_REG, base_addr, offset, &res);
+	return (u32)res.a1;
+}
+
+static void secure_dw_writel(u32 base_addr, u32 offset, u32 b)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_smc(HISI_I2C_WRITE_REG, base_addr, offset, b, &res);
+}
+
+static char *abort_sources[] = {
+	[ABRT_7B_ADDR_NOACK] =
+		"slave address not acknowledged (7bit mode)",
+	[ABRT_10ADDR1_NOACK] =
+		"first address byte not acknowledged (10bit mode)",
+	[ABRT_10ADDR2_NOACK] =
+		"second address byte not acknowledged (10bit mode)",
+	[ABRT_TXDATA_NOACK] =
+		"data not acknowledged",
+	[ABRT_GCALL_NOACK] =
+		"no acknowledgement for a general call",
+	[ABRT_GCALL_READ] =
+		"read after general call",
+	[ABRT_HS_ACKDET] =
+	"the high-speed master code was achnowledged",
+	[ABRT_SBYTE_ACKDET] =
+		"start byte acknowledged",
+	[ABRT_HS_NORSTRT] =
+	"the restart is disabled and the user is trying to use the master to transfer data in high-speed mode",
+	[ABRT_SBYTE_NORSTRT] =
+		"trying to send start byte when restart is disabled",
+	[ABRT_10B_RD_NORSTRT] =
+		"trying to read when restart is disabled (10bit mode)",
+	[ABRT_MASTER_DIS] =
+		"trying to use disabled adapter",
+	[ARB_LOST] =
+	"lost arbitration",
+	[ABRT_USER_ABRT] =
+	"master has detected the transfer abort(IC_ENABLE(1))",
+};
+#else
 static char *abort_sources[] = {
 	[ABRT_7B_ADDR_NOACK] =
 		"slave address not acknowledged (7bit mode)",
@@ -63,34 +127,49 @@ static char *abort_sources[] = {
 	[ABRT_SLAVE_RD_INTX] =
 		"incorrect slave-transmitter mode configuration",
 };
+#endif
 
-u32 dw_readl(struct dw_i2c_dev *dev, int offset)
+u32 dw_readl(struct dw_i2c_dev *dev, u32 offset)
 {
 	u32 value;
 
-	if (dev->flags & ACCESS_16BIT)
-		value = readw_relaxed(dev->base + offset) |
-			(readw_relaxed(dev->base + offset + 2) << 16);
-	else
-		value = readl_relaxed(dev->base + offset);
-
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+	if (dev->secure_mode) {
+		value = secure_dw_readl(dev->reg_base, offset);
+	} else {
+#endif
+		if (dev->flags & ACCESS_16BIT)
+			value = readw_relaxed(dev->base + offset) |
+				(readw_relaxed(dev->base + offset + 2) << 16);
+		else
+			value = readl_relaxed(dev->base + offset);
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+	}
+#endif
 	if (dev->flags & ACCESS_SWAP)
 		return swab32(value);
 	else
 		return value;
 }
 
-void dw_writel(struct dw_i2c_dev *dev, u32 b, int offset)
+void dw_writel(struct dw_i2c_dev *dev, u32 b, u32 offset)
 {
 	if (dev->flags & ACCESS_SWAP)
 		b = swab32(b);
-
-	if (dev->flags & ACCESS_16BIT) {
-		writew_relaxed((u16)b, dev->base + offset);
-		writew_relaxed((u16)(b >> 16), dev->base + offset + 2);
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+	if (dev->secure_mode) {
+		secure_dw_writel(dev->reg_base, offset, b);
 	} else {
-		writel_relaxed(b, dev->base + offset);
+#endif
+		if (dev->flags & ACCESS_16BIT) {
+			writew_relaxed((u16)b, dev->base + offset);
+			writew_relaxed((u16)(b >> 16), dev->base + offset + 2);
+		} else {
+			writel_relaxed(b, dev->base + offset);
+		}
+#if defined CONFIG_HISI_I2C_DESIGNWARE
 	}
+#endif
 }
 
 u32 i2c_dw_scl_hcnt(u32 ic_clk, u32 tSYMBOL, u32 tf, int cond, int offset)
@@ -255,6 +334,7 @@ u32 i2c_dw_func(struct i2c_adapter *adap)
 
 	return dev->functionality;
 }
+EXPORT_SYMBOL_GPL(i2c_dw_func);
 
 void i2c_dw_disable(struct dw_i2c_dev *dev)
 {
@@ -276,6 +356,22 @@ u32 i2c_dw_read_comp_param(struct dw_i2c_dev *dev)
 	return dw_readl(dev, DW_IC_COMP_PARAM_1);
 }
 EXPORT_SYMBOL_GPL(i2c_dw_read_comp_param);
+void i2c_dw_enable(struct dw_i2c_dev *dev)
+{
+       /* Enable the adapter */
+	__i2c_dw_enable(dev, true);
+}
+EXPORT_SYMBOL_GPL(i2c_dw_enable);
+u32 i2c_dw_is_enabled(struct dw_i2c_dev *dev)
+{
+	return dw_readl(dev, DW_IC_ENABLE);
+}
+EXPORT_SYMBOL_GPL(i2c_dw_is_enabled);
+void i2c_dw_clear_int(struct dw_i2c_dev *dev)
+{
+	dw_readl(dev, DW_IC_CLR_INTR);
+}
+EXPORT_SYMBOL_GPL(i2c_dw_clear_int);
 
 MODULE_DESCRIPTION("Synopsys DesignWare I2C bus adapter core");
 MODULE_LICENSE("GPL");

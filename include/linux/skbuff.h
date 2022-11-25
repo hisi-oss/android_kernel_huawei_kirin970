@@ -509,6 +509,11 @@ struct skb_shared_info {
 	 * remains valid until skb destructor */
 	void *		destructor_arg;
 
+#ifdef CONFIG_HW_PACKET_TRACKER
+	unsigned long born_stamp;
+	__u32 proc_bitmask;
+#endif
+
 	/* must be last field, see pskb_expand_head() */
 	skb_frag_t	frags[MAX_SKB_FRAGS];
 };
@@ -570,6 +575,8 @@ enum {
 	SKB_GSO_ESP = 1 << 15,
 
 	SKB_GSO_UDP = 1 << 16,
+
+	SKB_GSO_UDP_L4 = 1 << 17,
 };
 
 #if BITS_PER_LONG > 32
@@ -663,26 +670,22 @@ struct sk_buff {
 			struct sk_buff		*prev;
 
 			union {
-				struct net_device	*dev;
-				/* Some protocols might use this space to store information,
-				 * while device pointer would be NULL.
-				 * UDP receive path is one user.
-				 */
-				unsigned long		dev_scratch;
+				ktime_t		tstamp;
+				u64		skb_mstamp;
 			};
 		};
-		struct rb_node		rbnode; /* used in netem, ip4 defrag, and tcp stack */
-		struct list_head	list;
+		struct rb_node	rbnode; /* used in netem & tcp stack */
 	};
+	struct sock		*sk;
 
 	union {
-		struct sock		*sk;
+		struct net_device	*dev;
+		/* Some protocols might use this space to store information,
+		 * while device pointer would be NULL.
+		 * UDP receive path is one user.
+		 */
+		unsigned long		dev_scratch;
 		int			ip_defrag_offset;
-	};
-
-	union {
-		ktime_t		tstamp;
-		u64		skb_mstamp;
 	};
 	/*
 	 * This is the control buffer. It is free to use for every
@@ -690,8 +693,19 @@ struct sk_buff {
 	 * want to keep them across layers you have to do a skb_clone()
 	 * first. This is owned by whoever has the skb queued ATM.
 	 */
+#ifdef CONFIG_MPTCP
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	char			cb[128] __aligned(8);
+#else
+	char			cb[80] __aligned(8);
+#endif
+#else
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	char			cb[96] __aligned(8);
+#else
 	char			cb[48] __aligned(8);
-
+#endif
+#endif
 	unsigned long		_skb_refdst;
 	void			(*destructor)(struct sk_buff *skb);
 #ifdef CONFIG_XFRM
@@ -980,6 +994,37 @@ static inline struct sk_buff *alloc_skb(unsigned int size,
 	return __alloc_skb(size, priority, 0, NUMA_NO_NODE);
 }
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+enum {
+	TCP_SEND_RCVQ_COUNT = 0,
+	TUN_ALLOC_SKB_COUNT,
+	TAP_ALLOC_SKB_COUNT,
+	PACKET_ALLOC_SKB_COUNT,
+	UNIX_DGRAM_SENDMSG_COUNT,
+	UNIX_STREAM_SENDMSG_COUNT,
+	UNIX_STREAM_SENDPAGE_COUNT,
+	BT_SKB_SEND_ALLOC_COUNT,
+	RAW_SENDM_HDRINC_COUNT,
+	MLD_NEWPACK_COUNT,
+	IGMP6_SEND_COUNT,
+	RAW6_SEND_HDRINC_COUNT,
+	TPACKET_SND_COUNT,
+	UDP_SENDMSG_1_COUNT,
+	UDP_SENDMSG_2_COUNT,
+	ICMP_PUSH_REPLY_COUNT,
+	IP_SEND_UNICAST_REPLY_COUNT,
+	UDPV6_SENDMSG_1_COUNT,
+	UDPV6_SENDMSG_2_COUNT,
+	ICMP6_SEND_COUNT,
+	L2TP_IP6_SENDMSG_COUNT,
+	ICMPV6_ECHO_REPLAY_COUNT,
+	MAX_ALLOC_SKB_WITH_FRAGS_COUNT,
+};
+void alloc_skb_with_frags_stats_init(void);
+void alloc_skb_with_frags_stats_inc(int type);
+void alloc_skb_with_frags_stats_show(void);
+#endif
+
 struct sk_buff *alloc_skb_with_frags(unsigned long header_len,
 				     unsigned long data_len,
 				     int max_page_order,
@@ -1044,6 +1089,12 @@ int __must_check skb_to_sgvec_nomark(struct sk_buff *skb, struct scatterlist *sg
 int __must_check skb_to_sgvec(struct sk_buff *skb, struct scatterlist *sg,
 			      int offset, int len);
 int skb_cow_data(struct sk_buff *skb, int tailbits, struct sk_buff **trailer);
+
+/* HMDFS ktls solution, alloc page with GFP_KERNEL flag.
+ * Currently, this interface is used for the hmdfs file system.
+ */
+int skb_cow_data_gfp_kernel(struct sk_buff *skb, int tailbits, struct sk_buff **trailer);
+
 int __skb_pad(struct sk_buff *skb, int pad, bool free_on_error);
 
 /**
@@ -1228,7 +1279,8 @@ static inline __u32 skb_get_hash_flowi6(struct sk_buff *skb, const struct flowi6
 	return skb->hash;
 }
 
-__u32 skb_get_hash_perturb(const struct sk_buff *skb, u32 perturb);
+__u32 skb_get_hash_perturb(const struct sk_buff *skb,
+			   const siphash_key_t *perturb);
 
 static inline __u32 skb_get_hash_raw(const struct sk_buff *skb)
 {
@@ -1310,7 +1362,9 @@ static inline void skb_zcopy_clear(struct sk_buff *skb, bool zerocopy)
 	struct ubuf_info *uarg = skb_zcopy(skb);
 
 	if (uarg) {
-		if (uarg->callback == sock_zerocopy_callback) {
+		if (skb_zcopy_is_nouarg(skb)) {
+			/* no notification callback */
+		} else if (uarg->callback == sock_zerocopy_callback) {
 			uarg->zerocopy = uarg->zerocopy && zerocopy;
 			sock_zerocopy_put(uarg);
 		} else if (!skb_zcopy_is_nouarg(skb)) {
@@ -1342,6 +1396,19 @@ static inline int skb_queue_empty(const struct sk_buff_head *list)
 {
 	return list->next == (const struct sk_buff *) list;
 }
+
+/**
+ *	skb_queue_empty_lockless - check if a queue is empty
+ *	@list: queue head
+ *
+ *	Returns true if the queue is empty, false otherwise.
+ *	This variant can be used in lockless contexts.
+ */
+static inline bool skb_queue_empty_lockless(const struct sk_buff_head *list)
+{
+	return READ_ONCE(list->next) == (const struct sk_buff *) list;
+}
+
 
 /**
  *	skb_queue_is_last - check if skb is the last entry in the queue
@@ -1639,7 +1706,7 @@ static inline struct sk_buff *skb_peek_next(struct sk_buff *skb,
  */
 static inline struct sk_buff *skb_peek_tail(const struct sk_buff_head *list_)
 {
-	struct sk_buff *skb = list_->prev;
+	struct sk_buff *skb = READ_ONCE(list_->prev);
 
 	if (skb == (struct sk_buff *)list_)
 		skb = NULL;
@@ -1707,9 +1774,13 @@ static inline void __skb_insert(struct sk_buff *newsk,
 				struct sk_buff *prev, struct sk_buff *next,
 				struct sk_buff_head *list)
 {
-	newsk->next = next;
-	newsk->prev = prev;
-	next->prev  = prev->next = newsk;
+	/* See skb_queue_empty_lockless() and skb_peek_tail()
+	 * for the opposite READ_ONCE()
+	 */
+	WRITE_ONCE(newsk->next, next);
+	WRITE_ONCE(newsk->prev, prev);
+	WRITE_ONCE(next->prev, newsk);
+	WRITE_ONCE(prev->next, newsk);
 	list->qlen++;
 }
 
@@ -1720,11 +1791,11 @@ static inline void __skb_queue_splice(const struct sk_buff_head *list,
 	struct sk_buff *first = list->next;
 	struct sk_buff *last = list->prev;
 
-	first->prev = prev;
-	prev->next = first;
+	WRITE_ONCE(first->prev, prev);
+	WRITE_ONCE(prev->next, first);
 
-	last->next = next;
-	next->prev = last;
+	WRITE_ONCE(last->next, next);
+	WRITE_ONCE(next->prev, last);
 }
 
 /**
@@ -1865,8 +1936,8 @@ static inline void __skb_unlink(struct sk_buff *skb, struct sk_buff_head *list)
 	next	   = skb->next;
 	prev	   = skb->prev;
 	skb->next  = skb->prev = NULL;
-	next->prev = prev;
-	prev->next = next;
+	WRITE_ONCE(next->prev, prev);
+	WRITE_ONCE(prev->next, next);
 }
 
 /**
@@ -2108,6 +2179,12 @@ static inline void *skb_pull_inline(struct sk_buff *skb, unsigned int len)
 }
 
 void *__pskb_pull_tail(struct sk_buff *skb, int delta);
+
+/* HMDFS ktls solution, alloc page with GFP_KERNEL flag.
+ * Currently, this interface is used for the hmdfs file system.
+ */
+void *__pskb_pull_tail_gfp_kernel(struct sk_buff *skb, int delta);
+
 
 static inline void *__pskb_pull(struct sk_buff *skb, unsigned int len)
 {
@@ -2377,7 +2454,7 @@ static inline void skb_probe_transport_header(struct sk_buff *skb,
 		return;
 	else if (skb_flow_dissect_flow_keys(skb, &keys, 0))
 		skb_set_transport_header(skb, keys.control.thoff);
-	else if (offset_hint >= 0)
+	else
 		skb_set_transport_header(skb, offset_hint);
 }
 
@@ -2572,7 +2649,8 @@ static inline int skb_orphan_frags(struct sk_buff *skb, gfp_t gfp_mask)
 {
 	if (likely(!skb_zcopy(skb)))
 		return 0;
-	if (skb_uarg(skb)->callback == sock_zerocopy_callback)
+	if (!skb_zcopy_is_nouarg(skb) &&
+	    skb_uarg(skb)->callback == sock_zerocopy_callback)
 		return 0;
 	return skb_copy_ubufs(skb, gfp_mask);
 }

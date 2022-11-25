@@ -36,6 +36,10 @@
 #include <linux/timer.h>
 #include <linux/wakeup_reason.h>
 
+#if defined CONFIG_LOG_JANK
+#include <huawei_platform/log/log_jank.h>
+#endif
+
 #include "../base.h"
 #include "power.h"
 
@@ -125,6 +129,10 @@ void device_pm_unlock(void)
  */
 void device_pm_add(struct device *dev)
 {
+	/* Skip PM setup/initialization. */
+	if (device_pm_not_required(dev))
+		return;
+
 	pr_debug("PM: Adding info for %s:%s\n",
 		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
 	device_pm_check_callbacks(dev);
@@ -143,6 +151,9 @@ void device_pm_add(struct device *dev)
  */
 void device_pm_remove(struct device *dev)
 {
+	if (device_pm_not_required(dev))
+		return;
+
 	pr_debug("PM: Removing info for %s:%s\n",
 		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
 	complete_all(&dev->power.completion);
@@ -270,10 +281,38 @@ static void dpm_wait_for_suppliers(struct device *dev, bool async)
 	device_links_read_unlock(idx);
 }
 
-static void dpm_wait_for_superior(struct device *dev, bool async)
+static bool dpm_wait_for_superior(struct device *dev, bool async)
 {
-	dpm_wait(dev->parent, async);
+	struct device *parent;
+
+	/*
+	 * If the device is resumed asynchronously and the parent's callback
+	 * deletes both the device and the parent itself, the parent object may
+	 * be freed while this function is running, so avoid that by reference
+	 * counting the parent once more unless the device has been deleted
+	 * already (in which case return right away).
+	 */
+	mutex_lock(&dpm_list_mtx);
+
+	if (!device_pm_initialized(dev)) {
+		mutex_unlock(&dpm_list_mtx);
+		return false;
+	}
+
+	parent = get_device(dev->parent);
+
+	mutex_unlock(&dpm_list_mtx);
+
+	dpm_wait(parent, async);
+	put_device(parent);
+
 	dpm_wait_for_suppliers(dev, async);
+
+	/*
+	 * If the parent's callback has deleted the device, attempting to resume
+	 * it would be invalid, so avoid doing that then.
+	 */
+	return device_pm_initialized(dev);
 }
 
 static void dpm_wait_for_consumers(struct device *dev, bool async)
@@ -437,6 +476,14 @@ static void dpm_show_time(ktime_t starttime, pm_message_t state, int error,
 		  info ?: "", info ? " " : "", pm_verb(state.event),
 		  error ? "aborted" : "complete",
 		  usecs / USEC_PER_MSEC, usecs % USEC_PER_MSEC);
+
+	#if defined CONFIG_LOG_JANK
+	if (PM_EVENT_RESUME == state.event)
+		  LOG_JANK_D(JLID_KERNEL_PM_DEEPSLEEP_WAKEUP,
+		  "%s: %ld.%03ld msecs",
+		  "JL_KERNEL_PM_DEEPSLEEP_WAKEUP",
+		  usecs / USEC_PER_MSEC, usecs % USEC_PER_MSEC);
+	#endif
 }
 
 static int dpm_run_callback(pm_callback_t cb, struct device *dev,
@@ -552,7 +599,8 @@ static int device_resume_noirq(struct device *dev, pm_message_t state, bool asyn
 	if (!dev->power.is_noirq_suspended)
 		goto Out;
 
-	dpm_wait_for_superior(dev, async);
+	if (!dpm_wait_for_superior(dev, async))
+		goto Out;
 
 	if (dev->pm_domain) {
 		info = "noirq power domain ";
@@ -692,7 +740,8 @@ static int device_resume_early(struct device *dev, pm_message_t state, bool asyn
 	if (!dev->power.is_late_suspended)
 		goto Out;
 
-	dpm_wait_for_superior(dev, async);
+	if (!dpm_wait_for_superior(dev, async))
+		goto Out;
 
 	if (dev->pm_domain) {
 		info = "early power domain ";
@@ -824,7 +873,9 @@ static int device_resume(struct device *dev, pm_message_t state, bool async)
 		goto Complete;
 	}
 
-	dpm_wait_for_superior(dev, async);
+	if (!dpm_wait_for_superior(dev, async))
+		goto Complete;
+
 	dpm_watchdog_set(&wd, dev);
 	device_lock(dev);
 
@@ -1464,10 +1515,8 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 
 	dpm_wait_for_subordinate(dev, async);
 
-	if (async_error) {
-		dev->power.direct_complete = false;
+	if (async_error)
 		goto Complete;
-	}
 
 	/*
 	 * If a device configured to wake up the system from sleep states
@@ -1482,7 +1531,6 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		pm_get_active_wakeup_sources(suspend_abort,
 			MAX_SUSPEND_ABORT_LEN);
 		log_suspend_abort_reason(suspend_abort);
-		dev->power.direct_complete = false;
 		async_error = -EBUSY;
 		goto Complete;
 	}

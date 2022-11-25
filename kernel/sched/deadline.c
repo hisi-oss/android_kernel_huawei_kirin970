@@ -1135,6 +1135,9 @@ static void update_curr_dl(struct rq *rq)
 		return;
 	}
 
+#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL_OPT
+	if (use_pelt_freq())
+#endif
 	/* kick cpufreq (see the comment in kernel/sched/sched.h). */
 	cpufreq_update_util(rq, SCHED_CPUFREQ_DL);
 
@@ -2346,6 +2349,9 @@ const struct sched_class dl_sched_class = {
 	.switched_to		= switched_to_dl,
 
 	.update_curr		= update_curr_dl,
+#ifdef CONFIG_SCHED_WALT
+	.fixup_cumulative_runnable_avg = walt_fixup_cumulative_runnable_avg,
+#endif
 };
 
 int sched_dl_global_validate(void)

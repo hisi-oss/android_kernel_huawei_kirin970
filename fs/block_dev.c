@@ -209,6 +209,42 @@ static void blkdev_bio_end_io_simple(struct bio *bio)
 	WRITE_ONCE(bio->bi_private, NULL);
 	wake_up_process(waiter);
 }
+#ifdef CONFIG_F2FS_CHECK_FS
+atomic_t f2fs_mounted;
+struct bdev_access_info bdev_access_info;
+
+static int need_report(struct block_device *bdev, int *ro)
+{
+	int report = 0;
+
+	if (!bdev || !atomic_read(&f2fs_mounted))
+		return 0;
+	spin_lock(&bdev_access_info.lock);
+	report = (bdev->bd_super &&
+			  !strcmp(bdev->bd_super->s_type->name, "f2fs"));
+	if (ro && report && bdev->bd_super->s_flags & MS_RDONLY)
+		*ro = 1;
+	spin_unlock(&bdev_access_info.lock);
+
+	return report;
+}
+
+void print_bdev_access_info(void)
+{
+	struct access_timestamp *at;
+	int i = 0;
+
+	pr_err("F2FS-fs: device open %d times:\n",
+		atomic_read(&bdev_access_info.open_cnt));
+	spin_lock(&bdev_access_info.lock);
+	list_for_each_entry(at, &bdev_access_info.access_list, list)
+		pr_err("F2FS-fs: [%d] open at %ld", i++, at->time.tv_sec);
+	spin_unlock(&bdev_access_info.lock);
+}
+#else
+void print_bdev_access_info(void) { }
+#endif
+EXPORT_SYMBOL(print_bdev_access_info);
 
 static ssize_t
 __blkdev_direct_IO_simple(struct kiocb *iocb, struct iov_iter *iter,
@@ -453,7 +489,23 @@ blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 		return 0;
 	if (is_sync_kiocb(iocb) && nr_pages <= BIO_MAX_PAGES)
 		return __blkdev_direct_IO_simple(iocb, iter, nr_pages);
+#ifdef CONFIG_F2FS_CHECK_FS
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = bdev_file_inode(file);
+	struct block_device *bdev = I_BDEV(inode);
+	int ro = 0;
 
+	if (iov_iter_rw(iter) == WRITE && need_report(bdev, &ro)) {
+		pr_err("F2FS-fs: %s: f2fs is already mounted, do not "
+			"write it directly at pos %llx len %zx\n",
+			__func__, iocb->ki_pos, iov_iter_count(iter));
+		print_bdev_access_info();
+		if (ro)
+			WARN_ON(1);
+		else
+			BUG_ON(1);
+	}
+#endif
 	return __blkdev_direct_IO(iocb, iter, min(nr_pages, BIO_MAX_PAGES));
 }
 
@@ -608,6 +660,22 @@ static int blkdev_write_begin(struct file *file, struct address_space *mapping,
 			loff_t pos, unsigned len, unsigned flags,
 			struct page **pagep, void **fsdata)
 {
+#ifdef CONFIG_F2FS_CHECK_FS
+	struct block_device *bdev = I_BDEV(bdev_file_inode(file));
+	int ro = 0;
+
+	if (need_report(bdev, &ro)) {
+		pr_err("F2FS-fs: %s: f2fs is already mounted, do not write it "
+			"directly at pos %#llx len %x\n", __func__, pos, len);
+		print_bdev_access_info();
+		if (ro)
+			WARN_ON(1);
+		else
+			BUG_ON(1);
+
+	}
+#endif
+
 	return block_write_begin(mapping, pos, len, flags, pagep,
 				 blkdev_get_block);
 }
@@ -835,6 +903,13 @@ void __init bdev_cache_init(void)
 {
 	int err;
 	static struct vfsmount *bd_mnt;
+
+#ifdef CONFIG_F2FS_CHECK_FS
+	atomic_set(&f2fs_mounted, 0);
+	INIT_LIST_HEAD(&bdev_access_info.access_list);
+	atomic_set(&bdev_access_info.open_cnt, 0);
+	spin_lock_init(&bdev_access_info.lock);
+#endif
 
 	bdev_cachep = kmem_cache_create("bdev_cache", sizeof(struct bdev_inode),
 			0, (SLAB_HWCACHE_ALIGN|SLAB_RECLAIM_ACCOUNT|
@@ -1439,10 +1514,8 @@ static int __blkdev_get(struct block_device *bdev, fmode_t mode, int for_part)
 	 */
 	if (!for_part) {
 		ret = devcgroup_inode_permission(bdev->bd_inode, perm);
-		if (ret != 0) {
-			bdput(bdev);
+		if (ret != 0)
 			return ret;
-		}
 	}
 
  restart:
@@ -1515,8 +1588,10 @@ static int __blkdev_get(struct block_device *bdev, fmode_t mode, int for_part)
 				goto out_clear;
 			BUG_ON(for_part);
 			ret = __blkdev_get(whole, mode, 1);
-			if (ret)
+			if (ret) {
+				bdput(whole);
 				goto out_clear;
+			}
 			bdev->bd_contains = whole;
 			bdev->bd_part = disk_get_part(disk, partno);
 			if (!(disk->flags & GENHD_FL_UP) ||
@@ -1570,7 +1645,6 @@ static int __blkdev_get(struct block_device *bdev, fmode_t mode, int for_part)
 	put_disk(disk);
 	module_put(owner);
  out:
-	bdput(bdev);
 
 	return ret;
 }
@@ -1656,6 +1730,9 @@ int blkdev_get(struct block_device *bdev, fmode_t mode, void *holder)
 		bdput(whole);
 	}
 
+	if (res)
+		bdput(bdev);
+
 	return res;
 }
 EXPORT_SYMBOL(blkdev_get);
@@ -1738,7 +1815,7 @@ struct block_device *blkdev_get_by_dev(dev_t dev, fmode_t mode, void *holder)
 	return bdev;
 }
 EXPORT_SYMBOL(blkdev_get_by_dev);
-
+/*lint -save -e429*/
 static int blkdev_open(struct inode * inode, struct file * filp)
 {
 	struct block_device *bdev;
@@ -1764,16 +1841,45 @@ static int blkdev_open(struct inode * inode, struct file * filp)
 	if (bdev == NULL)
 		return -ENOMEM;
 
+#ifdef CONFIG_F2FS_CHECK_FS
+	if ((filp->f_flags & O_ACCMODE) != O_RDONLY && need_report(bdev, NULL)) {
+		struct access_timestamp *at;
+
+		at = kmalloc(sizeof(struct access_timestamp), GFP_NOFS);
+		atomic_inc(&bdev_access_info.open_cnt);
+		if (at) {
+			at->time = current_kernel_time();
+			spin_lock(&bdev_access_info.lock);
+			list_add_tail(&at->list, &bdev_access_info.access_list);
+			spin_unlock(&bdev_access_info.lock);
+		}
+		pr_err("F2FS-fs: %s: f2fs is already mounted, do not open"
+				" it directly\n", __func__);
+		print_bdev_access_info();
+		WARN_ON(1);
+	}
+#endif
+
 	filp->f_mapping = bdev->bd_inode->i_mapping;
 	filp->f_wb_err = filemap_sample_wb_err(filp->f_mapping);
 
 	return blkdev_get(bdev, filp->f_mode, filp);
 }
-
+/*lint -restore*/
 static void __blkdev_put(struct block_device *bdev, fmode_t mode, int for_part)
 {
 	struct gendisk *disk = bdev->bd_disk;
 	struct block_device *victim = NULL;
+
+	/*
+	 * Sync early if it looks like we're the last one.  If someone else
+	 * opens the block device between now and the decrement of bd_openers
+	 * then we did a sync that we didn't need to, but that's not the end
+	 * of the world and we want to avoid long (could be several minute)
+	 * syncs while holding the mutex.
+	 */
+	if (bdev->bd_openers == 1)
+		sync_blockdev(bdev);
 
 	mutex_lock_nested(&bdev->bd_mutex, for_part);
 	if (for_part)
@@ -1864,10 +1970,34 @@ static int blkdev_close(struct inode * inode, struct file * filp)
 	return 0;
 }
 
+#ifdef CONFIG_F2FS_CHECK_FS
+#define WR_IOCTL(cmd) ((cmd) == BLKDISCARD || (cmd) == BLKSECDISCARD ||\
+		       (cmd) == BLKZEROOUT)
+#endif
+
 static long block_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 {
 	struct block_device *bdev = I_BDEV(bdev_file_inode(file));
 	fmode_t mode = file->f_mode;
+
+#ifdef CONFIG_F2FS_CHECK_FS
+	int ro = 0;
+	if (WR_IOCTL(cmd) && need_report(bdev, &ro)) {
+		uint64_t range[2];
+		if (copy_from_user(range, (void __user *)arg, sizeof(range))) {
+			range[0] = 0;
+			range[1] = 0;
+		}
+		pr_err("F2FS-fs: %s: f2fs is already mounted, do not ioctl it "
+			"directly cmd %d pos %llx len %llx\n", __func__, cmd,
+			range[0], range[1]);
+		print_bdev_access_info();
+		if (ro)
+			WARN_ON(1);
+		else
+			BUG_ON(1);
+	}
+#endif
 
 	/*
 	 * O_NDELAY can be altered using fcntl(.., F_SETFL, ..), so we have

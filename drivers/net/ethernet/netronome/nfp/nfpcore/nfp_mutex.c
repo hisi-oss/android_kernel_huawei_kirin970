@@ -311,18 +311,7 @@ int nfp_cpp_mutex_trylock(struct nfp_cpp_mutex *mutex)
 	 */
 	value = nfp_mutex_locked(nfp_cpp_interface(cpp));
 
-	/* We use test_set_imm here, as it implies a read
-	 * of the current state, and sets the bits in the
-	 * bytemask of the command to 1s. Since the mutex
-	 * is guaranteed to be 64-bit aligned, the bytemask
-	 * of this 32-bit command is ensured to be 8'b00001111,
-	 * which implies that the lower 4 bits will be set to
-	 * ones regardless of the initial state.
-	 *
-	 * Since this is a 'Readback' operation, with no Pull
-	 * data, we can treat this as a normal Push (read)
-	 * atomic, which returns the original value.
-	 */
+	
 	err = nfp_cpp_readl(cpp, mus, mutex->address, &tmp);
 	if (err < 0)
 		return err;

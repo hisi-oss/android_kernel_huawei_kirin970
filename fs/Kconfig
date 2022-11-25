@@ -33,6 +33,7 @@ source "fs/ocfs2/Kconfig"
 source "fs/btrfs/Kconfig"
 source "fs/nilfs2/Kconfig"
 source "fs/f2fs/Kconfig"
+source "fs/hmfs/Kconfig"
 
 config FS_DAX
 	bool "Direct Access (DAX) support"
@@ -96,6 +97,8 @@ config MANDATORY_FILE_LOCKING
 	  To the best of my knowledge this is dead code that no one cares about.
 
 source "fs/crypto/Kconfig"
+
+source "fs/verity/Kconfig"
 
 source "fs/notify/Kconfig"
 
@@ -203,6 +206,18 @@ config HUGETLB_PAGE
 config ARCH_HAS_GIGANTIC_PAGE
 	bool
 
+config FILE_MAP
+	bool "file map support"
+	default n
+	depends on (F2FS_FS || HMFS_FS || EROFS_FS) && BLK_CGROUP
+
+	---help---
+	  This selects file map support.
+
+	  Select this if you want to optimize your Android system.
+	  If unsure, say N.
+
+
 source "fs/configfs/Kconfig"
 source "fs/efivarfs/Kconfig"
 
@@ -249,6 +264,7 @@ source "fs/pstore/Kconfig"
 source "fs/sysv/Kconfig"
 source "fs/ufs/Kconfig"
 source "fs/exofs/Kconfig"
+source "fs/erofs/Kconfig"
 
 endif # MISC_FILESYSTEMS
 
@@ -303,10 +319,12 @@ source "fs/ncpfs/Kconfig"
 source "fs/coda/Kconfig"
 source "fs/afs/Kconfig"
 source "fs/9p/Kconfig"
+-source "fs/hmdfs/Kconfig"
 
 endif # NETWORK_FILESYSTEMS
 
 source "fs/nls/Kconfig"
 source "fs/dlm/Kconfig"
+source "fs/unicode/Kconfig"
 
 endmenu

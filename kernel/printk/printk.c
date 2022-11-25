@@ -58,6 +58,9 @@
 #include "console_cmdline.h"
 #include "braille.h"
 #include "internal.h"
+#ifdef CONFIG_HISI_APANIC
+extern void apanic_console_write(char *s, unsigned c);
+#endif
 
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
@@ -183,8 +186,8 @@ int devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write,
 		if (err < 0 || (err + 1 != *lenp)) {
 
 			/* ... and restore old setting. */
-			devkmsg_log = old;
-			strncpy(devkmsg_log_str, old_str, DEVKMSG_STR_MAX_SIZE);
+			devkmsg_log = old;  //lint !e644
+			strncpy(devkmsg_log_str, old_str, DEVKMSG_STR_MAX_SIZE); //lint !e645
 
 			return -EINVAL;
 		}
@@ -351,6 +354,8 @@ enum log_flags {
 	LOG_CONT	= 8,	/* text is a fragment of a continuation line */
 };
 
+#ifdef CONFIG_HISI_TIME
+#else
 struct printk_log {
 	u64 ts_nsec;		/* timestamp in nanoseconds */
 	u16 len;		/* length of entire record */
@@ -364,6 +369,7 @@ struct printk_log {
 __packed __aligned(4)
 #endif
 ;
+#endif
 
 /*
  * The logbuf_lock protects kmsg buffer, indices, counters.  This can be taken
@@ -371,7 +377,12 @@ __packed __aligned(4)
  * console_unlock() or anything else that might wake up a process.
  */
 DEFINE_RAW_SPINLOCK(logbuf_lock);
-
+#ifdef CONFIG_HISI_TIME
+raw_spinlock_t *g_logbuf_lock_ex = &logbuf_lock;
+#endif
+#ifdef CONFIG_HUAWEI_PRINTK_CTRL
+raw_spinlock_t *g_logbuf_level_lock_ex = &logbuf_lock;
+#endif
 /*
  * Helper macros to lock/unlock logbuf_lock and switch between
  * printk-safe/unsafe modes.
@@ -423,18 +434,34 @@ static u32 console_idx;
 static u64 clear_seq;
 static u32 clear_idx;
 
+#ifdef CONFIG_HISI_TIME
+#define PREFIX_MAX		80
+#else
 #define PREFIX_MAX		32
+#endif
 #define LOG_LINE_MAX		(1024 - PREFIX_MAX)
 
 #define LOG_LEVEL(v)		((v) & 0x07)
 #define LOG_FACILITY(v)		((v) >> 3 & 0xff)
 
+#ifdef DEVKMSG_LIMIT_CONTROL
+#define KMSG_TIME_INTERNEL	5
+#define KMSG_RATELIMIT_BURST	100
+#endif
+
 /* record buffer */
 #define LOG_ALIGN __alignof__(struct printk_log)
 #define __LOG_BUF_LEN (1 << CONFIG_LOG_BUF_SHIFT)
+#define LOG_BUF_LEN_MAX (u32)(1 << 31)
 static char __log_buf[__LOG_BUF_LEN] __aligned(LOG_ALIGN);
 static char *log_buf = __log_buf;
 static u32 log_buf_len = __LOG_BUF_LEN;
+#ifdef CONFIG_HISI_BB
+char *hisirdr_ex_log_buf = __log_buf;
+u32 hisirdr_ex_log_buf_len = __LOG_BUF_LEN;
+u32 *hisirdr_ex_log_first_idx = &log_first_idx;
+u32 *hisirdr_ex_log_next_idx = &log_next_idx;
+#endif
 
 /* Return log buffer address */
 char *log_buf_addr_get(void)
@@ -544,7 +571,7 @@ static u32 msg_used_size(u16 text_len, u16 dict_len, u32 *pad_len)
 	u32 size;
 
 	size = sizeof(struct printk_log) + text_len + dict_len;
-	*pad_len = (-size) & (LOG_ALIGN - 1);
+	*pad_len = (-size) & (LOG_ALIGN - 1); //lint !e501
 	size += *pad_len;
 
 	return size;
@@ -585,6 +612,13 @@ static int log_store(int facility, int level,
 	struct printk_log *msg;
 	u32 size, pad_len;
 	u16 trunc_msg_len = 0;
+#ifdef CONFIG_HISI_TIME
+	char tmp_buf[100] = {'\0'};
+	u16 tmp_len = 0;
+
+	pr_log_store_add_time(tmp_buf, sizeof(tmp_buf), &tmp_len);
+	text_len += tmp_len;
+#endif
 
 	/* number of '\0' padding bytes to next message */
 	size = msg_used_size(text_len, dict_len, &pad_len);
@@ -610,7 +644,12 @@ static int log_store(int facility, int level,
 
 	/* fill message */
 	msg = (struct printk_log *)(log_buf + log_next_idx);
+#ifdef CONFIG_HISI_TIME
+	memcpy(log_text(msg), tmp_buf, tmp_len);
+	memcpy(log_text(msg)+tmp_len, text, text_len-tmp_len);
+#else
 	memcpy(log_text(msg), text, text_len);
+#endif
 	msg->text_len = text_len;
 	if (trunc_msg_len) {
 		memcpy(log_text(msg) + text_len, trunc_msg, trunc_msg_len);
@@ -624,11 +663,20 @@ static int log_store(int facility, int level,
 	if (ts_nsec > 0)
 		msg->ts_nsec = ts_nsec;
 	else
+#ifdef CONFIG_HISI_TIME
+		msg->ts_nsec = hisi_getcurtime();
+#else
 		msg->ts_nsec = local_clock();
+#endif
 	memset(log_dict(msg) + dict_len, 0, pad_len);
 	msg->len = size;
 
 	/* insert message */
+#ifdef CONFIG_HISI_APANIC
+	if (msg->level < CONSOLE_LOGLEVEL_DEFAULT)
+		panic_print_msg(msg);
+#endif
+
 	log_next_idx += msg->len;
 	log_next_seq++;
 
@@ -878,7 +926,7 @@ static ssize_t devkmsg_read(struct file *file, char __user *buf,
 	}
 	ret = len;
 out:
-	mutex_unlock(&user->lock);
+	mutex_unlock(&user->lock);//lint !e455
 	return ret;
 }
 
@@ -940,14 +988,17 @@ static unsigned int devkmsg_poll(struct file *file, poll_table *wait)
 	}
 	logbuf_unlock_irq();
 
-	return ret;
+	return ret; /* [false alarm]:return value of ret is >= 0 */
 }
 
 static int devkmsg_open(struct inode *inode, struct file *file)
 {
 	struct devkmsg_user *user;
 	int err;
-
+#ifdef DEVKMSG_LIMIT_CONTROL
+	int interval = KMSG_TIME_INTERNEL;
+	int burst = KMSG_RATELIMIT_BURST;
+#endif
 	if (devkmsg_log & DEVKMSG_LOG_MASK_OFF)
 		return -EPERM;
 
@@ -963,7 +1014,11 @@ static int devkmsg_open(struct inode *inode, struct file *file)
 	if (!user)
 		return -ENOMEM;
 
+#ifdef DEVKMSG_LIMIT_CONTROL
+	ratelimit_state_init(&user->rs, interval, burst);
+#else
 	ratelimit_default_init(&user->rs);
+#endif
 	ratelimit_set_flags(&user->rs, RATELIMIT_MSG_ON_RELEASE);
 
 	mutex_init(&user->lock);
@@ -1032,18 +1087,23 @@ void log_buf_vmcoreinfo_setup(void)
 static unsigned long __initdata new_log_buf_len;
 
 /* we practice scaling the ring buffer by powers of 2 */
-static void __init log_buf_len_update(unsigned size)
+static void __init log_buf_len_update(u64 size)
 {
+	if (size > (u64)LOG_BUF_LEN_MAX) {
+		size = (u64)LOG_BUF_LEN_MAX;
+		pr_err("log_buf over 2G is not supported.\n");
+	}
+
 	if (size)
 		size = roundup_pow_of_two(size);
 	if (size > log_buf_len)
-		new_log_buf_len = size;
+		new_log_buf_len = (unsigned long)size;
 }
 
 /* save requested log_buf_len since it's too early to process it */
 static int __init log_buf_len_setup(char *str)
 {
-	unsigned int size;
+	u64 size;
 
 	if (!str)
 		return -EINVAL;
@@ -1093,7 +1153,7 @@ void __init setup_log_buf(int early)
 {
 	unsigned long flags;
 	char *new_log_buf;
-	int free;
+	unsigned int free;
 
 	if (log_buf != __log_buf)
 		return;
@@ -1113,7 +1173,7 @@ void __init setup_log_buf(int early)
 	}
 
 	if (unlikely(!new_log_buf)) {
-		pr_err("log_buf_len: %ld bytes not available\n",
+		pr_err("log_buf_len: %lu bytes not available\n",
 			new_log_buf_len);
 		return;
 	}
@@ -1126,8 +1186,8 @@ void __init setup_log_buf(int early)
 	memcpy(log_buf, __log_buf, __LOG_BUF_LEN);
 	logbuf_unlock_irqrestore(flags);
 
-	pr_info("log_buf_len: %d bytes\n", log_buf_len);
-	pr_info("early log buf free: %d(%d%%)\n",
+	pr_info("log_buf_len: %u bytes\n", log_buf_len);
+	pr_info("early log buf free: %u(%u%%)\n",
 		free, (free * 100) / __LOG_BUF_LEN);
 }
 
@@ -1209,6 +1269,8 @@ static inline void boot_delay_msec(int level)
 static bool printk_time = IS_ENABLED(CONFIG_PRINTK_TIME);
 module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
 
+#if defined(CONFIG_HISI_TIME)
+#else
 static size_t print_time(u64 ts, char *buf)
 {
 	unsigned long rem_nsec;
@@ -1224,6 +1286,7 @@ static size_t print_time(u64 ts, char *buf)
 	return sprintf(buf, "[%5lu.%06lu] ",
 		       (unsigned long)ts, rem_nsec / 1000);
 }
+#endif
 
 static size_t print_prefix(const struct printk_log *msg, bool syslog, char *buf)
 {
@@ -1232,7 +1295,7 @@ static size_t print_prefix(const struct printk_log *msg, bool syslog, char *buf)
 
 	if (syslog) {
 		if (buf) {
-			len += sprintf(buf, "<%u>", prefix);
+			len += sprintf(buf, "<%u>", prefix);//lint !e421
 		} else {
 			len += 3;
 			if (prefix > 999)
@@ -1317,7 +1380,7 @@ static int syslog_print(char __user *buf, int size)
 		skip = syslog_partial;
 		msg = log_from_idx(syslog_idx);
 		n = msg_print_text(msg, true, text, LOG_LINE_MAX + PREFIX_MAX);
-		if (n - syslog_partial <= size) {
+		if (n - syslog_partial <= size) {//lint !e571 !e574
 			/* message fits into buffer, move forward */
 			syslog_idx = log_next(syslog_idx);
 			syslog_seq++;
@@ -1776,7 +1839,11 @@ static bool cont_add(int facility, int level, enum log_flags flags, const char *
 		cont.facility = facility;
 		cont.level = level;
 		cont.owner = current;
+#ifdef CONFIG_HISI_TIME
+		cont.ts_nsec = hisi_getcurtime();
+#else
 		cont.ts_nsec = local_clock();
+#endif
 		cont.flags = flags;
 	}
 
@@ -1802,6 +1869,15 @@ static size_t log_output(int facility, int level, enum log_flags lflags, const c
 	 * If an earlier line was buffered, and we're a continuation
 	 * write from the same process, try to add it to the buffer.
 	 */
+#ifdef CONFIG_HISI_TIME
+	if (cont.len) {
+		if (cont.owner == current && (lflags & LOG_CONT)) {
+			if (cont_add(facility, level, lflags, text, text_len))
+				return text_len;
+		}
+	}
+	cont_flush();
+#else
 	if (cont.len) {
 		if (cont.owner == current && (lflags & LOG_CONT)) {
 			if (cont_add(facility, level, lflags, text, text_len))
@@ -1810,6 +1886,7 @@ static size_t log_output(int facility, int level, enum log_flags lflags, const c
 		/* Otherwise, make sure it's flushed */
 		cont_flush();
 	}
+#endif
 
 	/* Skip empty continuation lines that couldn't be added - they just flush */
 	if (!text_len && (lflags & LOG_CONT))
@@ -1822,7 +1899,7 @@ static size_t log_output(int facility, int level, enum log_flags lflags, const c
 	}
 
 	/* Store it in the record log */
-	return log_store(facility, level, lflags, 0, dict, dictlen, text, text_len);
+	return log_store(facility, level, lflags, 0, dict, dictlen, text, text_len); /* [false alarm]:return value of ret is >= 0 */
 }
 
 /* Must be called under logbuf_lock. */
@@ -1872,6 +1949,12 @@ int vprintk_store(int facility, int level,
 	if (level == LOGLEVEL_DEFAULT)
 		level = default_message_loglevel;
 
+#ifdef CONFIG_HUAWEI_PRINTK_CTRL
+	if (level > printk_level) {
+		return 0;
+	}
+#endif
+
 	if (dict)
 		lflags |= LOG_PREFIX|LOG_NEWLINE;
 
@@ -1903,19 +1986,12 @@ asmlinkage int vprintk_emit(int facility, int level,
 	/* If called from the scheduler, we can not call up(). */
 	if (!in_sched) {
 		/*
-		 * Disable preemption to avoid being preempted while holding
-		 * console_sem which would prevent anyone from printing to
-		 * console
-		 */
-		preempt_disable();
-		/*
 		 * Try to acquire and then immediately release the console
 		 * semaphore.  The release will print out buffers and wake up
 		 * /dev/kmsg and syslog() users.
 		 */
 		if (console_trylock_spinning())
 			console_unlock();
-		preempt_enable();
 	}
 
 	return printed_len;
@@ -2046,7 +2122,7 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
 }
 #endif
 
-static int __add_preferred_console(char *name, int idx, char *options,
+static int __add_preferred_console(const char *name, const int idx, char *options,
 				   char *brl_options)
 {
 	struct console_cmdline *c;
@@ -2093,7 +2169,7 @@ static int __init console_setup(char *str)
 	 * Decode str into name, index, options.
 	 */
 	if (str[0] >= '0' && str[0] <= '9') {
-		strcpy(buf, "ttyS");
+		strcpy(buf, "ttyS");//lint !e421
 		strncpy(buf + 4, str, sizeof(buf) - 5);
 	} else {
 		strncpy(buf, str, sizeof(buf) - 1);
@@ -2164,7 +2240,7 @@ void suspend_console(void)
 	printk("Suspending console(s) (use no_console_suspend to debug)\n");
 	console_lock();
 	console_suspended = 1;
-	up_console_sem();
+	up_console_sem(); //lint !e571
 }
 
 void resume_console(void)
@@ -2225,14 +2301,27 @@ EXPORT_SYMBOL(console_lock);
  */
 int console_trylock(void)
 {
-	if (down_trylock_console_sem())
+	if (down_trylock_console_sem())//lint !e571
 		return 0;
 	if (console_suspended) {
-		up_console_sem();
+		up_console_sem(); //lint !e571
 		return 0;
 	}
 	console_locked = 1;
-	console_may_schedule = 0;
+	/*
+	 * When PREEMPT_COUNT disabled we can't reliably detect if it's
+	 * safe to schedule (e.g. calling printk while holding a spin_lock),
+	 * because preempt_disable()/preempt_enable() are just barriers there
+	 * and preempt_count() is always 0.
+	 *
+	 * RCU read sections have a separate preemption counter when
+	 * PREEMPT_RCU enabled thus we must take extra care and check
+	 * rcu_preempt_depth(), otherwise RCU read sections modify
+	 * preempt_count().
+	 */
+	console_may_schedule = !oops_in_progress &&
+			preemptible() &&
+			!rcu_preempt_depth();
 	return 1;
 }
 EXPORT_SYMBOL(console_trylock);
@@ -2294,7 +2383,7 @@ void console_unlock(void)
 	bool do_cond_resched, retry;
 
 	if (console_suspended) {
-		up_console_sem();
+		up_console_sem(); //lint !e571
 		return;
 	}
 
@@ -2323,7 +2412,7 @@ again:
 	 */
 	if (!can_use_console()) {
 		console_locked = 0;
-		up_console_sem();
+		up_console_sem(); //lint !e571
 		return;
 	}
 
@@ -2341,7 +2430,7 @@ again:
 
 		if (console_seq < log_first_seq) {
 			len = sprintf(text, "** %u printk messages dropped ** ",
-				      (unsigned)(log_first_seq - console_seq));
+				      (unsigned)(log_first_seq - console_seq));//lint !e421
 
 			/* messages are gone, move to first one */
 			console_seq = log_first_seq;
@@ -2410,7 +2499,7 @@ skip:
 
 	raw_spin_unlock(&logbuf_lock);
 
-	up_console_sem();
+	up_console_sem(); //lint !e571
 
 	/*
 	 * Someone could have filled up the buffer again, so re-check if there's
@@ -2457,7 +2546,7 @@ void console_unblank(void)
 	 * oops_in_progress is set to 1..
 	 */
 	if (oops_in_progress) {
-		if (down_trylock_console_sem() != 0)
+		if (down_trylock_console_sem() != 0)//lint !e571
 			return;
 	} else
 		console_lock();
@@ -2573,7 +2662,7 @@ void register_console(struct console *newcon)
 		for_each_console(bcon)
 			if (WARN(bcon == newcon,
 					"console '%s%d' already registered\n",
-					bcon->name, bcon->index))
+					bcon->name, bcon->index)) //lint !e146 !e665
 				return;
 
 	/*
@@ -2866,7 +2955,7 @@ static void wake_up_klogd_work_func(struct irq_work *irq_work)
 }
 
 static DEFINE_PER_CPU(struct irq_work, wake_up_klogd_work) = {
-	.func = wake_up_klogd_work_func,
+	.func = wake_up_klogd_work_func,//lint !e24 !e446
 	.flags = IRQ_WORK_LAZY,
 };
 
@@ -3189,7 +3278,7 @@ bool kmsg_dump_get_buffer(struct kmsg_dumper *dumper, bool syslog,
 	/* move first record forward until length fits into the buffer */
 	seq = dumper->cur_seq;
 	idx = dumper->cur_idx;
-	while (l > size && seq < dumper->next_seq) {
+	while (l >= size && seq < dumper->next_seq) {
 		struct printk_log *msg = log_from_idx(idx);
 
 		l -= msg_print_text(msg, true, NULL, 0);
@@ -3288,11 +3377,23 @@ void __init dump_stack_set_arch_desc(const char *fmt, ...)
  */
 void dump_stack_print_info(const char *log_lvl)
 {
-	printk("%sCPU: %d PID: %d Comm: %.20s %s %s %.*s\n",
+	printk("%sCPU: %d PID: %d Comm: %.20s VIP: %d%ld %s %s %.*s\n",
 	       log_lvl, raw_smp_processor_id(), current->pid, current->comm,
+#ifdef CONFIG_HW_VIP_THREAD
+	       current->static_vip, atomic64_read(&current->dynamic_vip),
+#else
+	       0, 0L,
+#endif
 	       print_tainted(), init_utsname()->release,
 	       (int)strcspn(init_utsname()->version, " "),
 	       init_utsname()->version);
+
+	/*
+	 * Some threads'name of android is the same in different process.
+	 * So we need to get the tgid and the comm of thread's group_leader.
+	 */
+	printk("TGID: %d Comm: %.20s\n",
+	       current->tgid, current->group_leader->comm);
 
 	if (dump_stack_arch_desc_str[0] != '\0')
 		printk("%sHardware name: %s\n",
@@ -3316,4 +3417,8 @@ void show_regs_print_info(const char *log_lvl)
 	       log_lvl, current, task_stack_page(current));
 }
 
+
+#ifdef CONFIG_HISI_TIME
+#include "common_printk.c"
+#endif
 #endif

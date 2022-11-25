@@ -9,10 +9,8 @@
  * option) any later version.
  */
 
-#include <linux/init.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 
@@ -152,5 +150,3 @@ static int __init t1042rdb_diu_init(void)
 }
 
 early_initcall(t1042rdb_diu_init);
-
-MODULE_LICENSE("GPL");

@@ -11,11 +11,18 @@
 #include <linux/cpu.h>
 #include <linux/sched.h>
 #include <linux/sched/topology.h>
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/rdr_hisi_ap_hook.h>
+#endif
 
 #include "blk.h"
 
+#ifdef CONFIG_MAS_BLK
+DEFINE_PER_CPU(struct list_head, blk_cpu_done);
+EXPORT_PER_CPU_SYMBOL(blk_cpu_done);
+#else
 static DEFINE_PER_CPU(struct list_head, blk_cpu_done);
-
+#endif
 /*
  * Softirq action handler - move entries to local list and loop over them
  * while passing them to the queue registered handler.
@@ -29,13 +36,20 @@ static __latent_entropy void blk_done_softirq(struct softirq_action *h)
 	list_replace_init(cpu_list, &local_list);
 	local_irq_enable();
 
+#ifdef CONFIG_HISI_BB
+	softirq_hook(HK_BLOCK_SOFTIRQ, (u64)blk_done_softirq, 0);
+#endif
 	while (!list_empty(&local_list)) {
 		struct request *rq;
 
 		rq = list_entry(local_list.next, struct request, ipi_list);
 		list_del_init(&rq->ipi_list);
+
 		rq->q->softirq_done_fn(rq);
 	}
+#ifdef CONFIG_HISI_BB
+	softirq_hook(HK_BLOCK_SOFTIRQ, (u64)blk_done_softirq, 0);
+#endif
 }
 
 #ifdef CONFIG_SMP

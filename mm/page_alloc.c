@@ -67,12 +67,49 @@
 #include <linux/ftrace.h>
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
+#include <linux/hisi/page_tracker.h>
+#include <linux/hisi/hisi_ion.h>
 #include <linux/psi.h>
+#ifdef CONFIG_ZONE_MEDIA
+#include <linux/cma.h>
+#endif
 
+#include <linux/hisi/rdr_hisi_ap_hook.h>
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
+#include <linux/ktime.h>
+
+#ifdef CONFIG_HW_MEMORY_MONITOR
+#include <linux/delayacct.h>
+#include <chipset_common/mmonitor/mmonitor.h>
+#include <chipset_common/allocpages_delayacct/allocpages_delayacct.h>
+#endif
+
+#ifdef CONFIG_HW_RECLAIM_ACCT
+#include <chipset_common/reclaim_acct/reclaim_acct.h>
+#endif
+
+#ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_DAEMON
+#include <linux/hisi/lowmem_killer.h>
+#endif
+
+#ifdef CONFIG_HISI_PAGE_TRACE
+#include <linux/hisi/mem_trace.h>
+#endif
+
+#ifdef CONFIG_MEMCG_PROTECT_LRU
+#include <linux/protect_lru.h>
+#endif
+
+#ifdef CONFIG_HISI_CMA_DEBUG
+#include <linux/hisi/hisi_cma_debug.h>
+#endif
+
+#ifdef CONFIG_HISI_MEM_OFFLINE
+#include "hisi/mem_offline.h"
+#endif
 
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -108,8 +145,8 @@ EXPORT_SYMBOL(latent_entropy);
  * Array of node states.
  */
 nodemask_t node_states[NR_NODE_STATES] __read_mostly = {
-	[N_POSSIBLE] = NODE_MASK_ALL,
-	[N_ONLINE] = { { [0] = 1UL } },
+	[N_POSSIBLE] = NODE_MASK_ALL, /*lint !e504*/
+	[N_ONLINE] = { { [0] = 1UL } }, /*lint !e651*/
 #ifndef CONFIG_NUMA
 	[N_NORMAL_MEMORY] = { { [0] = 1UL } },
 #ifdef CONFIG_HIGHMEM
@@ -130,6 +167,10 @@ unsigned long totalcma_pages __read_mostly;
 
 int percpu_pagelist_fraction;
 gfp_t gfp_allowed_mask __read_mostly = GFP_BOOT_MASK;
+
+#ifdef CONFIG_HISI_SLOW_PATH_COUNT
+#include "hisi/slowpath_count.h"
+#endif
 
 /*
  * A cached value of the page's pageblock's migratetype, used when the page is
@@ -233,16 +274,20 @@ static char * const zone_names[MAX_NR_ZONES] = {
 #ifdef CONFIG_ZONE_DEVICE
 	 "Device",
 #endif
+#ifdef CONFIG_ZONE_MEDIA
+	 "Media",
+#endif
 };
 
 char * const migratetype_names[MIGRATE_TYPES] = {
 	"Unmovable",
 	"Movable",
 	"Reclaimable",
-	"HighAtomic",
+
 #ifdef CONFIG_CMA
 	"CMA",
 #endif
+	"HighAtomic",
 #ifdef CONFIG_MEMORY_ISOLATION
 	"Isolate",
 #endif
@@ -402,7 +447,7 @@ static inline int pfn_to_bitidx(struct page *page, unsigned long pfn)
 	pfn &= (PAGES_PER_SECTION-1);
 	return (pfn >> pageblock_order) * NR_PAGEBLOCK_BITS;
 #else
-	pfn = pfn - round_down(page_zone(page)->zone_start_pfn, pageblock_nr_pages);
+	pfn = pfn - round_down(page_zone(page)->zone_start_pfn, pageblock_nr_pages); /*lint !e666*/
 	return (pfn >> pageblock_order) * NR_PAGEBLOCK_BITS;
 #endif /* CONFIG_SPARSEMEM */
 }
@@ -493,7 +538,7 @@ void set_pageblock_migratetype(struct page *page, int migratetype)
 		migratetype = MIGRATE_UNMOVABLE;
 
 	set_pageblock_flags_group(page, (unsigned long)migratetype,
-					PB_migrate, PB_migrate_end);
+					PB_migrate, PB_migrate_end); /*lint !e571*/
 }
 
 #ifdef CONFIG_DEBUG_VM
@@ -918,7 +963,7 @@ done_merging:
 out:
 	zone->free_area[order].nr_free++;
 }
-
+/*lint -e87 -e436*/
 /*
  * A bad page could be due to a number of fields. Instead of multiple branches,
  * try and check multiple fields with one check. The caller must do a detailed
@@ -932,15 +977,15 @@ static inline bool page_expected_state(struct page *page,
 
 	if (unlikely((unsigned long)page->mapping |
 			page_ref_count(page) |
-#ifdef CONFIG_MEMCG
+#ifdef CONFIG_MEMCG /*lint !e436*/
 			(unsigned long)page->mem_cgroup |
-#endif
+#endif /*lint !e436*/
 			(page->flags & check_flags)))
 		return false;
 
 	return true;
 }
-
+/*lint +e87 +e436*/
 static void free_pages_check_bad(struct page *page)
 {
 	const char *bad_reason;
@@ -1057,6 +1102,10 @@ static __always_inline bool free_pages_prepare(struct page *page,
 			(page + i)->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
 		}
 	}
+#ifdef CONFIG_MEMCG_PROTECT_LRU
+	if (PageProtect(page))
+		ClearPageProtect(page);
+#endif
 	if (PageMappingFlags(page))
 		page->mapping = NULL;
 	if (memcg_kmem_enabled() && PageKmemcg(page))
@@ -1069,7 +1118,7 @@ static __always_inline bool free_pages_prepare(struct page *page,
 	page_cpupid_reset_last(page);
 	page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
 	reset_page_owner(page, order);
-
+	page_tracker_reset_tracker(page, order);
 	if (!PageHighMem(page)) {
 		debug_check_no_locks_freed(page_address(page),
 					   PAGE_SIZE << order);
@@ -1127,6 +1176,11 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	spin_lock(&zone->lock);
 	isolated_pageblocks = has_isolate_pageblock(zone);
 
+	/*
+	 * Ensure proper count is passed which otherwise would stuck in the
+	 * below while (list_empty(list)) loop.
+	 */
+	count = min(pcp->count, count);
 	while (count) {
 		struct page *page;
 		struct list_head *list;
@@ -1201,12 +1255,15 @@ static void __meminit __init_single_page(struct page *page, unsigned long pfn,
 	if (!is_highmem_idx(zone))
 		set_page_address(page, __va(pfn << PAGE_SHIFT));
 #endif
+#ifdef CONFIG_TASK_PROTECT_LRU
+	set_page_num(page, 0);
+#endif
 }
 
 static void __meminit __init_single_pfn(unsigned long pfn, unsigned long zone,
 					int nid)
 {
-	return __init_single_page(pfn_to_page(pfn), pfn, zone, nid);
+	return __init_single_page(pfn_to_page(pfn), pfn, zone, nid); /*lint !e82*/
 }
 
 #ifdef CONFIG_DEFERRED_STRUCT_PAGE_INIT
@@ -1271,7 +1328,7 @@ static void __free_pages_ok(struct page *page, unsigned int order)
 
 	migratetype = get_pfnblock_migratetype(page, pfn);
 	local_irq_save(flags);
-	__count_vm_events(PGFREE, 1 << order);
+	__count_vm_events(PGFREE, 1 << order); /*lint !e647*/
 	free_one_page(page_zone(page), page, pfn, order, migratetype);
 	local_irq_restore(flags);
 }
@@ -1355,7 +1412,7 @@ void __init __free_pages_bootmem(struct page *page, unsigned long pfn,
 {
 	if (early_page_uninitialised(pfn))
 		return;
-	return __free_pages_boot_core(page, order);
+	return __free_pages_boot_core(page, order); /*lint !e144*//*lint !e82*/
 }
 
 /*
@@ -1413,11 +1470,12 @@ void set_zone_contiguous(struct zone *zone)
 			block_start_pfn = block_end_pfn,
 			 block_end_pfn += pageblock_nr_pages) {
 
-		block_end_pfn = min(block_end_pfn, zone_end_pfn(zone));
+		block_end_pfn = min(block_end_pfn, zone_end_pfn(zone)); /*lint !e666*/
 
 		if (!__pageblock_pfn_to_page(block_start_pfn,
 					     block_end_pfn, zone))
 			return;
+		cond_resched();
 	}
 
 	/* We confirm that there is no hole */
@@ -1664,7 +1722,7 @@ static inline void expand(struct zone *zone, struct page *page,
 	int low, int high, struct free_area *area,
 	int migratetype)
 {
-	unsigned long size = 1 << high;
+	unsigned long size = 1 << high; /*lint !e647*/
 
 	while (high > low) {
 		area--;
@@ -1756,6 +1814,23 @@ static bool check_new_pcp(struct page *page)
 }
 #endif /* CONFIG_DEBUG_VM */
 
+#ifdef CONFIG_ZONE_MEDIA
+static bool pfn_check_next_zone(unsigned long zone,
+				unsigned long pfn)
+{
+	bool is_cma;
+
+	is_cma = is_cma_pfn(pfn);
+	if (is_cma && zone != ZONE_MEDIA)
+		return true;
+
+	if (!is_cma && zone == ZONE_MEDIA)
+		return true;
+
+	return false;
+}
+#endif
+
 static bool check_new_pages(struct page *page, unsigned int order)
 {
 	int i;
@@ -1771,7 +1846,11 @@ static bool check_new_pages(struct page *page, unsigned int order)
 
 inline void post_alloc_hook(struct page *page, unsigned int order,
 				gfp_t gfp_flags)
-{
+{/*lint !e695*/
+#ifdef CONFIG_HISI_KERNELDUMP
+	if (gfp_flags & __GFP_HIGHMEM)
+		SetPageMemDump(page);
+#endif
 	set_page_private(page, 0);
 	set_page_refcounted(page);
 
@@ -1795,6 +1874,8 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 
 	if (order && (gfp_flags & __GFP_COMP))
 		prep_compound_page(page, order);
+
+	page_tracker_set_tracker(page, order);
 
 	/*
 	 * page is set pfmemalloc when ALLOC_NO_WATERMARKS was necessary to
@@ -1855,17 +1936,6 @@ static int fallbacks[MIGRATE_TYPES][4] = {
 #endif
 };
 
-#ifdef CONFIG_CMA
-static struct page *__rmqueue_cma_fallback(struct zone *zone,
-					unsigned int order)
-{
-	return __rmqueue_smallest(zone, order, MIGRATE_CMA);
-}
-#else
-static inline struct page *__rmqueue_cma_fallback(struct zone *zone,
-					unsigned int order) { return NULL; }
-#endif
-
 /*
  * Move the free pages in a range to the free lists of the requested type.
  * Note that start_page and end_pages are not aligned on a pageblock
@@ -1919,7 +1989,7 @@ static int move_freepages(struct zone *zone,
 		order = page_order(page);
 		list_move(&page->lru,
 			  &zone->free_area[order].free_list[migratetype]);
-		page += 1 << order;
+		page += 1 << order; /*lint !e679*/
 		pages_moved += 1 << order;
 	}
 
@@ -1985,7 +2055,6 @@ static bool can_steal_fallback(unsigned int order, int start_mt)
 
 	if (order >= pageblock_order / 2 ||
 		start_mt == MIGRATE_RECLAIMABLE ||
-		start_mt == MIGRATE_UNMOVABLE ||
 		page_group_by_mobility_disabled)
 		return true;
 
@@ -2077,7 +2146,8 @@ single_page:
  * fragmentation due to mixed migratetype pages in one pageblock.
  */
 int find_suitable_fallback(struct free_area *area, unsigned int order,
-			int migratetype, bool only_stealable, bool *can_steal)
+			int migratetype, bool only_stealable, bool *can_steal,
+			gfp_t gfp_flags)
 {
 	int i;
 	int fallback_mt;
@@ -2157,6 +2227,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 						bool force)
 {
 	struct zonelist *zonelist = ac->zonelist;
+	int migratetype = ac->migratetype;
 	unsigned long flags;
 	struct zoneref *z;
 	struct zone *zone;
@@ -2164,8 +2235,11 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 	int order;
 	bool ret;
 
+	if (migratetype ==  MIGRATE_CMA)
+		migratetype = MIGRATE_MOVABLE;
+
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, ac->high_zoneidx,
-								ac->nodemask) {
+								ac->nodemask) { /*lint !e564*/
 		/*
 		 * Preserve at least one pageblock unless memory pressure
 		 * is really high.
@@ -2213,8 +2287,8 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 			 * of pageblocks that cannot be completely freed
 			 * may increase.
 			 */
-			set_pageblock_migratetype(page, ac->migratetype);
-			ret = move_freepages_block(zone, page, ac->migratetype,
+			set_pageblock_migratetype(page, migratetype);
+			ret = move_freepages_block(zone, page, migratetype,
 									NULL);
 			if (ret) {
 				spin_unlock_irqrestore(&zone->lock, flags);
@@ -2238,7 +2312,8 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
  * condition simpler.
  */
 static inline bool
-__rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
+__rmqueue_fallback(struct zone *zone, int order, int start_migratetype,
+		gfp_t gfp_flags)
 {
 	struct free_area *area;
 	int current_order;
@@ -2255,7 +2330,7 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 				--current_order) {
 		area = &(zone->free_area[current_order]);
 		fallback_mt = find_suitable_fallback(area, current_order,
-				start_migratetype, false, &can_steal);
+				start_migratetype, false, &can_steal, gfp_flags);
 		if (fallback_mt == -1)
 			continue;
 
@@ -2281,7 +2356,7 @@ find_smallest:
 							current_order++) {
 		area = &(zone->free_area[current_order]);
 		fallback_mt = find_suitable_fallback(area, current_order,
-				start_migratetype, false, &can_steal);
+				start_migratetype, false, &can_steal, gfp_flags);
 		if (fallback_mt != -1)
 			break;
 	}
@@ -2310,19 +2385,19 @@ do_steal:
  * Call me with the zone->lock already held.
  */
 static struct page *__rmqueue(struct zone *zone, unsigned int order,
-				int migratetype)
+				int migratetype,gfp_t gfp_flags)
 {
 	struct page *page;
 
 retry:
 	page = __rmqueue_smallest(zone, order, migratetype);
-	if (unlikely(!page)) {
-		if (migratetype == MIGRATE_MOVABLE)
-			page = __rmqueue_cma_fallback(zone, order);
-
-		if (!page && __rmqueue_fallback(zone, order, migratetype))
-			goto retry;
+	if ((unlikely(!page)) && migratetype == MIGRATE_CMA) {
+		migratetype = MIGRATE_MOVABLE;
+		page = __rmqueue_smallest(zone, order, migratetype);
 	}
+
+	if (unlikely(!page) && __rmqueue_fallback(zone, order, migratetype, gfp_flags))
+		goto retry;
 
 	trace_mm_page_alloc_zone_locked(page, order, migratetype);
 	return page;
@@ -2335,13 +2410,13 @@ retry:
  */
 static int rmqueue_bulk(struct zone *zone, unsigned int order,
 			unsigned long count, struct list_head *list,
-			int migratetype, bool cold)
+			int migratetype, bool cold, gfp_t gfp_flags)
 {
 	int i, alloced = 0;
 
 	spin_lock(&zone->lock);
-	for (i = 0; i < count; ++i) {
-		struct page *page = __rmqueue(zone, order, migratetype);
+	for (i = 0; i < count; ++i) { /*lint !e574*/
+		struct page *page = __rmqueue(zone, order, migratetype, 0);
 		if (unlikely(page == NULL))
 			break;
 
@@ -2365,7 +2440,7 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 		alloced++;
 		if (is_migrate_cma(get_pcppage_migratetype(page)))
 			__mod_zone_page_state(zone, NR_FREE_CMA_PAGES,
-					      -(1 << order));
+					      -(1 << order)); /*lint !e647*/
 	}
 
 	/*
@@ -2374,7 +2449,7 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	 * on i. Do not confuse with 'alloced' which is the number of
 	 * pages added to the pcp list.
 	 */
-	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
+	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order)); /*lint !e647*/
 	spin_unlock(&zone->lock);
 	return alloced;
 }
@@ -2460,18 +2535,11 @@ void drain_local_pages(struct zone *zone)
 		drain_pages(cpu);
 }
 
-static void drain_local_pages_wq(struct work_struct *work)
+static void cfi_drain_local_pages(void *dummy)
 {
-	/*
-	 * drain_all_pages doesn't use proper cpu hotplug protection so
-	 * we can race with cpu offline when the WQ can move this from
-	 * a cpu pinned worker to an unbound one. We can operate on a different
-	 * cpu which is allright but we also have to make sure to not move to
-	 * a different one.
-	 */
-	preempt_disable();
-	drain_local_pages(NULL);
-	preempt_enable();
+	struct zone *z = (struct zone *)dummy;
+
+	drain_local_pages(z);
 }
 
 /*
@@ -2479,7 +2547,11 @@ static void drain_local_pages_wq(struct work_struct *work)
  *
  * When zone parameter is non-NULL, spill just the single zone's pages.
  *
- * Note that this can be extremely slow as the draining happens in a workqueue.
+ * Note that this code is protected against sending an IPI to an offline
+ * CPU but does not guarantee sending an IPI to newly hotplugged CPUs:
+ * on_each_cpu_mask() blocks hotplug and won't talk to offlined CPUs but
+ * nothing keeps CPUs from showing up after we populated the cpumask and
+ * before the call to on_each_cpu_mask().
  */
 void drain_all_pages(struct zone *zone)
 {
@@ -2490,24 +2562,6 @@ void drain_all_pages(struct zone *zone)
 	 * direct reclaim path for CONFIG_CPUMASK_OFFSTACK=y
 	 */
 	static cpumask_t cpus_with_pcps;
-
-	/*
-	 * Make sure nobody triggers this path before mm_percpu_wq is fully
-	 * initialized.
-	 */
-	if (WARN_ON_ONCE(!mm_percpu_wq))
-		return;
-
-	/*
-	 * Do not drain if one is already in progress unless it's specific to
-	 * a zone. Such callers are primarily CMA and memory hotplug and need
-	 * the drain to be complete when the call returns.
-	 */
-	if (unlikely(!mutex_trylock(&pcpu_drain_mutex))) {
-		if (!zone)
-			return;
-		mutex_lock(&pcpu_drain_mutex);
-	}
 
 	/*
 	 * We don't care about racing with CPU hotplug event
@@ -2539,16 +2593,7 @@ void drain_all_pages(struct zone *zone)
 		else
 			cpumask_clear_cpu(cpu, &cpus_with_pcps);
 	}
-
-	for_each_cpu(cpu, &cpus_with_pcps) {
-		struct work_struct *work = per_cpu_ptr(&pcpu_drain, cpu);
-		INIT_WORK(work, drain_local_pages_wq);
-		queue_work_on(cpu, mm_percpu_wq, work);
-	}
-	for_each_cpu(cpu, &cpus_with_pcps)
-		flush_work(per_cpu_ptr(&pcpu_drain, cpu));
-
-	mutex_unlock(&pcpu_drain_mutex);
+	on_each_cpu_mask(&cpus_with_pcps, cfi_drain_local_pages, zone, 1);
 }
 
 #ifdef CONFIG_HIBERNATION
@@ -2627,7 +2672,7 @@ void free_hot_cold_page(struct page *page, bool cold)
 	__count_vm_event(PGFREE);
 
 	/*
-	 * We only track unmovable, reclaimable and movable on pcp lists.
+	 * Track unmovable, reclaimable movable and cma on pcp lists.
 	 * Free ISOLATE pages back to the allocator because they are being
 	 * offlined but treat HIGHATOMIC as movable pages so we can get those
 	 * areas back if necessary. Otherwise, we may have to free
@@ -2685,6 +2730,7 @@ void split_page(struct page *page, unsigned int order)
 	VM_BUG_ON_PAGE(PageCompound(page), page);
 	VM_BUG_ON_PAGE(!page_count(page), page);
 
+	page_tracker_set_tracker(page, 0);
 	for (i = 1; i < (1 << order); i++)
 		set_page_refcounted(page + i);
 	split_page_owner(page, order);
@@ -2713,22 +2759,21 @@ int __isolate_free_page(struct page *page, unsigned int order)
 		if (!zone_watermark_ok(zone, 0, watermark, 0, ALLOC_CMA))
 			return 0;
 
-		__mod_zone_freepage_state(zone, -(1UL << order), mt);
+		__mod_zone_freepage_state(zone, -(1UL << order), mt); /*lint !e501*/
 	}
 
 	/* Remove page from free list */
 	list_del(&page->lru);
 	zone->free_area[order].nr_free--;
 	rmv_page_order(page);
-
 	/*
 	 * Set the pageblock if the isolated page is at least half of a
 	 * pageblock
 	 */
 	if (order >= pageblock_order - 1) {
-		struct page *endpage = page + (1 << order) - 1;
+		struct page *endpage = page + (1 << order) - 1; /*lint !e679*/
 		for (; page < endpage; page += pageblock_nr_pages) {
-			int mt = get_pageblock_migratetype(page);
+			int mt = get_pageblock_migratetype(page); /*lint !e578*/
 			if (!is_migrate_isolate(mt) && !is_migrate_cma(mt)
 			    && !is_migrate_highatomic(mt))
 				set_pageblock_migratetype(page,
@@ -2736,6 +2781,7 @@ int __isolate_free_page(struct page *page, unsigned int order)
 		}
 	}
 
+	page_tracker_set_tracker(page, order);
 
 	return 1UL << order;
 }
@@ -2766,7 +2812,7 @@ static inline void zone_statistics(struct zone *preferred_zone, struct zone *z)
 /* Remove page from the per-cpu list, caller must protect the list */
 static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 			bool cold, struct per_cpu_pages *pcp,
-			struct list_head *list)
+			struct list_head *list, gfp_t gfp_flags)
 {
 	struct page *page;
 
@@ -2774,7 +2820,7 @@ static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 		if (list_empty(list)) {
 			pcp->count += rmqueue_bulk(zone, 0,
 					pcp->batch, list,
-					migratetype, cold);
+					migratetype, cold, gfp_flags);
 			if (unlikely(list_empty(list)))
 				return NULL;
 		}
@@ -2805,7 +2851,7 @@ static struct page *rmqueue_pcplist(struct zone *preferred_zone,
 	local_irq_save(flags);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
 	list = &pcp->lists[migratetype];
-	page = __rmqueue_pcplist(zone,  migratetype, cold, pcp, list);
+	page = __rmqueue_pcplist(zone,  migratetype, cold, pcp, list, gfp_flags);
 	if (page) {
 		__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order);
 		zone_statistics(preferred_zone, zone);
@@ -2847,15 +2893,15 @@ struct page *rmqueue(struct zone *preferred_zone,
 				trace_mm_page_alloc_zone_locked(page, order, migratetype);
 		}
 		if (!page)
-			page = __rmqueue(zone, order, migratetype);
+			page = __rmqueue(zone, order, migratetype, gfp_flags);
 	} while (page && check_new_pages(page, order));
-	spin_unlock(&zone->lock);
+	spin_unlock(&zone->lock); /*lint !e455*/
 	if (!page)
 		goto failed;
 	__mod_zone_freepage_state(zone, -(1 << order),
 				  get_pcppage_migratetype(page));
 
-	__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order);
+	__count_zid_vm_events(PGALLOC, page_zonenum(page), 1 << order); /*lint !e647*/
 	zone_statistics(preferred_zone, zone);
 	local_irq_restore(flags);
 
@@ -2961,7 +3007,7 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 	const bool alloc_harder = (alloc_flags & (ALLOC_HARDER|ALLOC_OOM));
 
 	/* free_pages may go negative - that's OK */
-	free_pages -= (1 << order) - 1;
+	free_pages -= (1 << order) - 1; /*lint !e647*/
 
 	if (alloc_flags & ALLOC_HIGH)
 		min -= min / 2;
@@ -2986,8 +3032,12 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 			min -= min / 4;
 	}
 
-
-#ifdef CONFIG_CMA
+#if defined(CONFIG_CMA) && defined(CONFIG_ZONE_MEDIA)
+	/* If allocation can't use CMA areas don't use free CMA pages */
+	if (IS_MEIDA_ZONE_IDX(zone_idx(z)) ||
+	    !(alloc_flags & ALLOC_CMA))
+		free_pages -= zone_page_state(z, NR_FREE_CMA_PAGES);
+#elif defined(CONFIG_CMA)
 	/* If allocation can't use CMA areas don't use free CMA pages */
 	if (!(alloc_flags & ALLOC_CMA))
 		free_pages -= zone_page_state(z, NR_FREE_CMA_PAGES);
@@ -3018,14 +3068,21 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 				return true;
 		}
 
-#ifdef CONFIG_CMA
+#ifdef CONFIG_ZONE_MEDIA
+		if ((alloc_flags & ALLOC_CMA) &&
+		    !IS_MEIDA_ZONE_IDX(zone_idx(z)) &&
+		    !list_empty(&area->free_list[MIGRATE_CMA])) {
+			return true;
+		}
+#else
 		if ((alloc_flags & ALLOC_CMA) &&
 		    !list_empty(&area->free_list[MIGRATE_CMA])) {
 			return true;
 		}
 #endif
+
 		if (alloc_harder &&
-			!list_empty(&area->free_list[MIGRATE_HIGHATOMIC]))
+		    !list_empty(&area->free_list[MIGRATE_HIGHATOMIC]))
 			return true;
 	}
 	return false;
@@ -3041,10 +3098,15 @@ bool zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 		unsigned long mark, int classzone_idx, unsigned int alloc_flags)
 {
-	long free_pages = zone_page_state(z, NR_FREE_PAGES);
+	long free_pages = zone_page_state(z, NR_FREE_PAGES); /*lint !e578*/
 	long cma_pages = 0;
 
-#ifdef CONFIG_CMA
+#if defined(CONFIG_CMA) && defined(CONFIG_ZONE_MEDIA)
+	/* If allocation can't use CMA areas don't use free CMA pages */
+	if (IS_MEIDA_ZONE_IDX(zone_idx(z)) ||
+	    !(alloc_flags & ALLOC_CMA))
+		cma_pages = zone_page_state(z, NR_FREE_CMA_PAGES);
+#elif defined(CONFIG_CMA)
 	/* If allocation can't use CMA areas don't use free CMA pages */
 	if (!(alloc_flags & ALLOC_CMA))
 		cma_pages = zone_page_state(z, NR_FREE_CMA_PAGES);
@@ -3057,7 +3119,7 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 	 * the caller is !atomic then it'll uselessly search the free
 	 * list. That corner case is then slower but it is harmless.
 	 */
-	if (!order && (free_pages - cma_pages) > mark + z->lowmem_reserve[classzone_idx])
+	if (!order && (free_pages - cma_pages) > mark + z->lowmem_reserve[classzone_idx]) /*lint !e574*/
 		return true;
 
 	return __zone_watermark_ok(z, order, mark, classzone_idx, alloc_flags,
@@ -3067,9 +3129,9 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 bool zone_watermark_ok_safe(struct zone *z, unsigned int order,
 			unsigned long mark, int classzone_idx)
 {
-	long free_pages = zone_page_state(z, NR_FREE_PAGES);
+	long free_pages = zone_page_state(z, NR_FREE_PAGES); /*lint !e578*/
 
-	if (z->percpu_drift_mark && free_pages < z->percpu_drift_mark)
+	if (z->percpu_drift_mark && free_pages < z->percpu_drift_mark) /*lint !e574*/
 		free_pages = zone_page_state_snapshot(z, NR_FREE_PAGES);
 
 	return __zone_watermark_ok(z, order, mark, classzone_idx, 0,
@@ -3106,7 +3168,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 	 * See also __cpuset_node_allowed() comment in kernel/cpuset.c.
 	 */
 	for_next_zone_zonelist_nodemask(zone, z, ac->zonelist, ac->high_zoneidx,
-								ac->nodemask) {
+								ac->nodemask) { /*lint !e564*/
 		struct page *page;
 		unsigned long mark;
 
@@ -3114,6 +3176,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
 				continue;
+
 		/*
 		 * When allocating a page cache page for writing, we
 		 * want to get it from a node that is within its dirty
@@ -3145,7 +3208,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 
 		mark = zone->watermark[alloc_flags & ALLOC_WMARK_MASK];
 		if (!zone_watermark_fast(zone, order, mark,
-				       ac_classzone_idx(ac), alloc_flags)) {
+					 ac_classzone_idx(ac), alloc_flags)) {
 			int ret;
 
 			/* Checked here to keep the fast path fast */
@@ -3177,7 +3240,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
 
 try_this_zone:
 		page = rmqueue(ac->preferred_zoneref->zone, zone, order,
-				gfp_mask, alloc_flags, ac->migratetype);
+			       gfp_mask, alloc_flags, ac->migratetype);
 		if (page) {
 			prep_new_page(page, order, gfp_mask, alloc_flags);
 
@@ -3258,6 +3321,9 @@ void warn_alloc(gfp_t gfp_mask, nodemask_t *nodemask, const char *fmt, ...)
 
 	cpuset_print_current_mems_allowed();
 
+#ifdef CONFIG_HW_MEMORY_MONITOR
+	count_mmonitor_event(ALLOC_FAILED_COUNT);
+#endif
 	dump_stack();
 	warn_alloc_show_mem(gfp_mask, nodemask);
 }
@@ -3298,12 +3364,13 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 	*did_some_progress = 0;
 
 	/*
-	 * Acquire the oom lock.  If that fails, somebody else is
-	 * making progress for us.
+	 * Acquire the oom lock. If that fails, somebody else should be making
+	 * progress for us. But if many threads are doing the same thing, the
+	 * owner of the oom lock can fail to make progress due to lack of CPU
+	 * time. Therefore, wait unless we get SIGKILL.
 	 */
-	if (!mutex_trylock(&oom_lock)) {
+	if (mutex_lock_killable(&oom_lock)) {
 		*did_some_progress = 1;
-		schedule_timeout_uninterruptible(1);
 		return NULL;
 	}
 
@@ -3366,7 +3433,7 @@ __alloc_pages_may_oom(gfp_t gfp_mask, unsigned int order,
 					ALLOC_NO_WATERMARKS, ac);
 	}
 out:
-	mutex_unlock(&oom_lock);
+	mutex_unlock(&oom_lock); /*lint !e455*/
 	return page;
 }
 
@@ -3634,7 +3701,13 @@ retry:
 	 */
 	if (!page && !drained) {
 		unreserve_highatomic_pageblock(ac, false);
+#ifdef CONFIG_HW_RECLAIM_ACCT
+		reclaimacct_drainallpages_start();
+#endif
 		drain_all_pages(NULL);
+#ifdef CONFIG_HW_RECLAIM_ACCT
+		reclaimacct_drainallpages_end();
+#endif
 		drained = true;
 		goto retry;
 	}
@@ -3649,7 +3722,12 @@ static void wake_all_kswapds(unsigned int order, const struct alloc_context *ac)
 	pg_data_t *last_pgdat = NULL;
 
 	for_each_zone_zonelist_nodemask(zone, z, ac->zonelist,
-					ac->high_zoneidx, ac->nodemask) {
+					ac->high_zoneidx, ac->nodemask) { /*lint !e564*/
+#ifdef CONFIG_ZONE_MEDIA
+		if (IS_MEIDA_ZONE_IDX(z->zone_idx))
+			continue;
+#endif
+
 		if (last_pgdat != zone->zone_pgdat)
 			wakeup_kswapd(zone, order, ac->high_zoneidx);
 		last_pgdat = zone->zone_pgdat;
@@ -3688,9 +3766,10 @@ gfp_to_alloc_flags(gfp_t gfp_mask)
 		alloc_flags |= ALLOC_HARDER;
 
 #ifdef CONFIG_CMA
-	if (gfpflags_to_migratetype(gfp_mask) == MIGRATE_MOVABLE)
+	if (gfp_mask & ___GFP_CMA)
 		alloc_flags |= ALLOC_CMA;
 #endif
+
 	return alloc_flags;
 }
 
@@ -3894,6 +3973,9 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 				(__GFP_ATOMIC|__GFP_DIRECT_RECLAIM)))
 		gfp_mask &= ~__GFP_ATOMIC;
 
+#ifdef CONFIG_HW_MEMORY_MONITOR
+	delayacct_allocpages_start();
+#endif
 retry_cpuset:
 	compaction_retries = 0;
 	no_progress_loops = 0;
@@ -4006,9 +4088,21 @@ retry:
 	if (current->flags & PF_MEMALLOC)
 		goto nopage;
 
+	if (fatal_signal_pending(current) && !(gfp_mask & __GFP_NOFAIL))
+		goto nopage;
+
 	/* Try direct reclaim and then allocating */
+#ifdef CONFIG_HISI_SLOW_PATH_COUNT
+	pgalloc_count_inc(1, order);
+#endif
+#ifdef CONFIG_HW_RECLAIM_ACCT
+	reclaimacct_directreclaim_start();
+#endif
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
+#ifdef CONFIG_HW_RECLAIM_ACCT
+	reclaimacct_directreclaim_end();
+#endif
 	if (page)
 		goto got_pg;
 
@@ -4017,6 +4111,9 @@ retry:
 					compact_priority, &compact_result);
 	if (page)
 		goto got_pg;
+
+	if (test_thread_flag(TIF_MEMDIE) && !(gfp_mask & __GFP_NOFAIL))
+		goto nopage;
 
 	/* Do not loop if specifically requested */
 	if (gfp_mask & __GFP_NORETRY)
@@ -4064,6 +4161,12 @@ retry:
 	/* Retry as long as the OOM killer is making progress */
 	if (did_some_progress) {
 		no_progress_loops = 0;
+		/*
+		 * This schedule_timeout_*() serves as a guaranteed sleep for
+		 * PF_WQ_WORKER threads when __zone_watermark_ok() == false.
+		 */
+		if (!tsk_is_oom_victim(current))
+			schedule_timeout_uninterruptible(1);
 		goto retry;
 	}
 
@@ -4116,6 +4219,9 @@ fail:
 	warn_alloc(gfp_mask, ac->nodemask,
 			"page allocation failure: order:%u", order);
 got_pg:
+#ifdef CONFIG_HW_MEMORY_MONITOR
+	delayacct_allocpages_end(order);
+#endif
 	return page;
 }
 
@@ -4124,10 +4230,20 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 		struct alloc_context *ac, gfp_t *alloc_mask,
 		unsigned int *alloc_flags)
 {
-	ac->high_zoneidx = gfp_zone(gfp_mask);
+#ifdef CONFIG_MEMORY_AFFINITY
+	if (current->mm && current->mm->dma_zone_tag) {
+		ac->high_zoneidx = ZONE_NORMAL;
+		ac->zonelist = node_zonelist_affinity(preferred_nid, gfp_mask);
+	} else {
+		ac->high_zoneidx = gfp_zone(gfp_mask); /*lint !e446*/
+		ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+	}
+#else
+	ac->high_zoneidx = gfp_zone(gfp_mask); /*lint !e446*/
 	ac->zonelist = node_zonelist(preferred_nid, gfp_mask);
+#endif
 	ac->nodemask = nodemask;
-	ac->migratetype = gfpflags_to_migratetype(gfp_mask);
+	ac->migratetype = gfpflags_to_migratetype(gfp_mask); /*lint !e446*/
 
 	if (cpusets_enabled()) {
 		*alloc_mask |= __GFP_HARDWALL;
@@ -4139,13 +4255,21 @@ static inline bool prepare_alloc_pages(gfp_t gfp_mask, unsigned int order,
 
 	fs_reclaim_acquire(gfp_mask);
 	fs_reclaim_release(gfp_mask);
+#ifdef CONFIG_HISI_SLOW_PATH_COUNT
+	pgalloc_count_inc(0, order);
+#endif
 
 	might_sleep_if(gfp_mask & __GFP_DIRECT_RECLAIM);
+
+#ifdef CONFIG_HYPERHOLD_ZSWAPD
+	if (gfp_mask & __GFP_KSWAPD_RECLAIM)
+		wake_all_zswapd();
+#endif
 
 	if (should_fail_alloc_page(gfp_mask, order))
 		return false;
 
-	if (IS_ENABLED(CONFIG_CMA) && ac->migratetype == MIGRATE_MOVABLE)
+	if (IS_ENABLED(CONFIG_CMA) && gfp_mask & ___GFP_CMA)
 		*alloc_flags |= ALLOC_CMA;
 
 	return true;
@@ -4195,6 +4319,10 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 
 	finalise_ac(gfp_mask, order, &ac);
 
+#ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_DAEMON
+	lmkd_inc_no_cma_cnt();
+#endif
+
 	/* First allocation attempt */
 	page = get_page_from_freelist(alloc_mask, order, alloc_flags, &ac);
 	if (likely(page))
@@ -4216,6 +4344,11 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 	if (unlikely(ac.nodemask != nodemask))
 		ac.nodemask = nodemask;
 
+#ifdef CONFIG_HISI_MEM_OFFLINE
+	if ((alloc_mask & __GFP_MOVABLE) &&
+		(!mem_offline_enable_status()))
+		ac.high_zoneidx = ZONE_MOVABLE;
+#endif
 	page = __alloc_pages_slowpath(alloc_mask, order, &ac);
 
 out:
@@ -4225,8 +4358,19 @@ out:
 		page = NULL;
 	}
 
+#ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_DAEMON
+	lmkd_dec_no_cma_cnt();
+#endif
 	trace_mm_page_alloc(page, order, alloc_mask, ac.migratetype);
 
+	if (page) {
+		page_tracker_set_trace(page, _RET_IP_, order);/*lint !e571*/
+		page_trace_hook(gfp_mask, (unsigned char)MEM_ALLOC, _RET_IP_, page, order);/*lint !e571*/
+	}
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (page)
+		set_buddy_track(page, order, _RET_IP_);/*lint !e571*/
+#endif
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages_nodemask);
@@ -4247,6 +4391,9 @@ unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order)
 	page = alloc_pages(gfp_mask, order);
 	if (!page)
 		return 0;
+
+	page_tracker_set_trace(page, _RET_IP_, order); /*lint !e571*/
+
 	return (unsigned long) page_address(page);
 }
 EXPORT_SYMBOL(__get_free_pages);
@@ -4259,7 +4406,17 @@ EXPORT_SYMBOL(get_zeroed_page);
 
 void __free_pages(struct page *page, unsigned int order)
 {
+#ifdef CONFIG_HISI_LB
+	BUG_ON(PageLB(page) || PageLB(page + ((1 << order) - 1)));/*lint !e679*/
+#endif
+	VM_BUG_ON_PAGE(PageLRU(page) || !page_count(page), page);
+	BUG_ON(PageLRU(page) || !page_count(page));
+#ifdef CONFIG_VM_COPY
+	if (PageVMcpy(page))
+		__count_vm_event(VM_COPY_FREE_PAGE);
+#endif
 	if (put_page_testzero(page)) {
+		page_trace_hook(__GFP_HIGHMEM, (unsigned char)MEM_FREE, _RET_IP_, page, order);/*lint !e571*/
 		if (order == 0)
 			free_hot_cold_page(page, false);
 		else
@@ -4294,11 +4451,13 @@ static struct page *__page_frag_cache_refill(struct page_frag_cache *nc,
 					     gfp_t gfp_mask)
 {
 	struct page *page = NULL;
-	gfp_t gfp = gfp_mask;
+	gfp_t gfp;
+
+	gfp = gfp_mask | __GFP_DMA;
 
 #if (PAGE_SIZE < PAGE_FRAG_CACHE_MAX_SIZE)
 	gfp_mask |= __GFP_COMP | __GFP_NOWARN | __GFP_NORETRY |
-		    __GFP_NOMEMALLOC;
+		    __GFP_NOMEMALLOC | __GFP_DMA;
 	page = alloc_pages_node(NUMA_NO_NODE, gfp_mask,
 				PAGE_FRAG_CACHE_MAX_ORDER);
 	nc->size = page ? PAGE_FRAG_CACHE_MAX_SIZE : PAGE_SIZE;
@@ -4308,6 +4467,22 @@ static struct page *__page_frag_cache_refill(struct page_frag_cache *nc,
 
 	nc->va = page ? page_address(page) : NULL;
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (likely(page)) {
+		int order = get_order(nc->size);
+		int i;
+		struct page *newpage = page;
+		unsigned int deta = 1U << (unsigned int)order;
+
+		for (i = 0; i < (1 << order); i++) {
+			if (!newpage)
+				break;
+			SetPageSKB(newpage);
+			newpage++;
+		}
+		mod_zone_page_state(page_zone(page), NR_SKB_PAGES, (long)deta);
+	}
+#endif
 	return page;
 }
 
@@ -4346,11 +4521,11 @@ refill:
 		/* Even if we own the page, we do not use atomic_set().
 		 * This would break get_page_unless_zero() users.
 		 */
-		page_ref_add(page, size);
+		page_ref_add(page, PAGE_FRAG_CACHE_MAX_SIZE);
 
 		/* reset page count bias and offset to start of new frag */
 		nc->pfmemalloc = page_is_pfmemalloc(page);
-		nc->pagecnt_bias = size + 1;
+		nc->pagecnt_bias = PAGE_FRAG_CACHE_MAX_SIZE + 1;
 		nc->offset = size;
 	}
 
@@ -4366,10 +4541,10 @@ refill:
 		size = nc->size;
 #endif
 		/* OK, page count is 0, we can safely set it */
-		set_page_count(page, size + 1);
+		set_page_count(page, PAGE_FRAG_CACHE_MAX_SIZE + 1);
 
 		/* reset page count bias and offset to start of new frag */
-		nc->pagecnt_bias = size + 1;
+		nc->pagecnt_bias = PAGE_FRAG_CACHE_MAX_SIZE + 1;
 		offset = size - fragsz;
 	}
 
@@ -4387,8 +4562,16 @@ void page_frag_free(void *addr)
 {
 	struct page *page = virt_to_head_page(addr);
 
-	if (unlikely(put_page_testzero(page)))
+	if (unlikely(put_page_testzero(page))) {
+#ifdef CONFIG_HISI_PAGE_TRACE
+		if (likely(page)) {
+			unsigned int deta = 1U << compound_order(page);
+			mod_zone_page_state(page_zone(page),
+			NR_SKB_PAGES, -(long)deta);
+		}
+#endif
 		__free_pages_ok(page, compound_order(page));
+	}
 }
 EXPORT_SYMBOL(page_frag_free);
 
@@ -4489,7 +4672,7 @@ static unsigned long nr_free_zone_pages(int offset)
 
 	struct zonelist *zonelist = node_zonelist(numa_node_id(), GFP_KERNEL);
 
-	for_each_zone_zonelist(zone, z, zonelist, offset) {
+	for_each_zone_zonelist(zone, z, zonelist, offset) { /*lint !e564*/
 		unsigned long size = zone->managed_pages;
 		unsigned long high = high_wmark_pages(zone);
 		if (size > high)
@@ -4565,13 +4748,17 @@ long si_mem_available(void)
 	available += global_node_page_state(NR_SLAB_RECLAIMABLE) -
 		     min(global_node_page_state(NR_SLAB_RECLAIMABLE) / 2,
 			 wmark_low);
-
 	/*
-	 * Part of the kernel memory, which can be released under memory
-	 * pressure.
+	 * Add the ioncache and mali pool pages
 	 */
-	available += global_node_page_state(NR_INDIRECTLY_RECLAIMABLE_BYTES) >>
-		PAGE_SHIFT;
+	available += global_zone_page_state(NR_IONCACHE_PAGES);
+	available += (long)global_zone_page_state(NR_MALI_PAGES);
+#ifdef CONFIG_TASK_PROTECT_LRU
+	available -= (long)global_zone_page_state(NR_PROTECT_ACTIVE_FILE) +
+		     (long)global_zone_page_state(NR_PROTECT_INACTIVE_FILE);
+#elif defined(CONFIG_MEMCG_PROTECT_LRU)
+	available -= (long)get_protected_pages();
+#endif
 
 	if (available < 0)
 		available = 0;
@@ -4653,10 +4840,10 @@ static void show_migration_types(unsigned char type)
 		[MIGRATE_UNMOVABLE]	= 'U',
 		[MIGRATE_MOVABLE]	= 'M',
 		[MIGRATE_RECLAIMABLE]	= 'E',
-		[MIGRATE_HIGHATOMIC]	= 'H',
 #ifdef CONFIG_CMA
 		[MIGRATE_CMA]		= 'C',
 #endif
+		[MIGRATE_HIGHATOMIC]	= 'H',
 #ifdef CONFIG_MEMORY_ISOLATION
 		[MIGRATE_ISOLATE]	= 'I',
 #endif
@@ -4700,16 +4887,34 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 
 	printk("active_anon:%lu inactive_anon:%lu isolated_anon:%lu\n"
 		" active_file:%lu inactive_file:%lu isolated_file:%lu\n"
+#ifdef CONFIG_TASK_PROTECT_LRU
+		" active_prot_anon:%lu inactive_prot_anon:%lu\n"
+		" active_prot_file:%lu inactive_prot_file:%lu\n"
+#elif defined(CONFIG_MEMCG_PROTECT_LRU)
+		" protected:%lu"
+#endif
 		" unevictable:%lu dirty:%lu writeback:%lu unstable:%lu\n"
 		" slab_reclaimable:%lu slab_unreclaimable:%lu\n"
+#ifdef CONFIG_ZSMALLOC
+		" mapped:%lu shmem:%lu pagetables:%lu bounce:%lu zspages:%lu\n"
+#else
 		" mapped:%lu shmem:%lu pagetables:%lu bounce:%lu\n"
-		" free:%lu free_pcp:%lu free_cma:%lu\n",
+#endif
+		" free:%lu free_pcp:%lu free_cma:%lu ion_used:%lu\n",
 		global_node_page_state(NR_ACTIVE_ANON),
 		global_node_page_state(NR_INACTIVE_ANON),
 		global_node_page_state(NR_ISOLATED_ANON),
 		global_node_page_state(NR_ACTIVE_FILE),
 		global_node_page_state(NR_INACTIVE_FILE),
 		global_node_page_state(NR_ISOLATED_FILE),
+#ifdef CONFIG_TASK_PROTECT_LRU
+		global_zone_page_state(NR_PROTECT_ACTIVE_ANON),
+		global_zone_page_state(NR_PROTECT_INACTIVE_ANON),
+		global_zone_page_state(NR_PROTECT_ACTIVE_FILE),
+		global_zone_page_state(NR_PROTECT_INACTIVE_FILE),
+#elif defined(CONFIG_MEMCG_PROTECT_LRU)
+		get_protected_pages(),
+#endif
 		global_node_page_state(NR_UNEVICTABLE),
 		global_node_page_state(NR_FILE_DIRTY),
 		global_node_page_state(NR_WRITEBACK),
@@ -4720,9 +4925,13 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		global_node_page_state(NR_SHMEM),
 		global_zone_page_state(NR_PAGETABLE),
 		global_zone_page_state(NR_BOUNCE),
+#ifdef CONFIG_ZSMALLOC
+		global_zone_page_state(NR_ZSPAGES),
+#endif
 		global_zone_page_state(NR_FREE_PAGES),
 		free_pcp,
-		global_zone_page_state(NR_FREE_CMA_PAGES));
+		global_zone_page_state(NR_FREE_CMA_PAGES),
+		mm_ion_total());
 
 	for_each_online_pgdat(pgdat) {
 		if (show_mem_node_skip(filter, pgdat->node_id, nodemask))
@@ -4794,14 +5003,26 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			" inactive_anon:%lukB"
 			" active_file:%lukB"
 			" inactive_file:%lukB"
+#ifdef CONFIG_TASK_PROTECT_LRU
+			" active_prot_anon:%lukB"
+			" inactive_prot_anon:%lukB"
+			" active_prot_file:%lukB"
+			" inactive_prot_file:%lukB"
+#endif
 			" unevictable:%lukB"
 			" writepending:%lukB"
 			" present:%lukB"
 			" managed:%lukB"
 			" mlocked:%lukB"
 			" kernel_stack:%lukB"
+#ifdef CONFIG_SHADOW_CALL_STACK
+			" shadow_call_stack:%lukB"
+#endif
 			" pagetables:%lukB"
 			" bounce:%lukB"
+#ifdef CONFIG_ZSMALLOC
+			" zspages:%lukB"
+#endif
 			" free_pcp:%lukB"
 			" local_pcp:%ukB"
 			" free_cma:%lukB"
@@ -4815,14 +5036,26 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(zone_page_state(zone, NR_ZONE_INACTIVE_ANON)),
 			K(zone_page_state(zone, NR_ZONE_ACTIVE_FILE)),
 			K(zone_page_state(zone, NR_ZONE_INACTIVE_FILE)),
+#ifdef CONFIG_TASK_PROTECT_LRU
+			K(zone_page_state(zone, NR_PROTECT_ACTIVE_ANON)),
+			K(zone_page_state(zone, NR_PROTECT_INACTIVE_ANON)),
+			K(zone_page_state(zone, NR_PROTECT_ACTIVE_FILE)),
+			K(zone_page_state(zone, NR_PROTECT_INACTIVE_FILE)),
+#endif
 			K(zone_page_state(zone, NR_ZONE_UNEVICTABLE)),
 			K(zone_page_state(zone, NR_ZONE_WRITE_PENDING)),
 			K(zone->present_pages),
 			K(zone->managed_pages),
 			K(zone_page_state(zone, NR_MLOCK)),
 			zone_page_state(zone, NR_KERNEL_STACK_KB),
+#ifdef CONFIG_SHADOW_CALL_STACK
+			zone_page_state(zone, NR_KERNEL_SCS_BYTES) / 1024,
+#endif
 			K(zone_page_state(zone, NR_PAGETABLE)),
 			K(zone_page_state(zone, NR_BOUNCE)),
+#ifdef CONFIG_ZSMALLOC
+			K(zone_page_state(zone, NR_ZSPAGES)),
+#endif
 			K(free_pcp),
 			K(this_cpu_read(zone->pageset->pcp.count)),
 			K(zone_page_state(zone, NR_FREE_CMA_PAGES)));
@@ -4901,6 +5134,26 @@ static int build_zonerefs_node(pg_data_t *pgdat, struct zoneref *zonerefs)
 
 	return nr_zones;
 }
+
+#ifdef CONFIG_MEMORY_AFFINITY
+static int build_zonerefs_node_affinity(pg_data_t *pgdat,
+					struct zoneref *zonerefs)
+{
+	struct zone *zone;
+	enum zone_type zone_type = 0;
+	int nr_zones = 0;
+
+	do {
+		zone = pgdat->node_zones + zone_type;
+		if (managed_zone(zone)) {
+			zoneref_set_zone(zone, &zonerefs[nr_zones++]);
+			check_highest_zone(zone_type);
+		}
+	} while (++zone_type < MAX_NR_ZONES);
+
+	return nr_zones;
+}
+#endif
 
 #ifdef CONFIG_NUMA
 
@@ -5155,6 +5408,23 @@ static void build_zonelists(pg_data_t *pgdat)
 	zonerefs->zone_idx = 0;
 }
 
+#ifdef CONFIG_MEMORY_AFFINITY
+static void build_affinity_zonelists(pg_data_t *pgdat)
+{
+	int node, local_node;
+	struct zoneref *zonerefs_affinity;
+	int nr_zones_affinity;
+
+	zonerefs_affinity =
+		pgdat->node_zonelists[ZONELIST_AFFINITY]._zonerefs;
+	nr_zones_affinity =
+		build_zonerefs_node_affinity(pgdat, zonerefs_affinity);
+	zonerefs_affinity += nr_zones_affinity;
+
+	zonerefs_affinity->zone = NULL;
+	zonerefs_affinity->zone_idx = 0;
+}
+#endif /* CONFIG_MEMORY_AFFINITY */
 #endif	/* CONFIG_NUMA */
 
 /*
@@ -5195,11 +5465,17 @@ static void __build_all_zonelists(void *data)
 	 */
 	if (self && !node_online(self->node_id)) {
 		build_zonelists(self);
+#ifdef CONFIG_MEMORY_AFFINITY
+		build_affinity_zonelists(self);
+#endif
 	} else {
 		for_each_online_node(nid) {
 			pg_data_t *pgdat = NODE_DATA(nid);
 
 			build_zonelists(pgdat);
+#ifdef CONFIG_MEMORY_AFFINITY
+			build_affinity_zonelists(pgdat);
+#endif
 		}
 
 #ifdef CONFIG_HAVE_MEMORYLESS_NODES
@@ -5282,6 +5558,142 @@ void __ref build_all_zonelists(pg_data_t *pgdat)
 #endif
 }
 
+#ifdef CONFIG_HISI_BOOTMEM_OPTIMIZE
+static void __meminit init_zone_single_pfn(int nid, unsigned long zone,
+		unsigned long pfn)
+{
+	struct page *page = NULL;
+	/*
+	 * Mark the block movable so that blocks are reserved for
+	 * movable at startup. This will force kernel allocations
+	 * to reserve their blocks rather than leaking throughout
+	 * the address space during boot when many long-lived
+	 * kernel allocations are made.
+	 *
+	 * bitmap is created for zone's valid pfn range. but memmap
+	 * can be created for invalid pages (for alignment)
+	 * check here not to call set_pageblock_migratetype() against
+	 * pfn out of zone.
+	 */
+	if (!(pfn & (pageblock_nr_pages - 1))) {
+		page = pfn_to_page(pfn);
+
+		__init_single_page(page, pfn, zone, nid);
+		set_pageblock_migratetype(page, MIGRATE_MOVABLE);
+		cond_resched();
+	} else {
+		__init_single_pfn(pfn, zone, nid);
+	}
+}
+
+static void __meminit early_memmap_init_zone(unsigned long size, int nid,
+		unsigned long zone, unsigned long start_pfn,
+		unsigned long end_pfn)
+{
+	unsigned long pfn, mem_start_pfn, mem_end_pfn;
+	struct memblock_region *tmp = NULL;
+	pg_data_t *pgdat = NODE_DATA(nid);
+	unsigned long nr_initialised = 0;
+
+	for_each_memblock(memory, tmp) {
+
+		if (memblock_is_nomap(tmp))
+			continue;
+
+		mem_end_pfn = memblock_region_memory_end_pfn(tmp);
+		mem_start_pfn = memblock_region_memory_base_pfn(tmp);
+		if (mem_start_pfn >= mem_end_pfn)
+			break;
+		if (mem_end_pfn <= start_pfn)
+			continue;
+		if (mem_start_pfn >= end_pfn)
+			break;
+
+		mem_start_pfn = max(start_pfn, mem_start_pfn);
+		mem_end_pfn = min(end_pfn, mem_end_pfn);
+
+		for (pfn = mem_start_pfn; pfn < mem_end_pfn; ++pfn) {
+			if (!early_pfn_in_nid(pfn, nid))
+				continue;
+#if defined(CONFIG_MEMORY_AFFINITY) && defined(CONFIG_ZONE_DMA)
+			if ((zone == ZONE_DMA) &&
+				!is_affinity_dma_zone_pfn(pfn))
+				continue;
+#endif
+#ifdef CONFIG_ZONE_MEDIA
+			if (pfn_check_next_zone(zone, pfn))
+				continue;
+#endif
+
+			if (!update_defer_init(pgdat, pfn, end_pfn,
+						&nr_initialised))
+				return;
+
+			init_zone_single_pfn(nid, zone, pfn);
+		}
+	}
+}
+
+static void __meminit hotplug_memmap_init_zone(unsigned long size, int nid,
+		unsigned long zone, unsigned long start_pfn,
+		unsigned long end_pfn)
+{
+	unsigned long pfn;
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+#if defined(CONFIG_MEMORY_AFFINITY) && defined(CONFIG_ZONE_DMA)
+		if ((zone == ZONE_DMA) &&
+			!is_affinity_dma_zone_pfn(pfn))
+			continue;
+#endif
+		init_zone_single_pfn(nid, zone, pfn);
+	}
+}
+
+/*
+ * Initially all pages are reserved - free ones are freed
+ * up by free_all_bootmem() once the early boot process is
+ * done. Non-atomic initialization, single-pass.
+ *
+ * In some arch's platform, the hardware register space is placed in [3.5G, 4.0G),
+ * in this situation, the memory placed in there is moved to [31.5G, 32.0G) or some where.
+ * So, if we used the orgin memmap_init_zone, the zone contains [3.5G, 4.0G)
+ * may loop in [start_memory, 32.0G memory), and also, frequently invoke early_pfn_valid.
+ * We notice that cost too much time in nonessential loop and charge pfn.
+ * So, how to optimize it? In early_pfn_valid, it's just invoke pfn_valid, and when
+ * CONFIG_HAVE_ARCH_PFN_VALID is open (it's always open in I known arch),
+ * the pfn_valid it's just used memblock judge it. The logic is like this:
+ * 	the pfn is in memblock's memory type ?
+ * 		Yes -> valid
+ * 		No  -> invalid
+ * So, why not we just loop in memblock's memory type? And just initail memory when the pfn is
+ * in memblock's memory type and also in zone's [start_pfn, end_pfn).
+ * Without this patch, our machine boot in this may cost 300ms. And now, only cost 30ms
+ */
+void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
+		unsigned long start_pfn, enum memmap_context context)
+{
+	struct vmem_altmap *altmap = to_vmem_altmap(__pfn_to_phys(start_pfn));
+	unsigned long end_pfn = start_pfn + size;
+
+	if (highest_memmap_pfn < end_pfn - 1)
+		highest_memmap_pfn = end_pfn - 1;
+
+	/*
+	 * Honor reservation requested by the driver for this ZONE_DEVICE
+	 * memory
+	 */
+	if (altmap && start_pfn == altmap->base_pfn) /*[false alarm]*/
+		start_pfn += altmap->reserve;
+
+	if (context == MEMMAP_EARLY)
+		early_memmap_init_zone(size, nid, zone, start_pfn, end_pfn);
+	else
+		hotplug_memmap_init_zone(size, nid, zone, start_pfn, end_pfn);
+}
+
+#else
+
 /*
  * Initially all pages are reserved - free ones are freed
  * up by free_all_bootmem() once the early boot process is
@@ -5306,7 +5718,7 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 	 * Honor reservation requested by the driver for this ZONE_DEVICE
 	 * memory
 	 */
-	if (altmap && start_pfn == altmap->base_pfn)
+	if (altmap && start_pfn == altmap->base_pfn) /*[false alarm]*/
 		start_pfn += altmap->reserve;
 
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
@@ -5321,6 +5733,16 @@ void __meminit memmap_init_zone(unsigned long size, int nid, unsigned long zone,
 			continue;
 		if (!early_pfn_in_nid(pfn, nid))
 			continue;
+#if defined(CONFIG_MEMORY_AFFINITY) && defined(CONFIG_ZONE_DMA)
+		if ((zone == ZONE_DMA) &&
+			!is_affinity_dma_zone_pfn(pfn))
+			continue;
+#endif
+
+#ifdef CONFIG_ZONE_MEDIA
+		if (pfn_check_next_zone(zone, pfn))
+			continue;
+#endif
 		if (!update_defer_init(pgdat, pfn, end_pfn, &nr_initialised))
 			break;
 
@@ -5370,6 +5792,7 @@ not_early:
 		}
 	}
 }
+#endif
 
 static void __meminit zone_init_free_lists(struct zone *zone)
 {
@@ -5507,7 +5930,7 @@ static void pageset_set_high_and_batch(struct zone *zone,
 	if (percpu_pagelist_fraction)
 		pageset_set_high(pcp,
 			(zone->managed_pages /
-				percpu_pagelist_fraction));
+				percpu_pagelist_fraction)); /*lint !e573*/
 	else
 		pageset_set_batch(pcp, zone_batchsize(zone));
 }
@@ -5523,7 +5946,7 @@ static void __meminit zone_pageset_init(struct zone *zone, int cpu)
 void __meminit setup_zone_pageset(struct zone *zone)
 {
 	int cpu;
-	zone->pageset = alloc_percpu(struct per_cpu_pageset);
+	zone->pageset = alloc_percpu(struct per_cpu_pageset); /*lint !e151*//*lint !e48*/
 	for_each_possible_cpu(cpu)
 		zone_pageset_init(zone, cpu);
 }
@@ -5542,7 +5965,7 @@ void __init setup_per_cpu_pageset(void)
 
 	for_each_online_pgdat(pgdat)
 		pgdat->per_cpu_nodestats =
-			alloc_percpu(struct per_cpu_nodestat);
+			alloc_percpu(struct per_cpu_nodestat); /*lint !e151*//*lint !e48*/
 }
 
 static __meminit void zone_pcp_init(struct zone *zone)
@@ -5747,14 +6170,16 @@ static unsigned long __meminit zone_spanned_pages_in_node(int nid,
 					unsigned long *zone_start_pfn,
 					unsigned long *zone_end_pfn,
 					unsigned long *ignored)
-{
+{ /*lint !e578*/
+	unsigned long zone_low = arch_zone_lowest_possible_pfn[zone_type];
+	unsigned long zone_high = arch_zone_highest_possible_pfn[zone_type];
 	/* When hotadd a new node from cpu_up(), the node should be empty */
 	if (!node_start_pfn && !node_end_pfn)
 		return 0;
 
 	/* Get the start and end of the zone */
-	*zone_start_pfn = arch_zone_lowest_possible_pfn[zone_type];
-	*zone_end_pfn = arch_zone_highest_possible_pfn[zone_type];
+	*zone_start_pfn = clamp(node_start_pfn, zone_low, zone_high);
+	*zone_end_pfn = clamp(node_end_pfn, zone_low, zone_high);
 	adjust_zone_range_for_zone_movable(nid, zone_type,
 				node_start_pfn, node_end_pfn,
 				zone_start_pfn, zone_end_pfn);
@@ -5866,12 +6291,25 @@ static inline unsigned long __meminit zone_spanned_pages_in_node(int nid,
 					unsigned long *zones_size)
 {
 	unsigned int zone;
+	unsigned int zone_start = 0;
 
 	*zone_start_pfn = node_start_pfn;
-	for (zone = 0; zone < zone_type; zone++)
+#if defined(CONFIG_MEMORY_AFFINITY) && defined(CONFIG_ZONE_DMA)
+	zone_start = ZONE_NORMAL;
+	if (zone_type >= ZONE_NORMAL)
+		*zone_start_pfn = affinity_normal_zone_start_pfn();
+#endif
+	for (zone = zone_start; zone < zone_type; zone++)
 		*zone_start_pfn += zones_size[zone];
 
 	*zone_end_pfn = *zone_start_pfn + zones_size[zone_type];
+
+#ifdef CONFIG_ZONE_MEDIA
+	if (zone_type == ZONE_MEDIA) {
+		*zone_start_pfn = cma_min_pfn;
+		*zone_end_pfn = cma_max_pfn;
+	}
+#endif
 
 	return zones_size[zone_type];
 }
@@ -5901,7 +6339,7 @@ static void __meminit calculate_node_totalpages(struct pglist_data *pgdat,
 
 	for (i = 0; i < MAX_NR_ZONES; i++) {
 		struct zone *zone = pgdat->node_zones + i;
-		unsigned long zone_start_pfn, zone_end_pfn;
+		unsigned long zone_start_pfn, zone_end_pfn; /*lint !e578*/
 		unsigned long size, real_size;
 
 		size = zone_spanned_pages_in_node(pgdat->node_id, i,
@@ -5946,7 +6384,7 @@ static unsigned long __init usemap_size(unsigned long zone_start_pfn, unsigned l
 	usemapsize = roundup(zonesize, pageblock_nr_pages);
 	usemapsize = usemapsize >> pageblock_order;
 	usemapsize *= NR_PAGEBLOCK_BITS;
-	usemapsize = roundup(usemapsize, 8 * sizeof(unsigned long));
+	usemapsize = roundup(usemapsize, 8 * sizeof(unsigned long)); /*lint !e665*/
 
 	return usemapsize / 8;
 }
@@ -6053,6 +6491,9 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat)
 	init_waitqueue_head(&pgdat->pfmemalloc_wait);
 #ifdef CONFIG_COMPACTION
 	init_waitqueue_head(&pgdat->kcompactd_wait);
+#endif
+#ifdef CONFIG_HYPERHOLD_ZSWAPD
+	init_waitqueue_head(&pgdat->zswapd_wait);
 #endif
 	pgdat_page_ext_init(pgdat);
 	spin_lock_init(&pgdat->lru_lock);
@@ -6201,7 +6642,9 @@ void __paginginit free_area_init_node(int nid, unsigned long *zones_size,
 		nid, (unsigned long)pgdat,
 		(unsigned long)pgdat->node_mem_map);
 #endif
-
+#ifdef CONFIG_HISI_PAGE_TRACE
+	buddy_track_map(0);
+#endif
 	reset_deferred_meminit(pgdat);
 	free_area_init_core(pgdat);
 }
@@ -6719,7 +7162,7 @@ void free_highmem_page(struct page *page)
 }
 #endif
 
-
+/*lint -e87 -e436*/
 void __init mem_init_print_info(const char *str)
 {
 	unsigned long physpages, codesize, datasize, rosize, bss_size;
@@ -6756,9 +7199,9 @@ void __init mem_init_print_info(const char *str)
 #undef	adj_init_size
 
 	pr_info("Memory: %luK/%luK available (%luK kernel code, %luK rwdata, %luK rodata, %luK init, %luK bss, %luK reserved, %luK cma-reserved"
-#ifdef	CONFIG_HIGHMEM
+#ifdef	CONFIG_HIGHMEM /*lint !e436*/
 		", %luK highmem"
-#endif
+#endif  /*lint !e436*/
 		"%s%s)\n",
 		nr_free_pages() << (PAGE_SHIFT - 10),
 		physpages << (PAGE_SHIFT - 10),
@@ -6766,12 +7209,12 @@ void __init mem_init_print_info(const char *str)
 		(init_data_size + init_code_size) >> 10, bss_size >> 10,
 		(physpages - totalram_pages - totalcma_pages) << (PAGE_SHIFT - 10),
 		totalcma_pages << (PAGE_SHIFT - 10),
-#ifdef	CONFIG_HIGHMEM
+#ifdef	CONFIG_HIGHMEM  /*lint !e436*/
 		totalhigh_pages << (PAGE_SHIFT - 10),
-#endif
+#endif  /*lint !e436*/
 		str ? ", " : "", str ? str : "");
 }
-
+/*lint +e87 +e436*/
 /**
  * set_dma_reserve - set the specified number of pages reserved in the first zone
  * @new_dma_reserve: The number of pages to mark reserved
@@ -6856,7 +7299,7 @@ static void calculate_totalreserve_pages(void)
 			/* we treat the high watermark as reserved pages. */
 			max += high_wmark_pages(zone);
 
-			if (max > zone->managed_pages)
+			if (max > zone->managed_pages) /*lint !e574*/
 				max = zone->managed_pages;
 
 			pgdat->totalreserve_pages += max;
@@ -6896,7 +7339,7 @@ static void setup_per_zone_lowmem_reserve(void)
 
 				lower_zone = pgdat->node_zones + idx;
 				lower_zone->lowmem_reserve[j] = managed_pages /
-					sysctl_lowmem_reserve_ratio[idx];
+					sysctl_lowmem_reserve_ratio[idx]; /*lint !e573*/
 				managed_pages += lower_zone->managed_pages;
 			}
 		}
@@ -6925,7 +7368,7 @@ static void __setup_per_zone_wmarks(void)
 
 		spin_lock_irqsave(&zone->lock, flags);
 		min = (u64)pages_min * zone->managed_pages;
-		do_div(min, lowmem_pages);
+		do_div(min, lowmem_pages); /*lint !e414*/
 		low = (u64)pages_low * zone->managed_pages;
 		do_div(low, vm_total_pages);
 
@@ -6942,7 +7385,7 @@ static void __setup_per_zone_wmarks(void)
 			unsigned long min_pages;
 
 			min_pages = zone->managed_pages / 1024;
-			min_pages = clamp(min_pages, SWAP_CLUSTER_MAX, 128UL);
+			min_pages = clamp(min_pages, SWAP_CLUSTER_MAX, 128UL); /*lint !e666*/
 			zone->watermark[WMARK_MIN] = min_pages;
 		} else {
 			/*
@@ -7042,7 +7485,7 @@ int __meminit init_per_zone_wmark_min(void)
 
 	return 0;
 }
-core_initcall(init_per_zone_wmark_min)
+postcore_initcall(init_per_zone_wmark_min)
 
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so
@@ -7188,7 +7631,7 @@ int percpu_pagelist_fraction_sysctl_handler(struct ctl_table *table, int write,
 	for_each_populated_zone(zone) {
 		unsigned int cpu;
 
-		for_each_possible_cpu(cpu)
+		for_each_possible_cpu(cpu) /*lint !e570*//*lint !e574*/
 			pageset_set_high_and_batch(zone,
 					per_cpu_ptr(zone->pageset, cpu));
 	}
@@ -7388,7 +7831,7 @@ bool has_unmovable_pages(struct zone *zone, struct page *page, int count,
 		 * handle each tail page individually in migration.
 		 */
 		if (PageHuge(page)) {
-			iter = round_up(iter + 1, 1<<compound_order(page)) - 1;
+			iter = round_up(iter + 1, 1<<compound_order(page)) - 1; /*lint !e647*/
 			continue;
 		}
 
@@ -7400,7 +7843,7 @@ bool has_unmovable_pages(struct zone *zone, struct page *page, int count,
 		 */
 		if (!page_ref_count(page)) {
 			if (PageBuddy(page))
-				iter += (1 << page_order(page)) - 1;
+				iter += (1 << page_order(page)) - 1; /*lint !e647*/
 			continue;
 		}
 
@@ -7429,7 +7872,7 @@ bool has_unmovable_pages(struct zone *zone, struct page *page, int count,
 		 * is set to both of a memory hole page and a _used_ kernel
 		 * page at boot.
 		 */
-		if (found > count)
+		if (found > count) /*lint !e574*/
 			return true;
 	}
 	return false;
@@ -7481,9 +7924,17 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 	unsigned long pfn = start;
 	unsigned int tries = 0;
 	int ret = 0;
+#ifdef CONFIG_HISI_CMA_DEBUG
+	ktime_t stime;
+	ktime_t loop_stime;
+#endif
 
 	migrate_prep();
 
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime_with_log_loop(&stime,
+					     LOOP_TRACE_MIGRARE_RANGE_NUM);
+#endif
 	while (pfn < end || !list_empty(&cc->migratepages)) {
 		if (fatal_signal_pending(current)) {
 			ret = -EINTR;
@@ -7492,7 +7943,16 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 
 		if (list_empty(&cc->migratepages)) {
 			cc->nr_migratepages = 0;
+#ifdef CONFIG_HISI_CMA_DEBUG
+			cma_record_alloc_stime_trace_loop(&loop_stime);
+#endif
 			pfn = isolate_migratepages_range(cc, pfn, end);
+#ifdef CONFIG_HISI_CMA_DEBUG
+			cma_record_alloc_etime_trace_loop(
+				loop_stime,
+				LOOP_TRACE_ISOLATE_MIGRATE_RANGE_POS,
+				ISOLATE_MIGRATE_RANGE_LOOP);
+#endif
 			if (!pfn) {
 				ret = -EINTR;
 				break;
@@ -7502,14 +7962,38 @@ static int __alloc_contig_migrate_range(struct compact_control *cc,
 			ret = ret < 0 ? ret : -EBUSY;
 			break;
 		}
-
+#ifdef CONFIG_HISI_CMA_DEBUG
+		cma_record_alloc_stime_trace_loop(&loop_stime);
+#endif
 		nr_reclaimed = reclaim_clean_pages_from_list(cc->zone,
 							&cc->migratepages);
+#ifdef CONFIG_HISI_CMA_DEBUG
+		cma_record_alloc_etime_trace_loop(
+			loop_stime, LOOP_TRACE_RECLEAM_CLEAN_PAGES_POS,
+			RECLEAM_CLEAN_PAGES_FROM_LIST_LOOP);
+#endif
+
+#ifdef CONFIG_ISOLATE_COUNT
+		mod_node_page_state(cc->zone->zone_pgdat, NR_ISOLATED_ANON,
+				-nr_reclaimed);
+#endif
 		cc->nr_migratepages -= nr_reclaimed;
 
+#ifdef CONFIG_HISI_CMA_DEBUG
+		cma_record_alloc_stime_trace_loop(&loop_stime);
+#endif
 		ret = migrate_pages(&cc->migratepages, alloc_migrate_target,
 				    NULL, 0, cc->mode, MR_CMA);
+#ifdef CONFIG_HISI_CMA_DEBUG
+		cma_record_alloc_etime_trace_loop(loop_stime,
+						  LOOP_TRACE_MIGRATE_PAGES_POS,
+						  MIGRATE_PAGES_LOOP);
+#endif
 	}
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_log_loop(stime, MIGRATE_RANGE_PATH);
+#endif
+
 	if (ret < 0) {
 		putback_movable_pages(&cc->migratepages);
 		return ret;
@@ -7544,11 +8028,14 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	unsigned long outer_start, outer_end;
 	unsigned int order;
 	int ret = 0;
+#ifdef CONFIG_HISI_CMA_DEBUG
+	ktime_t time_start;
+#endif
 
 	struct compact_control cc = {
 		.nr_migratepages = 0,
 		.order = -1,
-		.zone = page_zone(pfn_to_page(start)),
+		.zone = page_zone(pfn_to_page(start)), /*lint !e446*/
 		.mode = MIGRATE_SYNC,
 		.ignore_skip_hint = true,
 		.gfp_mask = current_gfp_context(gfp_mask),
@@ -7578,10 +8065,15 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	 * aligned range but not in the unaligned, original range are
 	 * put back to page allocator so that buddy can use them.
 	 */
-
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&time_start);
+#endif
 	ret = start_isolate_page_range(pfn_max_align_down(start),
 				       pfn_max_align_up(end), migratetype,
 				       false);
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_func(time_start, start_isolate_page_range);
+#endif
 	if (ret)
 		return ret;
 
@@ -7595,10 +8087,17 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	 * allocated.  So, if we fall through be sure to clear ret so that
 	 * -EBUSY is not accidentally used or returned to caller.
 	 */
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&time_start);
+#endif
 	ret = __alloc_contig_migrate_range(&cc, start, end);
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_func(time_start,
+					 __alloc_contig_migrate_range);
+#endif
 	if (ret && ret != -EBUSY)
 		goto done;
-	ret =0;
+	ret = 0;
 
 	/*
 	 * Pages from [start, end) are within a MAX_ORDER_NR_PAGES
@@ -7616,8 +8115,13 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	 * We don't have to hold zone->lock here because the pages are
 	 * isolated thus they won't get removed from buddy.
 	 */
-
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&time_start);
+#endif
 	lru_add_drain_all();
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_func(time_start, lru_add_drain_all);
+#endif
 	drain_all_pages(cc.zone);
 
 	order = 0;
@@ -7644,15 +8148,32 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	}
 
 	/* Make sure the range is really isolated. */
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&time_start);
+#endif
 	if (test_pages_isolated(outer_start, end, false)) {
 		pr_info_ratelimited("%s: [%lx, %lx) PFNs busy\n",
 			__func__, outer_start, end);
 		ret = -EBUSY;
+#ifdef CONFIG_HISI_CMA_DEBUG
+		cma_record_alloc_etime_with_func(time_start,
+						 test_pages_isolated);
+		dump_cma_multi_pfn(outer_start, end);
+#endif
 		goto done;
 	}
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_func(time_start, test_pages_isolated);
+#endif
 
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&time_start);
+#endif
 	/* Grab isolated pages from freelists. */
 	outer_end = isolate_freepages_range(&cc, outer_start, end);
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_func(time_start, isolate_freepages_range);
+#endif
 	if (!outer_end) {
 		ret = -EBUSY;
 		goto done;
@@ -7665,8 +8186,14 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 		free_contig_range(end, outer_end - end);
 
 done:
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&time_start);
+#endif
 	undo_isolate_page_range(pfn_max_align_down(start),
 				pfn_max_align_up(end), migratetype);
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_func(time_start, undo_isolate_page_range);
+#endif
 	return ret;
 }
 
@@ -7674,10 +8201,12 @@ void free_contig_range(unsigned long pfn, unsigned nr_pages)
 {
 	unsigned int count = 0;
 
-	for (; nr_pages--; pfn++) {
+	for (; nr_pages--; pfn++) { /*lint !e441*/
 		struct page *page = pfn_to_page(pfn);
+		if(!pfn_valid(pfn))
+			continue;
 
-		count += page_count(page) != 1;
+		count += page_count(page) != 1; /*lint !e514*/
 		__free_page(page);
 	}
 	WARN(count != 0, "%d pages are still in use!\n", count);
@@ -7785,7 +8314,7 @@ bool is_free_buddy_page(struct page *page)
 
 	spin_lock_irqsave(&zone->lock, flags);
 	for (order = 0; order < MAX_ORDER; order++) {
-		struct page *page_head = page - (pfn & ((1 << order) - 1));
+		struct page *page_head = page - (pfn & ((1 << order) - 1)); /*lint !e647*/
 
 		if (PageBuddy(page_head) && page_order(page_head) >= order)
 			break;
@@ -7793,4 +8322,14 @@ bool is_free_buddy_page(struct page *page)
 	spin_unlock_irqrestore(&zone->lock, flags);
 
 	return order < MAX_ORDER;
+}
+
+bool page_is_cma(struct page *page)
+{
+	int migratetype = get_pfnblock_migratetype(page, page_to_pfn(page));
+
+	if (migratetype == MIGRATE_CMA || migratetype == MIGRATE_ISOLATE)
+		return true;
+	else
+		return false;
 }

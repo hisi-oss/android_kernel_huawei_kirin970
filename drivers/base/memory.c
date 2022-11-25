@@ -517,19 +517,53 @@ memory_probe_store(struct device *dev, struct device_attribute *attr,
 	if (phys_addr & ((pages_per_block << PAGE_SHIFT) - 1))
 		return -EINVAL;
 
+	ret = lock_device_hotplug_sysfs();
+	if (ret)
+		goto out;
+
 	nid = memory_add_physaddr_to_nid(phys_addr);
-	ret = add_memory(nid, phys_addr,
-			 MIN_MEMORY_BLOCK_SIZE * sections_per_block);
+	ret = __add_memory(nid, phys_addr,
+			   MIN_MEMORY_BLOCK_SIZE * sections_per_block);
 
 	if (ret)
 		goto out;
 
 	ret = count;
 out:
+	unlock_device_hotplug();
 	return ret;
 }
 
 static DEVICE_ATTR(probe, S_IWUSR, NULL, memory_probe_store);
+
+#ifdef CONFIG_MEMORY_HOTREMOVE
+static ssize_t
+memory_remove_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	u64 phys_addr;
+	int nid, ret;
+	unsigned long pages_per_block = PAGES_PER_SECTION * sections_per_block;
+
+	ret = kstrtoull(buf, 0, &phys_addr);
+	if (ret)
+		return ret;
+
+	if (phys_addr & ((pages_per_block << PAGE_SHIFT) - 1))
+		return -EINVAL;
+
+	nid = memory_add_physaddr_to_nid(phys_addr);
+	ret = lock_device_hotplug_sysfs();
+	if (ret)
+		return ret;
+
+	remove_memory(nid, phys_addr,
+			 MIN_MEMORY_BLOCK_SIZE * sections_per_block);
+	unlock_device_hotplug();
+	return count;
+}
+static DEVICE_ATTR(remove, S_IWUSR, NULL, memory_remove_store);
+#endif /* CONFIG_MEMORY_HOTREMOVE */
 #endif
 
 #ifdef CONFIG_MEMORY_FAILURE
@@ -790,6 +824,9 @@ bool is_memblock_offlined(struct memory_block *mem)
 static struct attribute *memory_root_attrs[] = {
 #ifdef CONFIG_ARCH_MEMORY_PROBE
 	&dev_attr_probe.attr,
+#ifdef CONFIG_MEMORY_HOTREMOVE
+	&dev_attr_remove.attr,
+#endif
 #endif
 
 #ifdef CONFIG_MEMORY_FAILURE

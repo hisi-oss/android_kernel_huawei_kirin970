@@ -2,6 +2,11 @@
 #
 # Makefile for RTC class/drivers.
 #
+ifdef HISI_RTC_SYNC_TIMER
+ccflags-y     += -I$(srctree)/drivers/huawei_platform/sensor/ext_inputhub/default/
+ccflags-y     += -DHISI_RTC_SYNC_TIMER
+ccflags-y     += -I$(srctree)/drivers/huawei_platform/sensor/ext_inputhub/timesync/
+endif
 
 ccflags-$(CONFIG_RTC_DEBUG)	:= -DDEBUG
 
@@ -173,3 +178,6 @@ obj-$(CONFIG_RTC_DRV_X1205)	+= rtc-x1205.o
 obj-$(CONFIG_RTC_DRV_XGENE)	+= rtc-xgene.o
 obj-$(CONFIG_RTC_DRV_ZYNQMP)	+= rtc-zynqmp.o
 obj-$(CONFIG_RTC_DRV_GOLDFISH)	+= rtc-goldfish.o
+obj-$(CONFIG_RTC_DRV_HISI_PMIC)	+= rtc-hisi-pmic.o
+obj-$(CONFIG_RTC_DRV_HISI_PMIC_SPMI)	+= rtc_hisi_pmic_spmi.o
+

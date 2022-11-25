@@ -43,7 +43,16 @@ const u32 sha256_ce_offsetof_count = offsetof(struct sha256_ce_state,
 const u32 sha256_ce_offsetof_finalize = offsetof(struct sha256_ce_state,
 						 finalize);
 
-asmlinkage void sha256_block_data_order(u32 *digest, u8 const *src, int blocks);
+asmlinkage void sha256_block_data_order(u32 *digest, const u8 *src, int blocks);
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __sha256_block_data_order(struct sha256_state *digest,
+					     const u8 *src, int blocks)
+{
+	sha256_block_data_order((u32 *)digest, src, blocks);
+}
+#define sha256_block_data_order __sha256_block_data_order
+#endif
 
 static int sha256_ce_update(struct shash_desc *desc, const u8 *data,
 			    unsigned int len)
@@ -67,7 +76,7 @@ static int sha256_ce_finup(struct shash_desc *desc, const u8 *data,
 			   unsigned int len, u8 *out)
 {
 	struct sha256_ce_state *sctx = shash_desc_ctx(desc);
-	bool finalize = !sctx->sst.count && !(len % SHA256_BLOCK_SIZE);
+	bool finalize = !sctx->sst.count && !(len % SHA256_BLOCK_SIZE) && len;
 
 	if (!may_use_simd()) {
 		if (len)

@@ -848,6 +848,9 @@ static int bdi_init(struct backing_dev_info *bdi)
 	init_waitqueue_head(&bdi->wb_waitq);
 
 	ret = cgwb_bdi_init(bdi);
+#ifdef CONFIG_MAS_BLK
+	bdi->queue = NULL;
+#endif
 
 	return ret;
 }

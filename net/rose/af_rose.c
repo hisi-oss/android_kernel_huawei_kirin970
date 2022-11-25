@@ -318,11 +318,9 @@ void rose_destroy_socket(struct sock *);
 /*
  *	Handler for deferred kills.
  */
-static void rose_destroy_timer(struct timer_list *t)
+static void rose_destroy_timer(unsigned long data)
 {
-	struct sock *sk = from_timer(sk, t, sk_timer);
-
-	rose_destroy_socket(sk);
+	rose_destroy_socket((struct sock *)data);
 }
 
 /*
@@ -355,7 +353,8 @@ void rose_destroy_socket(struct sock *sk)
 
 	if (sk_has_allocations(sk)) {
 		/* Defer: outstanding buffers */
-		timer_setup(&sk->sk_timer, rose_destroy_timer, 0);
+		setup_timer(&sk->sk_timer, rose_destroy_timer,
+				(unsigned long)sk);
 		sk->sk_timer.expires  = jiffies + 10 * HZ;
 		add_timer(&sk->sk_timer);
 	} else
@@ -539,8 +538,8 @@ static int rose_create(struct net *net, struct socket *sock, int protocol,
 	sock->ops    = &rose_proto_ops;
 	sk->sk_protocol = protocol;
 
-	timer_setup(&rose->timer, NULL, 0);
-	timer_setup(&rose->idletimer, NULL, 0);
+	init_timer(&rose->timer);
+	init_timer(&rose->idletimer);
 
 	rose->t1   = msecs_to_jiffies(sysctl_rose_call_request_timeout);
 	rose->t2   = msecs_to_jiffies(sysctl_rose_reset_request_timeout);
@@ -583,8 +582,8 @@ static struct sock *rose_make_new(struct sock *osk)
 	sk->sk_state    = TCP_ESTABLISHED;
 	sock_copy_flags(sk, osk);
 
-	timer_setup(&rose->timer, NULL, 0);
-	timer_setup(&rose->idletimer, NULL, 0);
+	init_timer(&rose->timer);
+	init_timer(&rose->idletimer);
 
 	orose		= rose_sk(osk);
 	rose->t1	= orose->t1;

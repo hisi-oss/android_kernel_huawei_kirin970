@@ -12,6 +12,32 @@
 
 #include <linux/device.h>
 #include <linux/mod_devicetable.h>
+#ifdef CONFIG_ZODIAC_MMC_MANUAL_BKOPS
+#include <linux/mas_bkops_core.h>
+#endif
+#ifdef CONFIG_HUAWEI_EMMC_DSM
+#define EXT_CSD_PRE_EOL_INFO_NORMAL     0x01
+#define EXT_CSD_PRE_EOL_INFO_WARNING     0x02
+#define EXT_CSD_PRE_EOL_INFO_URGENT     0x03
+#endif
+
+#define MMC_CARD_CMDQ_BLK_SIZE 512
+#define RDR_MODID_MMC_COLDBOOT      0x81ffff02
+
+/* Card states */
+#define MMC_STATE_PRESENT	(1<<0)		/* present in sysfs */
+#define MMC_STATE_READONLY	(1<<1)		/* card is read-only */
+#define MMC_STATE_BLOCKADDR	(1<<2)		/* card uses block-addressing */
+#define MMC_CARD_SDXC		(1<<3)		/* card is SDXC */
+#define MMC_CARD_REMOVED	(1<<4)		/* card has been removed */
+#define MMC_STATE_DOING_BKOPS	(1<<5)		/* card is doing BKOPS */
+#define MMC_STATE_SUSPENDED	(1<<6)		/* card is suspended */
+#define MMC_STATE_CMDQ		(1<<7)         /* card is in cmd queue mode */
+#ifdef CONFIG_MMC_PASSWORDS
+#define MMC_STATE_LOCKED	(1<<12)		/* card is currently locked */
+#define MMC_STATE_ENCRYPT	(1<<13)		/* card is currently encrypt */
+#endif
+#define MMC_STATE_ULTRAHIGHSPEED (1<<14)	/* card is in ultra high speed mode */
 
 struct mmc_cid {
 	unsigned int		manfid;
@@ -45,6 +71,10 @@ struct mmc_csd {
 				dsr_imp:1;
 };
 
+#define EXT_CSD_PRE_EOL_INFO_NORMAL     0x01
+#define EXT_CSD_PRE_EOL_INFO_WARNING     0x02
+#define EXT_CSD_PRE_EOL_INFO_URGENT     0x03
+
 struct mmc_ext_csd {
 	u8			rev;
 	u8			erase_group_def;
@@ -62,6 +92,7 @@ struct mmc_ext_csd {
 	unsigned int		generic_cmd6_time;	/* Units: 10ms */
 	unsigned int            power_off_longtime;     /* Units: ms */
 	u8			power_off_notification;	/* state */
+	unsigned int		sleep_notification_time;/* Units: ms */
 	unsigned int		hs_max_dtr;
 	unsigned int		hs200_max_dtr;
 #define MMC_HIGH_26_MAX_DTR	26000000
@@ -95,18 +126,25 @@ struct mmc_ext_csd {
 #define MMC_FIRMWARE_LEN 8
 	u8			fwrev[MMC_FIRMWARE_LEN];  /* FW version */
 	u8			raw_exception_status;	/* 54 */
+	u8			raw_vendor_feature_support;	/* 124 */
 	u8			raw_partition_support;	/* 160 */
+	u8			raw_wr_rel_param;/* 166 */
 	u8			raw_rpmb_size_mult;	/* 168 */
+	u8			raw_rpmb_region1_size_mult;	/* 180 */
 	u8			raw_erased_mem_count;	/* 181 */
+	u8			raw_rpmb_region2_size_mult;	/* 182 */
 	u8			strobe_support;		/* 184 */
+	u8			raw_rpmb_region3_size_mult;	/* 186 */
+	u8			raw_rpmb_region4_size_mult;	/* 188 */
 	u8			raw_ext_csd_structure;	/* 194 */
 	u8			raw_card_type;		/* 196 */
-	u8			raw_driver_strength;	/* 197 */
-	u8			out_of_int_time;	/* 198 */
+	u8			raw_driver_strength;		/* 197 */
+	u16			out_of_int_time;	/* 198 */
 	u8			raw_pwr_cl_52_195;	/* 200 */
 	u8			raw_pwr_cl_26_195;	/* 201 */
 	u8			raw_pwr_cl_52_360;	/* 202 */
 	u8			raw_pwr_cl_26_360;	/* 203 */
+	u8			raw_sleep_noti_time;	/* 216 */
 	u8			raw_s_a_timeout;	/* 217 */
 	u8			raw_hc_erase_gap_size;	/* 221 */
 	u8			raw_erase_timeout_mult;	/* 223 */
@@ -125,7 +163,14 @@ struct mmc_ext_csd {
 	u8			pre_eol_info;		/* 267 */
 	u8			device_life_time_est_typ_a;	/* 268 */
 	u8			device_life_time_est_typ_b;	/* 269 */
-
+	u8			cmdq_mode_en;			/* 15 */
+	u8			strobe_enhanced;			/* 184 enhanced strobe support */
+	u8			strobe_enhanced_en;
+	u8			cache_flush_barrier;		/* 486 barrier support */
+	u8			cache_flush_barrier_en;	/* barrier enable */
+	u8			cache_flush_policy;		/* 240 */
+	u8			bkops_auto_en;			/* 163 bit(1) background op auto enable */
+	u8			partition_config;		/* 179 partition config */
 	unsigned int            feature_support;
 #define MMC_DISCARD_FEATURE	BIT(0)                  /* CMD38 feature */
 };
@@ -145,6 +190,7 @@ struct sd_ssr {
 	unsigned int		au;			/* In sectors */
 	unsigned int		erase_timeout;		/* In milliseconds */
 	unsigned int		erase_offset;		/* In milliseconds */
+	unsigned int		speed_class;
 };
 
 struct sd_switch_caps {
@@ -226,7 +272,7 @@ struct mmc_queue_req;
  * MMC Physical partitions
  */
 struct mmc_part {
-	unsigned int	size;	/* partition size (in bytes) */
+	u64		size;	/* partition size (in bytes) */
 	unsigned int	part_cfg;	/* partition type */
 	char	name[MAX_MMC_PART_NAME_LEN];
 	bool	force_ro;	/* to make boot parts RO by default */
@@ -272,10 +318,10 @@ struct mmc_card {
 	bool			reenable_cmdq;	/* Re-enable Command Queue */
 
 	unsigned int		erase_size;	/* erase size in sectors */
- 	unsigned int		erase_shift;	/* if erase unit is power 2 */
- 	unsigned int		pref_erase;	/* in sectors */
+	unsigned int		erase_shift;	/* if erase unit is power 2 */
+	unsigned int		pref_erase;	/* in sectors */
 	unsigned int		eg_boundary;	/* don't cross erase-group boundaries */
- 	u8			erased_byte;	/* value of erased bytes */
+	u8			erased_byte;	/* value of erased bytes */
 
 	u32			raw_cid[4];	/* raw card CID */
 	u32			raw_csd[4];	/* raw card CSD */
@@ -287,6 +333,12 @@ struct mmc_card {
 	struct sd_scr		scr;		/* extra SD information */
 	struct sd_ssr		ssr;		/* yet more SD information */
 	struct sd_switch_caps	sw_caps;	/* switch (CMD6) caps */
+#ifdef CONFIG_MMC_PASSWORDS
+#define MAX_UNLOCK_PASSWORD_WITH_BUF 20    	/* 1(len) + max_pwd(16) + 0xFF 0xFF + 0 = 20 */
+	bool swith_voltage; 			/* whether sdcard voltage swith to 1.8v  */
+	bool auto_unlock;
+	u8 unlock_pwd[MAX_UNLOCK_PASSWORD_WITH_BUF];
+#endif
 
 	unsigned int		sdio_funcs;	/* number of SDIO functions */
 	struct sdio_cccr	cccr;		/* common card info */
@@ -304,8 +356,17 @@ struct mmc_card {
 	struct dentry		*debugfs_root;
 	struct mmc_part	part[MMC_NUM_PHY_PARTITION]; /* physical partitions */
 	unsigned int    nr_parts;
-
+	bool                    cmdq_init; /* cmdq init done */
+	struct dentry *debugfs_sdxc;
+	struct blk_queue_tag *mmc_tags;
+	int mmc_tags_depth;
+#ifdef CONFIG_HUAWEI_EMMC_DSM
+	u8 *cached_ext_csd;
+#endif
 	unsigned int		bouncesz;	/* Bounce buffer size */
+#ifdef CONFIG_ZODIAC_MMC_MANUAL_BKOPS
+	struct mas_bkops *mmc_bkops;
+#endif
 };
 
 static inline bool mmc_large_sector(struct mmc_card *card)
@@ -318,5 +379,6 @@ bool mmc_card_is_blockaddr(struct mmc_card *card);
 #define mmc_card_mmc(c)		((c)->type == MMC_TYPE_MMC)
 #define mmc_card_sd(c)		((c)->type == MMC_TYPE_SD)
 #define mmc_card_sdio(c)	((c)->type == MMC_TYPE_SDIO)
+#define mmc_card_cmdq(c)		((c)->state & MMC_STATE_CMDQ)
 
 #endif /* LINUX_MMC_CARD_H */

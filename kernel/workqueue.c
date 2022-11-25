@@ -52,6 +52,14 @@
 
 #include "workqueue_internal.h"
 
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/rdr_hisi_ap_hook.h>
+#endif
+
+#ifdef CONFIG_HUAWEI_DUBAI
+#include <chipset_common/dubai/dubai.h>
+#endif
+
 enum {
 	/*
 	 * worker_pool flags
@@ -1406,14 +1414,16 @@ static void __queue_work(int cpu, struct workqueue_struct *wq,
 	    WARN_ON_ONCE(!is_chained_work(wq)))
 		return;
 retry:
-	if (req_cpu == WORK_CPU_UNBOUND)
-		cpu = wq_select_unbound_cpu(raw_smp_processor_id());
-
 	/* pwq which will be used unless @work is executing elsewhere */
-	if (!(wq->flags & WQ_UNBOUND))
-		pwq = per_cpu_ptr(wq->cpu_pwqs, cpu);
-	else
+	if (wq->flags & WQ_UNBOUND) {
+		if (req_cpu == WORK_CPU_UNBOUND)
+			cpu = wq_select_unbound_cpu(raw_smp_processor_id());
 		pwq = unbound_pwq_by_node(wq, cpu_to_node(cpu));
+	} else {
+		if (req_cpu == WORK_CPU_UNBOUND)
+			cpu = raw_smp_processor_id();
+		pwq = per_cpu_ptr(wq->cpu_pwqs, cpu);
+	}
 
 	/*
 	 * If @work was previously on a different pool, it might still be
@@ -1529,9 +1539,11 @@ static void __queue_delayed_work(int cpu, struct workqueue_struct *wq,
 	struct timer_list *timer = &dwork->timer;
 	struct work_struct *work = &dwork->work;
 
-	WARN_ON_ONCE(!wq);
-	WARN_ON_ONCE(timer->function != delayed_work_timer_fn ||
-		     timer->data != (unsigned long)dwork);
+	WARN_ON(!wq);
+#ifndef CONFIG_CFI_CLANG
+	WARN_ON_ONCE(timer->function != delayed_work_timer_fn);
+#endif
+	WARN_ON_ONCE(timer->data != (unsigned long)dwork);
 	WARN_ON_ONCE(timer_pending(timer));
 	WARN_ON_ONCE(!list_empty(&work->entry));
 
@@ -1803,6 +1815,11 @@ static struct worker *create_worker(struct worker_pool *pool)
 		goto fail;
 
 	set_user_nice(worker->task, pool->attrs->nice);
+#if defined (CONFIG_HW_VIP_THREAD) && defined (CONFIG_HW_VIP_KWORKER)
+	/* the number of cpu cores should be greater than 2 */
+	if (pool->attrs->nice == HIGHPRI_NICE_LEVEL && worker->task->nr_cpus_allowed > 2)
+		worker->task->static_vip = 1;
+#endif
 	kthread_bind_mask(worker->task, pool->attrs->cpumask);
 
 	/* successful, attach the worker to the pool */
@@ -2039,6 +2056,10 @@ __acquires(&pool->lock)
 	bool cpu_intensive = pwq->wq->flags & WQ_CPU_INTENSIVE;
 	int work_color;
 	struct worker *collision;
+#ifdef CONFIG_HUAWEI_DUBAI
+	u64 uptime;
+#endif
+
 #ifdef CONFIG_LOCKDEP
 	/*
 	 * It is permissible to free the struct work_struct from
@@ -2131,7 +2152,20 @@ __acquires(&pool->lock)
 	 */
 	lockdep_invariant_state(true);
 	trace_workqueue_execute_start(work);
+
+#ifdef CONFIG_HUAWEI_DUBAI
+	uptime = ktime_get_ns();
+#endif
+#ifdef CONFIG_HISI_BB
+	worker_hook((u64)(worker->current_func), 0);
+#endif
 	worker->current_func(work);
+#ifdef CONFIG_HISI_BB
+	worker_hook((u64)(worker->current_func), 1);
+#endif
+#ifdef CONFIG_HUAWEI_DUBAI
+	dubai_log_kworker((unsigned long)(worker->current_func), uptime);
+#endif
 	/*
 	 * While we must be careful to not use "work" after this, the trace
 	 * point will only record its address.
@@ -2389,8 +2423,14 @@ repeat:
 			 */
 			if (need_to_create_worker(pool)) {
 				spin_lock(&wq_mayday_lock);
-				get_pwq(pwq);
-				list_move_tail(&pwq->mayday_node, &wq->maydays);
+				/*
+				 * Queue iff we aren't racing destruction
+				 * and somebody else hasn't queued it already.
+				 */
+				if (wq->rescuer && list_empty(&pwq->mayday_node)) {
+					get_pwq(pwq);
+					list_add_tail(&pwq->mayday_node, &wq->maydays);
+				}
 				spin_unlock(&wq_mayday_lock);
 			}
 		}
@@ -3979,6 +4019,37 @@ static int wq_clamp_max_active(int max_active, unsigned int flags,
 	return clamp_val(max_active, 1, lim);
 }
 
+/*
+ * Workqueues which may be used during memory reclaim should have a rescuer
+ * to guarantee forward progress.
+ */
+static int init_rescuer(struct workqueue_struct *wq)
+{
+	struct worker *rescuer;
+	int ret;
+
+	if (!(wq->flags & WQ_MEM_RECLAIM))
+		return 0;
+
+	rescuer = alloc_worker(NUMA_NO_NODE);
+	if (!rescuer)
+		return -ENOMEM;
+
+	rescuer->rescue_wq = wq;
+	rescuer->task = kthread_create(rescuer_thread, rescuer, "%s", wq->name);
+	ret = PTR_ERR_OR_ZERO(rescuer->task);
+	if (ret) {
+		kfree(rescuer);
+		return ret;
+	}
+
+	wq->rescuer = rescuer;
+	kthread_bind_mask(rescuer->task, cpu_possible_mask);
+	wake_up_process(rescuer->task);
+
+	return 0;
+}
+
 struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 					       unsigned int flags,
 					       int max_active,
@@ -4041,29 +4112,8 @@ struct workqueue_struct *__alloc_workqueue_key(const char *fmt,
 	if (alloc_and_link_pwqs(wq) < 0)
 		goto err_free_wq;
 
-	/*
-	 * Workqueues which may be used during memory reclaim should
-	 * have a rescuer to guarantee forward progress.
-	 */
-	if (flags & WQ_MEM_RECLAIM) {
-		struct worker *rescuer;
-
-		rescuer = alloc_worker(NUMA_NO_NODE);
-		if (!rescuer)
-			goto err_destroy;
-
-		rescuer->rescue_wq = wq;
-		rescuer->task = kthread_create(rescuer_thread, rescuer, "%s",
-					       wq->name);
-		if (IS_ERR(rescuer->task)) {
-			kfree(rescuer);
-			goto err_destroy;
-		}
-
-		wq->rescuer = rescuer;
-		kthread_bind_mask(rescuer->task, cpu_possible_mask);
-		wake_up_process(rescuer->task);
-	}
+	if (wq_online && init_rescuer(wq) < 0)
+		goto err_destroy;
 
 	if ((wq->flags & WQ_SYSFS) && workqueue_sysfs_register(wq))
 		goto err_destroy;
@@ -4107,8 +4157,28 @@ void destroy_workqueue(struct workqueue_struct *wq)
 	struct pool_workqueue *pwq;
 	int node;
 
+	/*
+	 * Remove it from sysfs first so that sanity check failure doesn't
+	 * lead to sysfs name conflicts.
+	 */
+	workqueue_sysfs_unregister(wq);
+
 	/* drain it before proceeding with destruction */
 	drain_workqueue(wq);
+
+	/* kill rescuer, if sanity checks fail, leave it w/o rescuer */
+	if (wq->rescuer) {
+		struct worker *rescuer = wq->rescuer;
+
+		/* this prevents new queueing */
+		spin_lock_irq(&wq_mayday_lock);
+		wq->rescuer = NULL;
+		spin_unlock_irq(&wq_mayday_lock);
+
+		/* rescuer will empty maydays list before exiting */
+		kthread_stop(rescuer->task);
+		kfree(rescuer);
+	}
 
 	/* sanity checks */
 	mutex_lock(&wq->mutex);
@@ -4140,11 +4210,6 @@ void destroy_workqueue(struct workqueue_struct *wq)
 	mutex_lock(&wq_pool_mutex);
 	list_del_rcu(&wq->list);
 	mutex_unlock(&wq_pool_mutex);
-
-	workqueue_sysfs_unregister(wq);
-
-	if (wq->rescuer)
-		kthread_stop(wq->rescuer->task);
 
 	if (!(wq->flags & WQ_UNBOUND)) {
 		/*
@@ -4422,7 +4487,8 @@ static void show_pwq(struct pool_workqueue *pwq)
 	pr_info("  pwq %d:", pool->id);
 	pr_cont_pool_info(pool);
 
-	pr_cont(" active=%d/%d%s\n", pwq->nr_active, pwq->max_active,
+	pr_cont(" active=%d/%d refcnt=%d%s\n",
+		pwq->nr_active, pwq->max_active, pwq->refcnt,
 		!list_empty(&pwq->mayday_node) ? " MAYDAY" : "");
 
 	hash_for_each(pool->busy_hash, bkt, worker, hentry) {
@@ -4739,12 +4805,22 @@ int workqueue_prepare_cpu(unsigned int cpu)
 {
 	struct worker_pool *pool;
 
+#ifdef CONFIG_ARCH_HISI
+	set_smpboot_creating_threads(true);
+#endif
 	for_each_cpu_worker_pool(pool, cpu) {
 		if (pool->nr_workers)
 			continue;
-		if (!create_worker(pool))
+		if (!create_worker(pool)) {
+#ifdef CONFIG_ARCH_HISI
+			set_smpboot_creating_threads(false);
+#endif
 			return -ENOMEM;
+		}
 	}
+#ifdef CONFIG_ARCH_HISI
+	set_smpboot_creating_threads(false);
+#endif
 	return 0;
 }
 
@@ -5707,6 +5783,8 @@ int __init workqueue_init(void)
 	 * archs such as power and arm64.  As per-cpu pools created
 	 * previously could be missing node hint and unbound pools NUMA
 	 * affinity, fix them up.
+	 *
+	 * Also, while iterating workqueues, create rescuers if requested.
 	 */
 	wq_numa_init();
 
@@ -5718,8 +5796,12 @@ int __init workqueue_init(void)
 		}
 	}
 
-	list_for_each_entry(wq, &workqueues, list)
+	list_for_each_entry(wq, &workqueues, list) {
 		wq_update_unbound_numa(wq, smp_processor_id(), true);
+		WARN(init_rescuer(wq),
+		     "workqueue: failed to create early rescuer for %s",
+		     wq->name);
+	}
 
 	mutex_unlock(&wq_pool_mutex);
 

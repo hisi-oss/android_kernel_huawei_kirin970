@@ -3,7 +3,7 @@
  *
  * This I2C controller is described in the STM32F429/439 Soc reference manual.
  * Please see below a link to the documentation:
- * http://www.st.com/resource/en/reference_manual/DM00031020.pdf
+ * http:
  *
  * Copyright (C) M'boumba Cedric Madianga 2016
  * Author: M'boumba Cedric Madianga <cedric.madianga@gmail.com>

@@ -287,32 +287,32 @@ config REGULATOR_GPIO
 	  to target volts/amps.
 
 config REGULATOR_HI6421
-	tristate "HiSilicon Hi6421 PMIC voltage regulator support"
+	tristate "PMU21 PMIC voltage regulator support"
 	depends on MFD_HI6421_PMIC && OF
 	help
 	  This driver provides support for the voltage regulators on the
-	  HiSilicon Hi6421 PMU / Codec IC.
-	  Hi6421 is a multi-function device which, on regulator part, provides
+	  PMU21 PMU / Codec IC.
+	  PMU21 is a multi-function device which, on regulator part, provides
 	  21 general purpose LDOs, 3 dedicated LDOs, and 5 BUCKs. All
 	  of them come with support to either ECO (idle) or sleep mode.
 
 config REGULATOR_HI6421V530
-	tristate "HiSilicon Hi6421v530 PMIC voltage regulator support"
+	tristate "PMU21v530 PMIC voltage regulator support"
 	depends on MFD_HI6421_PMIC && OF
 	help
 	  This driver provides support for the voltage regulators on
-	  HiSilicon Hi6421v530 PMU / Codec IC.
-	  Hi6421v530 is a multi-function device which, on regulator part,
+	  PMU21v530 PMIC / Codec IC.
+	  PMU21v530 is a multi-function device which, on regulator part,
 	  provides 5 general purpose LDOs, and all of them come with support
 	  to either ECO (idle) or sleep mode.
 
 config REGULATOR_HI655X
-	tristate "Hisilicon HI655X PMIC regulators support"
+	tristate "PMU655X PMIC regulators support"
 	depends on ARCH_HISI || COMPILE_TEST
 	depends on MFD_HI655X_PMIC && OF
 	help
 	  This driver provides support for the voltage regulators of the
-	  Hisilicon Hi655x PMIC device.
+	  PMU655x PMIC device.
 
 config REGULATOR_ISL9305
 	tristate "Intersil ISL9305 regulator"
@@ -957,6 +957,120 @@ config REGULATOR_WM8994
 	help
 	  This driver provides support for the voltage regulators on the
 	  WM8994 CODEC.
+
+config DRV_HISI_IP_REGULATOR
+	tristate "system interior bus mtcmos control"
+	depends on MFD_HISI_IP_CORE
+	help
+	  This driver provides system interior bus switch support for the IP regulator on the system.
+
+config HISI_IP_REGULATOR_IPC
+	tristate "system interior bus mtcmos IPC control"
+	depends on HISI_MAILBOX
+	help
+	  This driver provides system interior bus switch support for the IP regulator IPC on the system.
+
+config ATLA_IP_PLATFORM
+        tristate "ATLA system interior bus control platform switch"
+        depends on MFD_HISI_IP_CORE
+        help
+          This driver provides system interior bus switch for the IP regulator on the ATLA system.
+
+config BOST_IP_PLATFORM
+	tristate "system interior bus control platform switch"
+	depends on MFD_HISI_IP_CORE
+	help
+	  This driver provides system interior bus switch for the IP regulator on the system.
+
+config MIA_IP_PLATFORM
+	tristate "MIA system interior bus control platform switch"
+	depends on MFD_HISI_IP_CORE
+	help
+	  This driver provides system interior bus switch for the IP regulator on the MIA system.
+
+config PHOE_IP_PLATFORM
+    tristate "PHOE system interior bus control platform switch"
+    depends on MFD_HISI_IP_CORE
+    help
+        This driver provides system interior bus switch for the IP regulator on the PHOE system.
+
+config BALT_IP_PLATFORM
+    tristate "BALT system interior bus control platform switch"
+    depends on MFD_HISI_IP_CORE
+    help
+        This driver provides system interior bus switch for the IP regulator on the BALT system.
+
+config BURB_IP_PLATFORM
+    tristate "BBK system interior bus control platform switch"
+    depends on MFD_HISI_IP_CORE
+    help
+        This driver provides system interior bus switch for the IP regulator on the BBK system.
+
+config CHAR_IP_PLATFORM
+    tristate "CHAR system interior bus control platform switch"
+    depends on MFD_HISI_IP_CORE
+    help
+        This driver provides system interior bus switch for the IP regulator on the CHAR system.
+
+config LEX_IP_PLATFORM
+    tristate "LEX system interior bus control platform switch"
+    depends on MFD_HISI_IP_CORE
+    help
+        This driver provides system interior bus switch for the IP regulator on the LEX system.
+
+config LPM_MEDIA_REGULATOR
+    tristate "LPM media regulator feature"
+    depends on MFD_HISI_IP_CORE
+    help
+        This Feature provides support for LPM media regulator.
+
+config IP_PLATFORM_COMMON
+        tristate "COMMON system interior bus control platform switch"
+        depends on MFD_HISI_IP_CORE
+        help
+          This driver provides system interior bus switch for the IP regulator after ORLA AND PHON system.
+
+config HISI_REGULATOR_DEBUG
+	tristate "regulator debug info"
+	help
+	  This driver provides support for regulator control info.
+
+config HISI_REGULATOR_SPMI
+	tristate "PMIC regulators from spmi device"
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver provides support for the voltage regulators on the
+	  PMU / Codec IC.
+
+config HISI_SUB_REGULATOR_SPMI
+	tristate "SUB PMIC regulators from spmi device"
+	depends on HISI_PMIC_SUB_PMU_SPMI
+	help
+	  This driver provides support for the voltage regulators on the
+	  SUB PMU / Codec IC.
+
+config HISI_SMARTPA_REGULATOR
+	tristate "SMARTPA regulators from platform device"
+	help
+	  This driver provides support for the voltage regulators on the
+	  PMU / Codec IC.
+
+config HISI_REGULATOR
+	tristate "PMIC regulators from platform device"
+	help
+	  This driver provides support for the voltage regulators on the
+	  PMU / Codec IC.
+
+config HISI_PMIC_DEBUG
+	depends on DEBUG_FS
+	bool "regulator and ip driver debug"
+	default n
+
+config HISI_REGULATOR_TRACE
+	tristate "Regulator Debug driver for REGULATOR TRACE"
+	depends on HISI_REGULATOR_DEBUG
+	help
+	  provides support for regulator trace.
 
 endif
 

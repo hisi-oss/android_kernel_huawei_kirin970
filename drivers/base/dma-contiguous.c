@@ -27,6 +27,9 @@
 #include <linux/sizes.h>
 #include <linux/dma-contiguous.h>
 #include <linux/cma.h>
+#ifdef CONFIG_HISI_CMA_DEBUG
+#include <linux/hisi/hisi_cma_debug.h>
+#endif
 
 #ifdef CONFIG_CMA_SIZE_MBYTES
 #define CMA_SIZE_MBYTES CONFIG_CMA_SIZE_MBYTES
@@ -195,7 +198,8 @@ struct page *dma_alloc_from_contiguous(struct device *dev, size_t count,
 	if (align > CONFIG_CMA_ALIGNMENT)
 		align = CONFIG_CMA_ALIGNMENT;
 
-	return cma_alloc(dev_get_cma_area(dev), count, align, gfp_mask);
+	return cma_alloc(dev_get_cma_area(dev), count, align,
+			gfp_mask & __GFP_NOWARN);
 }
 
 /**
@@ -247,7 +251,10 @@ static int __init rmem_cma_setup(struct reserved_mem *rmem)
 	phys_addr_t align = PAGE_SIZE << max(MAX_ORDER - 1, pageblock_order);
 	phys_addr_t mask = align - 1;
 	unsigned long node = rmem->fdt_node;
+	int len;
+	unsigned long long order_per_bit = 0;
 	struct cma *cma;
+	const __be32 *prop = NULL;
 	int err;
 
 	if (!of_get_flat_dt_prop(node, "reusable", NULL) ||
@@ -259,11 +266,18 @@ static int __init rmem_cma_setup(struct reserved_mem *rmem)
 		return -EINVAL;
 	}
 
-	err = cma_init_reserved_mem(rmem->base, rmem->size, 0, rmem->name, &cma);
+	prop = of_get_flat_dt_prop(node, "order-per-bit", &len);
+	if (prop)
+		order_per_bit = of_read_number(prop, len / 4);
+
+	err = cma_init_reserved_mem(rmem->base, rmem->size, (unsigned int)order_per_bit, rmem->name, &cma);
 	if (err) {
 		pr_err("Reserved memory: unable to setup CMA region\n");
 		return err;
 	}
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_set_flag(cma, node);
+#endif
 	/* Architecture specific contiguous memory fixup. */
 	dma_contiguous_early_fixup(rmem->base, rmem->size);
 

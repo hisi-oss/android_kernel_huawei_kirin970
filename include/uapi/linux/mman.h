@@ -7,6 +7,9 @@
 
 #define MREMAP_MAYMOVE	1
 #define MREMAP_FIXED	2
+#ifdef CONFIG_VM_COPY
+#define MREMAP_VM_COPY	0x80
+#endif
 
 #define OVERCOMMIT_GUESS		0
 #define OVERCOMMIT_ALWAYS		1

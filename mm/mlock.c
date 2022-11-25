@@ -23,8 +23,12 @@
 #include <linux/hugetlb.h>
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
+#include <chipset_common/security/kshield.h>
 
 #include "internal.h"
+#ifdef CONFIG_TASK_PROTECT_LRU
+#include <linux/protect_lru.h>
+#endif
 
 bool can_do_mlock(void)
 {
@@ -108,6 +112,9 @@ static bool __munlock_isolate_lru_page(struct page *page, bool getpage)
 		lruvec = mem_cgroup_page_lruvec(page, page_pgdat(page));
 		if (getpage)
 			get_page(page);
+#ifdef CONFIG_TASK_PROTECT_LRU
+		del_page_from_protect_lru_list(page, lruvec);
+#endif
 		ClearPageLRU(page);
 		del_page_from_lru_list(page, lruvec, page_lru(page));
 		return true;
@@ -439,7 +446,13 @@ static unsigned long __munlock_pagevec_fill(struct pagevec *pvec,
 void munlock_vma_pages_range(struct vm_area_struct *vma,
 			     unsigned long start, unsigned long end)
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_begin(vma);
+	WRITE_ONCE(vma->vm_flags, vma->vm_flags & VM_LOCKED_CLEAR_MASK);
+	vm_write_end(vma);
+#else
 	vma->vm_flags &= VM_LOCKED_CLEAR_MASK;
+#endif
 
 	while (start < end) {
 		struct page *page;
@@ -564,7 +577,15 @@ success:
 	 */
 
 	if (lock)
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	{
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, newflags);
+		vm_write_end(vma);
+	}
+#else
 		vma->vm_flags = newflags;
+#endif
 	else
 		munlock_vma_pages_range(vma, start, end);
 
@@ -629,11 +650,11 @@ static int apply_vma_lock_flags(unsigned long start, size_t len,
  * is also counted.
  * Return value: previously mlocked page counts
  */
-static int count_mm_mlocked_page_nr(struct mm_struct *mm,
+static unsigned long count_mm_mlocked_page_nr(struct mm_struct *mm,
 		unsigned long start, size_t len)
 {
 	struct vm_area_struct *vma;
-	int count = 0;
+	unsigned long count = 0;
 
 	if (mm == NULL)
 		mm = current->mm;
@@ -666,6 +687,9 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 	unsigned long locked;
 	unsigned long lock_limit;
 	int error = -ENOMEM;
+
+	kshield_chk_mlock();
+	start = untagged_addr(start);
 
 	if (!can_do_mlock())
 		return -EPERM;
@@ -729,6 +753,8 @@ SYSCALL_DEFINE3(mlock2, unsigned long, start, size_t, len, int, flags)
 SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
 {
 	int ret;
+
+	start = untagged_addr(start);
 
 	len = PAGE_ALIGN(len + (offset_in_page(start)));
 	start &= PAGE_MASK;

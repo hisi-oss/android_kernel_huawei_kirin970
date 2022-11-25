@@ -149,9 +149,30 @@ static inline unsigned long kmem_cache_flags(unsigned long object_size,
 #define SLAB_CACHE_FLAGS (0)
 #endif
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+#define CACHE_CREATE_MASK (SLAB_CORE_FLAGS | SLAB_DEBUG_FLAGS | \
+	   SLAB_CACHE_FLAGS | SLAB_HISI_TRACE | SLAB_HISI_NOTRACE)
+#else
 /* Common flags available with current configuration */
 #define CACHE_CREATE_MASK (SLAB_CORE_FLAGS | SLAB_DEBUG_FLAGS | SLAB_CACHE_FLAGS)
+#endif
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+/* Common flags permitted for kmem_cache_create */
+#define SLAB_FLAGS_PERMITTED (SLAB_CORE_FLAGS | \
+			      SLAB_RED_ZONE | \
+			      SLAB_POISON | \
+			      SLAB_STORE_USER | \
+			      SLAB_TRACE | \
+			      SLAB_CONSISTENCY_CHECKS | \
+			      SLAB_MEM_SPREAD | \
+			      SLAB_NOLEAKTRACE | \
+			      SLAB_RECLAIM_ACCOUNT | \
+			      SLAB_TEMPORARY | \
+			      SLAB_ACCOUNT | \
+			      SLAB_HISI_TRACE | \
+			      SLAB_HISI_NOTRACE)
+#else
 /* Common flags permitted for kmem_cache_create */
 #define SLAB_FLAGS_PERMITTED (SLAB_CORE_FLAGS | \
 			      SLAB_RED_ZONE | \
@@ -164,7 +185,9 @@ static inline unsigned long kmem_cache_flags(unsigned long object_size,
 			      SLAB_RECLAIM_ACCOUNT | \
 			      SLAB_TEMPORARY | \
 			      SLAB_ACCOUNT)
+#endif
 
+bool __kmem_cache_empty(struct kmem_cache *);
 int __kmem_cache_shutdown(struct kmem_cache *);
 void __kmem_cache_release(struct kmem_cache *);
 int __kmem_cache_shrink(struct kmem_cache *);

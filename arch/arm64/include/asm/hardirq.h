@@ -24,7 +24,7 @@
 #include <asm/kvm_arm.h>
 #include <asm/sysreg.h>
 
-#define NR_IPI	7
+#define NR_IPI	13
 
 typedef struct {
 	unsigned int __softirq_pending;

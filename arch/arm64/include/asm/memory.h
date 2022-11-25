@@ -27,6 +27,7 @@
 #include <asm/bug.h>
 #include <asm/page-def.h>
 #include <asm/sizes.h>
+#include <linux/hisi/prmem_defs.h>
 
 /*
  * Allow for constants defined here to be used from assembly code
@@ -78,6 +79,17 @@
 
 #define KERNEL_START      _text
 #define KERNEL_END        _end
+
+#ifdef CONFIG_HKIP_PRMEM
+/*
+ * The address space reserved for PRMEM.
+ * PRMEM_START: PRMEM_SIZE below PRMEM_END
+ * PRMEM_END: extends to the available space below prmem, vmmemmap,
+ *            PCI I/O space and fixed mappings
+ */
+#define PRMEM_START		(PRMEM_END - PRMEM_SIZE)
+#define PRMEM_END		(PAGE_OFFSET - PUD_SIZE - VMEMMAP_SIZE - SZ_64K)
+#endif
 
 /*
  * KASAN requires 1/8th of the kernel virtual address space for the shadow
@@ -180,6 +192,7 @@
 #include <linux/mmdebug.h>
 
 extern s64			memstart_addr;
+extern s64			phystart_addr;
 /* PHYS_OFFSET - the physical address of the start of memory. */
 #define PHYS_OFFSET		({ VM_BUG_ON(memstart_addr & 1); memstart_addr; })
 
@@ -188,6 +201,11 @@ extern u64			kimage_vaddr;
 
 /* the offset between the kernel virtual and physical mappings */
 extern u64			kimage_voffset;
+
+#ifdef CONFIG_HISI_MEM_OFFLINE
+/* physical memory limit imposed by the booloader */
+extern phys_addr_t bootloader_memory_limit;
+#endif
 
 static inline unsigned long kaslr_offset(void)
 {
@@ -208,7 +226,15 @@ static inline unsigned long kaslr_offset(void)
  * direct-mapped view.  We assume this is the first page
  * of RAM in the mem_map as well.
  */
-#define PHYS_PFN_OFFSET	(PHYS_OFFSET >> PAGE_SHIFT)
+#define PHYS_PFN_OFFSET	(phystart_addr >> PAGE_SHIFT)
+
+/*
+ * When dealing with data aborts, watchpoints, or instruction traps we may end
+ * up with a tagged userland pointer. Clear the tag to get a sane pointer to
+ * pass on to access_ok(), for instance.
+ */
+#define untagged_addr(addr)	\
+	((__typeof__(addr))sign_extend64((u64)(addr), 55))
 
 /*
  * Physical vs virtual RAM address space conversion.  These are
@@ -243,7 +269,20 @@ extern phys_addr_t __phys_addr_symbol(unsigned long x);
 #define __phys_addr_symbol(x)	__pa_symbol_nodebug(x)
 #endif
 
+#if defined(__ASSEMBLER__) || !defined(CONFIG_HISI_LB_DEBUG)
 #define __phys_to_virt(x)	((unsigned long)((x) - PHYS_OFFSET) | PAGE_OFFSET)
+#else
+
+#if defined(CONFIG_HISI_LB_DEBUG)
+extern void __lb_assert_phys(phys_addr_t phys);
+#define	lb_assert_phys __lb_assert_phys
+#endif
+
+#define __phys_to_virt(x) ({                                \
+	lb_assert_phys(x);                                  \
+	((unsigned long)((x) - PHYS_OFFSET) | PAGE_OFFSET); \
+})
+#endif
 #define __phys_to_kimg(x)	((unsigned long)((x) + kimage_voffset))
 
 /*

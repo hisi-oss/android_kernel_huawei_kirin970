@@ -16,6 +16,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+extern unsigned int phy_type;
+
 struct of_phandle_args;
 
 #ifdef CONFIG_OF

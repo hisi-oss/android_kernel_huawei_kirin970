@@ -22,6 +22,38 @@
 
 #include "i2c-core.h"
 
+int of_i2c_get_board_info(struct device *dev, struct device_node *node,
+			  struct i2c_board_info *info)
+{
+	u32 addr;
+	int ret;
+	memset(info, 0, sizeof(*info));
+	if (of_modalias_node(node, info->type, sizeof(info->type)) < 0) {
+		dev_err(dev, "of_i2c: modalias failure on %pOF\n", node);
+		return -EINVAL;
+	}
+	ret = of_property_read_u32(node, "reg", &addr);
+	if (ret) {
+		dev_err(dev, "of_i2c: invalid reg on %pOF\n", node);
+		return ret;
+	}
+	if (addr & I2C_TEN_BIT_ADDRESS) {
+		addr &= ~I2C_TEN_BIT_ADDRESS;
+		info->flags |= I2C_CLIENT_TEN;
+	}
+	if (addr & I2C_OWN_SLAVE_ADDRESS) {
+		addr &= ~I2C_OWN_SLAVE_ADDRESS;
+		info->flags |= I2C_CLIENT_SLAVE;
+	}
+	info->addr = addr;
+	info->of_node = node;
+	if (of_property_read_bool(node, "host-notify"))
+		info->flags |= I2C_CLIENT_HOST_NOTIFY;
+	if (of_get_property(node, "wakeup-source", NULL))
+		info->flags |= I2C_CLIENT_WAKE;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(of_i2c_get_board_info);
 static struct i2c_client *of_i2c_register_device(struct i2c_adapter *adap,
 						 struct device_node *node)
 {
@@ -238,14 +270,14 @@ static int of_i2c_notify(struct notifier_block *nb, unsigned long action,
 		}
 
 		client = of_i2c_register_device(adap, rd->dn);
-		put_device(&adap->dev);
-
 		if (IS_ERR(client)) {
 			dev_err(&adap->dev, "failed to create client for '%pOF'\n",
 				 rd->dn);
+			put_device(&adap->dev);
 			of_node_clear_flag(rd->dn, OF_POPULATED);
 			return notifier_from_errno(PTR_ERR(client));
 		}
+		put_device(&adap->dev);
 		break;
 	case OF_RECONFIG_CHANGE_REMOVE:
 		/* already depopulated? */

@@ -217,6 +217,12 @@ config PINCTRL_SINGLE
 	help
 	  This selects the device tree based generic pinctrl driver.
 
+config PINCTRL_HI6502
+	tristate "hi6502 pinctrl driver"
+	depends on PINCTRL_SINGLE
+	help
+	  This depends pinctrl single driver.
+
 config PINCTRL_SIRF
 	bool "CSR SiRFprimaII pin controller driver"
 	depends on ARCH_SIRF
@@ -348,6 +354,24 @@ config PINCTRL_RK805
 	select GENERIC_PINCONF
 	help
 	  This selects the pinctrl driver for RK805.
+
+config PINCTRL_SEC
+	default n
+	bool "Hisilicon sec pinctrl driver"
+	select PINMUX
+	select PINCONF
+
+config HISI_PINCRTL_INFO
+        bool "Hisilicon pins info for debug fs"
+        depends on PINCTRL_SINGLE
+        help
+          Say yes here to support pins info for debug fs
+
+config HISI_ENABLE_PINCTRL_BIND_PINS
+	bool "Hisilicon enable pinctrl bind pins"
+	depends on PINCTRL_SINGLE
+	help
+	  Say yes here to enable pinctrl bind pins
 
 source "drivers/pinctrl/aspeed/Kconfig"
 source "drivers/pinctrl/bcm/Kconfig"

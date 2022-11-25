@@ -614,6 +614,7 @@ static int snd_card_setup(struct usb_configuration *c,
 static struct audio_source_instance *to_fi_audio_source(
 	const struct usb_function_instance *fi);
 
+#include "function-hisi/f_audio_source_chip.h"
 
 /* audio function driver setup/binding */
 static int
@@ -671,8 +672,18 @@ audio_bind(struct usb_configuration *c, struct usb_function *f)
 		hs_as_in_ep_desc.bEndpointAddress =
 			fs_as_in_ep_desc.bEndpointAddress;
 
+#ifdef CONFIG_USB_FUNC_ADD_SS_DESC
+	if (gadget_is_superspeed(c->cdev->gadget)
+			|| gadget_is_superspeed_plus(c->cdev->gadget))
+		ss_as_in_ep_desc.bEndpointAddress =
+			fs_as_in_ep_desc.bEndpointAddress;
+#endif
+
 	f->fs_descriptors = fs_audio_desc;
 	f->hs_descriptors = hs_audio_desc;
+#ifdef CONFIG_USB_FUNC_ADD_SS_DESC
+	f->ss_descriptors = ss_audio_desc;
+#endif
 
 	for (i = 0, status = 0; i < IN_EP_REQ_COUNT && status == 0; i++) {
 		req = audio_request_new(ep, IN_EP_MAX_PACKET_SIZE);
@@ -808,7 +819,7 @@ static snd_pcm_uframes_t audio_pcm_pointer(struct snd_pcm_substream *substream)
 	ssize_t bytes = audio->buffer_pos - audio->buffer_start;
 
 	/* return offset of next frame to fill in our buffer */
-	return bytes_to_frames(runtime, bytes);
+	return bytes_to_frames(runtime, bytes); /*[false alarm]:it is a false alarm*/
 }
 
 static int audio_pcm_playback_trigger(struct snd_pcm_substream *substream,

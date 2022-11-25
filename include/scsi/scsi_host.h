@@ -84,7 +84,7 @@ struct scsi_host_template {
 
 
 #ifdef CONFIG_COMPAT
-	/* 
+	/*
 	 * Compat handler. Handle 32bit ABI.
 	 * When unknown ioctl is passed return -ENOIOCTLCMD.
 	 *
@@ -92,7 +92,64 @@ struct scsi_host_template {
 	 */
 	int (* compat_ioctl)(struct scsi_device *dev, int cmd, void __user *arg);
 #endif
-
+#ifndef CONFIG_SCSI_UFS_HI1861_VCMD
+	/*
+	 * Compat handler. Handle 32bit ABI.
+	 * When unknown ioctl is passed return -ENOIOCTLCMD.
+	 *
+	 * Status: OPTIONAL
+	 */
+	int (* get_fsr_command)(struct scsi_cmnd *cmd, u8 *buf, u32 size);
+#endif
+	int (*get_tz_info)(struct scsi_device *dev, u32 type, u8 *buf,
+			   u32 size);
+	int (*tz_ctrl)(struct scsi_device *dev, int desc_id, uint8_t index);
+#ifdef CONFIG_HP_CORE
+	int (*get_health_info)(struct scsi_device *sdev,
+		u8 *pre_eol_info, u8 *life_time_est_a, u8 *life_time_est_b);
+#endif
+#ifdef CONFIG_SCSI_UFS_UNISTORE
+	int (*dev_pwron_info_sync)(struct scsi_device *dev,
+		struct stor_dev_pwron_info *stor_info,
+		unsigned int rescue_seg_size);
+	int (*dev_stream_oob_info_fetch)(struct scsi_device *dev,
+		struct stor_dev_stream_info stream_info,
+		unsigned int oob_entry_cnt,
+		struct stor_dev_stream_oob_info *oob_info);
+	int (*dev_reset_ftl)(struct scsi_device *dev,
+		struct stor_dev_reset_ftl *reset_ftl);
+	int (*dev_read_section)(struct scsi_device *dev,
+		unsigned int *section_size);
+	int (*dev_read_lrb_in_use)(struct scsi_device *dev,
+		unsigned long *lrb_in_use);
+	int (*dev_read_op_size)(struct scsi_device *dev,
+		int *op_size);
+	int (*dev_config_mapping_partition)(struct scsi_device *dev,
+		struct stor_dev_mapping_partition *mapping_info);
+	int (*dev_read_mapping_partition)(struct scsi_device *dev,
+		struct stor_dev_mapping_partition *mapping_info);
+	int (*dev_fs_sync_done)(struct scsi_device *dev);
+	int (*dev_data_move)(struct scsi_device *dev,
+		struct stor_dev_data_move_info *data_move_info);
+	int (*dev_slc_mode_configuration)(struct scsi_device *dev, int *status);
+	int (*dev_sync_read_verify)(struct scsi_device *dev,
+		struct stor_dev_sync_read_verify_info *verify_info);
+	int (*dev_get_bad_block_info)(struct scsi_device *dev,
+		struct stor_dev_bad_block_info *bad_block_info);
+	int (*dev_get_program_size)(struct scsi_device *dev,
+		struct stor_dev_program_size *program_size);
+	void (*dev_bad_block_notify)(struct Scsi_Host *host,
+		struct stor_dev_bad_block_info *bad_block_info);
+	int (*dev_bad_block_notify_register)(struct scsi_device *dev,
+		void (*func)(struct Scsi_Host *host,
+		struct stor_dev_bad_block_info *bad_block_info));
+#ifdef CONFIG_MAS_DEBUG_FS
+	int (*dev_rescue_block_inject_data)(struct scsi_device *dev,
+		unsigned int lba);
+	int (*dev_bad_block_error_inject)(struct scsi_device *dev,
+		unsigned char bad_slc_cnt, unsigned char bad_tlc_cnt);
+#endif
+#endif
 	/*
 	 * The queuecommand function is used to queue up a scsi
 	 * command block to the LLDD.  When the driver finished
@@ -186,7 +243,7 @@ struct scsi_host_template {
 	 * this function, it *must* perform the task of setting the queue
 	 * depth on the device.  All other tasks are optional and depend
 	 * on what the driver supports and various implementation details.
-	 * 
+	 *
 	 * Things currently recommended to be handled at this time include:
 	 *
 	 * 1.  Setting the device queue depth.  Proper setting of this is
@@ -215,7 +272,7 @@ struct scsi_host_template {
 	 * has ceased the mid layer calls this point so that the low level
 	 * driver may completely detach itself from the scsi device and vice
 	 * versa.  The low level driver is responsible for freeing any memory
-	 * it allocated in the slave_alloc or slave_configure calls. 
+	 * it allocated in the slave_alloc or slave_configure calls.
 	 *
 	 * Status: OPTIONAL
 	 */
@@ -340,7 +397,14 @@ struct scsi_host_template {
 #define SCSI_ADAPTER_RESET	1
 #define SCSI_FIRMWARE_RESET	2
 
-
+#ifdef CONFIG_MAS_BLK
+	int (*direct_flush)(struct scsi_device *);
+	void (*dump_status)(struct Scsi_Host *shost, enum blk_dump_scene dump_type);
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+	int (*send_request_sense_directly)(struct scsi_device *,
+					unsigned int, bool);
+#endif
+#endif
 	/*
 	 * Name of proc directory
 	 */
@@ -367,7 +431,7 @@ struct scsi_host_template {
 	 * ID.
 	 */
 	int this_id;
-
+	short is_emulator;
 	/*
 	 * This determines the degree to which the host adapter is capable
 	 * of scatter-gather.
@@ -463,7 +527,7 @@ struct scsi_host_template {
 	/*
 	 * Default value for the blocking.  If the queue is empty,
 	 * host_blocked counts down in the request_fn until it restarts
-	 * host operations as zero is reached.  
+	 * host operations as zero is reached.
 	 *
 	 * FIXME: This should probably be a value in the template
 	 */
@@ -538,6 +602,29 @@ enum scsi_host_state {
 	SHOST_DEL_RECOVERY,
 };
 
+#ifdef CONFIG_MAS_BLK
+enum scsi_host_queue_quirk{
+	SHOST_QUIRK_BUSY_IDLE_ENABLE = 0,
+	SHOST_QUIRK_FLUSH_REDUCING,
+	SHOST_QUIRK_UNMAP_IN_SOFTIRQ,
+	SHOST_QUIRK_DRIVER_TAG_ALLOC,
+	SHOST_QUIRK_SCSI_QUIESCE_IN_LLD,
+	SHOST_QUIRK_HUFS_MQ,
+	SHOST_QUIRK_BKOPS,
+	SHOST_QUIRK_IO_LATENCY_WARNING,
+	SHOST_QUIRK_BUSY_IDLE_INTR_ENABLE,
+	SHOST_QUIRK_IO_LATENCY_PROTECTION,
+};
+
+#define SHOST_QUIRK(x)  (1 << x)
+
+enum hisi_dev_quirk{
+    SHOST_QUIRK_BKOPS_ENABLE = 0,
+    SHOST_QUIRK_IDLE_ENABLE,
+};
+#define SHOST_HUFS_DEV_QUIRK(x) (1 << x)
+#endif
+
 struct Scsi_Host {
 	/*
 	 * __devices is protected by the host_lock, but you should
@@ -549,7 +636,7 @@ struct Scsi_Host {
 	 */
 	struct list_head	__devices;
 	struct list_head	__targets;
-	
+
 	struct list_head	starved_list;
 
 	spinlock_t		default_lock;
@@ -580,14 +667,16 @@ struct Scsi_Host {
 	unsigned int host_failed;	   /* commands that failed.
 					      protected by host_lock */
 	unsigned int host_eh_scheduled;    /* EH scheduled without command */
-    
+
 	unsigned int host_no;  /* Used for IOCTL_GET_IDLUN, /proc/scsi et al. */
 
 	/* next two fields are used to bound the time spent in error handling */
 	int eh_deadline;
 	unsigned long last_reset;
 
-
+#ifdef CONFIG_HUAWEI_DSM_IOMT_UFS_HOST
+	void *iomt_host_info;
+#endif
 	/*
 	 * These three parameters can be used to allow for wide scsi,
 	 * and for host adapters that support multiple busses
@@ -619,6 +708,11 @@ struct Scsi_Host {
 	int this_id;
 	int can_queue;
 	short cmd_per_lun;
+	/* The Scsi host is run on Emulator platform, because have not actual
+	 * analogy MPHY, some feature like PM-Runtime will be cut, which are
+	 * depend on real analogy MPHY
+	 */
+	short is_emulator;
 	short unsigned int sg_tablesize;
 	short unsigned int sg_prot_tablesize;
 	unsigned int max_sectors;
@@ -631,12 +725,20 @@ struct Scsi_Host {
 	 * is nr_hw_queues * can_queue.
 	 */
 	unsigned nr_hw_queues;
-	/* 
+#ifdef CONFIG_MAS_BLK
+	int mq_queue_depth;
+	int mq_reserved_queue_depth;
+	int mq_high_prio_queue_depth;
+	unsigned long queue_quirk_flag;
+	unsigned long hufs_dev_quirk_flag;
+#endif
+
+	/*
 	 * Used to assign serial numbers to the cmds.
 	 * Protected by the host lock.
 	 */
 	unsigned long cmd_serial_number;
-	
+
 	unsigned active_mode:2;
 	unsigned unchecked_isa_dma:1;
 	unsigned use_clustering:1;
@@ -646,7 +748,7 @@ struct Scsi_Host {
 	 * time being.
 	 */
 	unsigned host_self_blocked:1;
-    
+
 	/*
 	 * Host uses correct SCSI ordering not PC ordering. The bit is
 	 * set for the minority of drivers whose authors actually read
@@ -665,6 +767,18 @@ struct Scsi_Host {
 
 	/* The controller does not support WRITE SAME */
 	unsigned no_write_same:1;
+
+    /*
+     * Set "SELECT REPORT" field to allow detection of well known logical
+     * units along with standard LUs.
+     */
+    unsigned report_wlus:1;
+
+    /*
+     * Set "DBD" field in mode_sense caching mode page in case it is
+     * mandatory by LLD standard.
+     */
+    unsigned set_dbd_for_caching:1;
 
 	unsigned use_blk_mq:1;
 	unsigned use_cmd_list:1;
@@ -701,7 +815,7 @@ struct Scsi_Host {
 	unsigned char n_io_port;
 	unsigned char dma_channel;
 	unsigned int  irq;
-	
+
 
 	enum scsi_host_state shost_state;
 
@@ -728,6 +842,20 @@ struct Scsi_Host {
 	 * Needed just in case we have virtual hosts.
 	 */
 	struct device *dma_dev;
+
+#ifdef CONFIG_SCSI_UFS_INLINE_CRYPTO
+	int crypto_enabled;
+#endif
+
+#ifdef CONFIG_MAS_ORDER_PRESERVE
+	int order_enabled;
+#endif
+
+#ifdef CONFIG_SCSI_UFS_UNISTORE
+	bool unistore_enable;
+	unsigned int mas_sec_size;
+	int vcmd_set;
+#endif
 
 	/*
 	 * We should ensure that this is aligned, both for better performance

@@ -57,7 +57,13 @@
 #include <asm/fpsimd.h>
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
+#include <asm/scs.h>
 #include <asm/stacktrace.h>
+
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/rdr_hisi_platform.h>
+#include <linux/smp.h>
+#endif
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
@@ -94,6 +100,16 @@ void arch_cpu_idle_dead(void)
        cpu_die();
 }
 #endif
+
+void arch_cpu_idle_enter(void)
+{
+	idle_notifier_call_chain(IDLE_START);
+}
+
+void arch_cpu_idle_exit(void)
+{
+	idle_notifier_call_chain((unsigned long)IDLE_END);
+}
 
 /*
  * Called by kexec, immediately prior to machine_kexec().
@@ -135,6 +151,7 @@ void machine_power_off(void)
 		pm_power_off();
 }
 
+extern void hisi_pm_system_reset_comm(const char *cmd);
 /*
  * Restart requires that the secondary CPUs stop performing any activity
  * while the primary CPU resets the system. Systems with multiple CPUs must
@@ -154,8 +171,10 @@ void machine_restart(char *cmd)
 	 * UpdateCapsule() depends on the system being reset via
 	 * ResetSystem().
 	 */
-	if (efi_enabled(EFI_RUNTIME_SERVICES))
+	if (efi_enabled(EFI_RUNTIME_SERVICES)) {
+		hisi_pm_system_reset_comm(cmd);
 		efi_reboot(reboot_mode, NULL);
+	}
 
 	/* Now call the architecture specific reboot code. */
 	if (arm_pm_restart)
@@ -167,6 +186,9 @@ void machine_restart(char *cmd)
 	 * Whoops - the architecture was unable to reboot.
 	 */
 	printk("Reboot failed -- System halted\n");
+#ifdef CONFIG_HISI_BB
+	flush_logbuff_range();
+#endif
 	while (1);
 }
 
@@ -238,6 +260,9 @@ void __show_regs(struct pt_regs *regs)
 {
 	int i, top_reg;
 	u64 lr, sp;
+#ifdef CONFIG_HISI_BB
+	unsigned int mask = 0x1 << get_cpu();
+#endif
 
 	if (compat_user_mode(regs)) {
 		lr = regs->compat_lr;
@@ -270,8 +295,14 @@ void __show_regs(struct pt_regs *regs)
 		pr_cont("\n");
 	}
 	if (!user_mode(regs))
-		show_extra_register_data(regs, 128);
+#ifdef CONFIG_HISI_BB
+		if (!(g_cpu_in_ipi_stop & mask))
+#endif
+			show_extra_register_data(regs, 128);
 	printk("\n");
+#ifdef CONFIG_HISI_BB
+	put_cpu();
+#endif
 }
 
 void show_regs(struct pt_regs * regs)
@@ -351,6 +382,8 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 				childregs->sp = stack_start;
 		}
 
+		childregs->pstate |= PSR_SSBS_BIT;
+
 		/*
 		 * If a TLS pointer was passed to clone (4th argument), use it
 		 * for the new thread.
@@ -363,6 +396,14 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 		if (IS_ENABLED(CONFIG_ARM64_UAO) &&
 		    cpus_have_const_cap(ARM64_HAS_UAO))
 			childregs->pstate |= PSR_UAO_BIT;
+
+#ifdef CONFIG_HISI_BYPASS_SSBS
+		childregs->pstate |= PSR_SSBS_BIT;
+#else
+		if (arm64_get_ssbd_state() == ARM64_SSBD_FORCE_DISABLE)
+			set_ssbs_bit(childregs);
+#endif
+
 		p->thread.cpu_context.x19 = stack_start;
 		p->thread.cpu_context.x20 = stk_sz;
 	}
@@ -395,11 +436,42 @@ static void tls_thread_switch(struct task_struct *next)
 void uao_thread_switch(struct task_struct *next)
 {
 	if (IS_ENABLED(CONFIG_ARM64_UAO)) {
-		if (task_thread_info(next)->addr_limit == KERNEL_DS)
+#ifndef CONFIG_HKIP_ADDR_LIMIT_PROTECTION
+		bool uao = task_thread_info(next)->addr_limit == KERNEL_DS;
+#else
+		bool uao = hkip_get_task_bit(hkip_addr_limit_bits, next, true);
+#endif
+		if (uao)
 			asm(ALTERNATIVE("nop", SET_PSTATE_UAO(1), ARM64_HAS_UAO));
 		else
 			asm(ALTERNATIVE("nop", SET_PSTATE_UAO(0), ARM64_HAS_UAO));
 	}
+}
+
+/*
+ * Force SSBS state on context-switch, since it may be lost after migrating
+ * from a CPU which treats the bit as RES0 in a heterogeneous system.
+ */
+static void ssbs_thread_switch(struct task_struct *next)
+{
+	struct pt_regs *regs = task_pt_regs(next);
+
+	/*
+	 * Nothing to do for kernel threads, but 'regs' may be junk
+	 * (e.g. idle task) so check the flags and bail early.
+	 */
+	if (unlikely(next->flags & PF_KTHREAD))
+		return;
+
+	/* If the mitigation is enabled, then we leave SSBS clear. */
+	if ((arm64_get_ssbd_state() == ARM64_SSBD_FORCE_ENABLE) ||
+	    test_tsk_thread_flag(next, TIF_SSBD))
+		return;
+
+	if (compat_user_mode(regs))
+		set_compat_ssbs_bit(regs);
+	else if (user_mode(regs))
+		set_ssbs_bit(regs);
 }
 
 /*
@@ -430,6 +502,9 @@ __notrace_funcgraph struct task_struct *__switch_to(struct task_struct *prev,
 	contextidr_thread_switch(next);
 	entry_task_switch(next);
 	uao_thread_switch(next);
+	ssbs_thread_switch(next);
+
+	scs_thread_switch(prev, next);
 
 	/*
 	 * Complete any pending TLB or cache maintenance on this CPU in case

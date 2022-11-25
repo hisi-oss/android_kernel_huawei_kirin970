@@ -375,19 +375,23 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 	atomic_inc(&probe_count);
 	pr_debug("bus: '%s': %s: probing driver %s with device %s\n",
 		 drv->bus->name, __func__, drv->name, dev_name(dev));
-	WARN_ON(!list_empty(&dev->devres_head));
+	if (!list_empty(&dev->devres_head)) {
+		dev_crit(dev, "Resources present before probing\n");
+		return -EBUSY;
+	}
 
 re_probe:
 	dev->driver = drv;
-
+#ifdef CONFIG_HISI_ENABLE_PINCTRL_BIND_PINS
 	/* If using pinctrl, bind pins now before probing */
 	ret = pinctrl_bind_pins(dev);
 	if (ret)
 		goto pinctrl_bind_failed;
+#endif
 
 	ret = dma_configure(dev);
 	if (ret)
-		goto dma_failed;
+		goto probe_failed;
 
 	if (driver_sysfs_add(dev)) {
 		printk(KERN_ERR "%s: driver_sysfs_add(%s) failed\n",
@@ -442,14 +446,15 @@ re_probe:
 	goto done;
 
 probe_failed:
-	dma_deconfigure(dev);
-dma_failed:
 	if (dev->bus)
 		blocking_notifier_call_chain(&dev->bus->p->bus_notifier,
 					     BUS_NOTIFY_DRIVER_NOT_BOUND, dev);
+#ifdef CONFIG_HISI_ENABLE_PINCTRL_BIND_PINS
 pinctrl_bind_failed:
+#endif
 	device_links_no_driver(dev);
 	devres_release_all(dev);
+	dma_deconfigure(dev);
 	driver_sysfs_remove(dev);
 	dev->driver = NULL;
 	dev_set_drvdata(dev, NULL);
@@ -605,7 +610,7 @@ struct device_attach_data {
 	 */
 	bool have_async;
 };
-
+/*lint -save -e578*/
 static int __device_attach_driver(struct device_driver *drv, void *_data)
 {
 	struct device_attach_data *data = _data;
@@ -644,7 +649,7 @@ static int __device_attach_driver(struct device_driver *drv, void *_data)
 
 	return driver_probe_device(drv, dev);
 }
-
+/*lint -restore*/
 static void __device_attach_async_helper(void *_dev, async_cookie_t cookie)
 {
 	struct device *dev = _dev;

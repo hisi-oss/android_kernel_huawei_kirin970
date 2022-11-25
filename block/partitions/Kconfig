@@ -268,3 +268,9 @@ config CMDLINE_PARTITION
 	help
 	  Say Y here if you want to read the partition table from bootargs.
 	  The format for the command line is just like mtdparts.
+
+config AB_PARTITION_TABLE
+    bool "AB partition support"
+	default n
+	help
+       Say Y here if support ab partition.

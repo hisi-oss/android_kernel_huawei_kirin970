@@ -80,6 +80,22 @@ static int init_state_node(struct cpuidle_state *idle_state,
 		return -EINVAL;
 	}
 
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+	err = of_property_read_u32(state_node, "lp-exit-latency-us",
+				   &idle_state->lp_exit_latency);
+	if (err) {
+		pr_warn(" * %pOF missing lp-residency-us property\n",
+			     state_node);
+	}
+
+	err = of_property_read_u32(state_node, "lp-residency-us",
+				   &idle_state->lp_target_residency);
+	if (err) {
+		pr_warn(" * %pOF missing lp-residency-us property\n",
+			     state_node);
+	}
+#endif // CONFIG_HISI_CPUIDLE_LP_MODE
+
 	err = of_property_read_string(state_node, "idle-state-name", &desc);
 	if (err)
 		desc = state_node->name;

@@ -13,6 +13,9 @@
 #include <linux/dcache.h>
 #include <linux/magic.h>
 #include <linux/types.h>
+#ifdef CONFIG_HKIP_SELINUX_PROT
+#include <linux/hisi/prmem.h>
+#endif
 #include "flask.h"
 
 #define SECSID_NULL			0x00000000 /* unspecified SID */
@@ -63,9 +66,19 @@
 #define DEFCONTEXT_STR	"defcontext="
 #define LABELSUPP_STR "seclabel"
 
+#ifdef CONFIG_HKIP_SELINUX_PROT
+#define HKIP_SELINUX_PROT const
+#else
+#define HKIP_SELINUX_PROT
+#endif
+
 struct netlbl_lsm_secattr;
 
 extern int selinux_enabled;
+
+#ifdef CONFIG_HKIP_SELINUX_PROT
+extern struct prmem_pool selinux_pool;
+#endif
 
 /* Policy capabilities */
 enum {

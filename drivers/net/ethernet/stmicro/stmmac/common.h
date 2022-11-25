@@ -340,8 +340,7 @@ struct dma_features {
 
 /* GMAC TX FIFO is 8K, Rx FIFO is 16K */
 #define BUF_SIZE_16KiB 16384
-/* RX Buffer size must be < 8191 and multiple of 4/8/16 bytes */
-#define BUF_SIZE_8KiB 8188
+#define BUF_SIZE_8KiB 8192
 #define BUF_SIZE_4KiB 4096
 #define BUF_SIZE_2KiB 2048
 
@@ -444,8 +443,7 @@ struct stmmac_dma_ops {
 			 int rxfifosz);
 	void (*dma_rx_mode)(void __iomem *ioaddr, int mode, u32 channel,
 			    int fifosz);
-	void (*dma_tx_mode)(void __iomem *ioaddr, int mode, u32 channel,
-			    int fifosz);
+	void (*dma_tx_mode)(void __iomem *ioaddr, int mode, u32 channel);
 	/* To track extra statistic (if supported) */
 	void (*dma_diagnostic_fr) (void *data, struct stmmac_extra_stats *x,
 				   void __iomem *ioaddr);
@@ -475,7 +473,7 @@ struct mac_device_info;
 /* Helpers to program the MAC core */
 struct stmmac_ops {
 	/* MAC core initialization */
-	void (*core_init)(struct mac_device_info *hw, struct net_device *dev);
+	void (*core_init)(struct mac_device_info *hw, int mtu);
 	/* Enable the MAC RX/TX */
 	void (*set_mac)(void __iomem *ioaddr, bool enable);
 	/* Enable and verify that the IPC module is supported */

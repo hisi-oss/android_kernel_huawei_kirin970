@@ -1487,10 +1487,6 @@ static void qed_ll2_post_rx_buffer_notify_fw(struct qed_hwfn *p_hwfn,
 	cq_prod = qed_chain_get_prod_idx(&p_rx->rcq_chain);
 	rx_prod.bd_prod = cpu_to_le16(bd_prod);
 	rx_prod.cqe_prod = cpu_to_le16(cq_prod);
-
-	/* Make sure chain element is updated before ringing the doorbell */
-	dma_wmb();
-
 	DIRECT_REG_WR(p_rx->set_prod_addr, *((u32 *)&rx_prod));
 }
 
@@ -2299,24 +2295,19 @@ static int qed_ll2_start_xmit(struct qed_dev *cdev, struct sk_buff *skb)
 {
 	struct qed_ll2_tx_pkt_info pkt;
 	const skb_frag_t *frag;
-	u8 flags = 0, nr_frags;
 	int rc = -EINVAL, i;
 	dma_addr_t mapping;
 	u16 vlan = 0;
+	u8 flags = 0;
 
 	if (unlikely(skb->ip_summed != CHECKSUM_NONE)) {
 		DP_INFO(cdev, "Cannot transmit a checksumed packet\n");
 		return -EINVAL;
 	}
 
-	/* Cache number of fragments from SKB since SKB may be freed by
-	 * the completion routine after calling qed_ll2_prepare_tx_packet()
-	 */
-	nr_frags = skb_shinfo(skb)->nr_frags;
-
-	if (1 + nr_frags > CORE_LL2_TX_MAX_BDS_PER_PACKET) {
+	if (1 + skb_shinfo(skb)->nr_frags > CORE_LL2_TX_MAX_BDS_PER_PACKET) {
 		DP_ERR(cdev, "Cannot transmit a packet with %d fragments\n",
-		       1 + nr_frags);
+		       1 + skb_shinfo(skb)->nr_frags);
 		return -EINVAL;
 	}
 
@@ -2338,7 +2329,7 @@ static int qed_ll2_start_xmit(struct qed_dev *cdev, struct sk_buff *skb)
 	}
 
 	memset(&pkt, 0, sizeof(pkt));
-	pkt.num_of_bds = 1 + nr_frags;
+	pkt.num_of_bds = 1 + skb_shinfo(skb)->nr_frags;
 	pkt.vlan = vlan;
 	pkt.bd_flags = flags;
 	pkt.tx_dest = QED_LL2_TX_DEST_NW;
@@ -2346,17 +2337,12 @@ static int qed_ll2_start_xmit(struct qed_dev *cdev, struct sk_buff *skb)
 	pkt.first_frag_len = skb->len;
 	pkt.cookie = skb;
 
-	/* qed_ll2_prepare_tx_packet() may actually send the packet if
-	 * there are no fragments in the skb and subsequently the completion
-	 * routine may run and free the SKB, so no dereferencing the SKB
-	 * beyond this point unless skb has any fragments.
-	 */
 	rc = qed_ll2_prepare_tx_packet(&cdev->hwfns[0], cdev->ll2->handle,
 				       &pkt, 1);
 	if (rc)
 		goto err;
 
-	for (i = 0; i < nr_frags; i++) {
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
 		frag = &skb_shinfo(skb)->frags[i];
 
 		mapping = skb_frag_dma_map(&cdev->pdev->dev, frag, 0,
@@ -2365,7 +2351,6 @@ static int qed_ll2_start_xmit(struct qed_dev *cdev, struct sk_buff *skb)
 		if (unlikely(dma_mapping_error(&cdev->pdev->dev, mapping))) {
 			DP_NOTICE(cdev,
 				  "Unable to map frag - dropping packet\n");
-			rc = -ENOMEM;
 			goto err;
 		}
 

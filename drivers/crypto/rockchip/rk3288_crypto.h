@@ -207,8 +207,7 @@ struct rk_crypto_info {
 	void				*addr_vir;
 	int				aligned;
 	int				align_size;
-	size_t				src_nents;
-	size_t				dst_nents;
+	size_t				nents;
 	unsigned int			total;
 	unsigned int			count;
 	dma_addr_t			addr_in;
@@ -245,7 +244,6 @@ struct rk_cipher_ctx {
 	struct rk_crypto_info		*dev;
 	unsigned int			keylen;
 	u32				mode;
-	u8				iv[AES_BLOCK_SIZE];
 };
 
 enum alg_type {

@@ -15,17 +15,45 @@
 #include <linux/cpufreq.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/hisi/hisi_cmdline_parse.h>
+#ifdef CONFIG_ARCH_HISI
+#include <linux/topology.h>
+#endif
 
 static void cpufreq_gov_performance_limits(struct cpufreq_policy *policy)
 {
+#ifdef CONFIG_ARCH_HISI
+	unsigned int utarget;
+
+	if ((get_low_battery_flag() == 1) &&
+	    topology_physical_package_id(policy->cpu) > 0)
+		utarget = policy->min;
+	else
+		utarget = policy->max;
+
+	pr_debug("%s utarget=%d\n", __func__, utarget);
+
+	__cpufreq_driver_target(policy, utarget, CPUFREQ_RELATION_H);
+#else
 	pr_debug("setting to %u kHz\n", policy->max);
 	__cpufreq_driver_target(policy, policy->max, CPUFREQ_RELATION_H);
+#endif
 }
+
+#ifdef CONFIG_ARCH_HISI
+static void cpufreq_gov_performance_hisi_exit(struct cpufreq_policy *policy)
+{
+	set_low_battery_flag(0);
+}
+#endif
 
 static struct cpufreq_governor cpufreq_gov_performance = {
 	.name		= "performance",
 	.owner		= THIS_MODULE,
 	.limits		= cpufreq_gov_performance_limits,
+#ifdef CONFIG_ARCH_HISI
+	.exit		= cpufreq_gov_performance_hisi_exit,
+#endif
 };
 
 static int __init cpufreq_gov_performance_init(void)

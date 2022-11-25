@@ -6,7 +6,7 @@ if HAS_IOMEM
 menu "Multifunction device drivers"
 
 config MFD_CORE
-	tristate
+	tristate "mfd core"
 	select IRQ_DOMAIN
 	default n
 
@@ -1781,6 +1781,191 @@ config MFD_STM32_TIMERS
 	  for PWM and IIO Timer. This driver allow to share the
 	  registers between the others drivers.
 
+config MFD_HISI_IP_CORE
+	tristate "Control HiSilicon system interior area Bus on and off"
+	depends on OF
+	help
+	  This driver control HiSilicon system interior area power management from atf.
+
+config HISI_FREQ_AUTODOWN
+	tristate "Support HiSilicon Bus automatic frequency reduction"
+	depends on OF
+	help
+	  Bus automatic frequency reduction is a method for reducing power consumption
+	  of the chip is proposed, through the bus load automatically reduced frequency.
+
+config HISI_PMIC_PMU_SPMI
+	tristate "HiSilicon PMU/Codec IC and use spmi passageway"
+	depends on OF
+	depends on HISI_SPMI
+	help
+	  This driver supports HiSilicon Hisi power management and codec IC,
+	  including regulators, codec, ADCs, Coulomb counter, etc. Memory
+	  mapped I/O ports are the way of communication with it. and use spmi
+	  passageway read pmu address.
+
+config HISI_PMIC_PMU_I2C
+	tristate "HiSilicon PMU/Codec IC and use i2c passageway"
+	help
+	  This driver supports HiSilicon Hisi power management and codec IC,
+	  including regulators, codec, ADCs, Coulomb counter, etc. Memory
+	  mapped I/O ports are the way of communication with it. and use i2c
+	  passageway read pmu address.
+
+config HISI_PMIC_SUB_PMU_SPMI
+	tristate "HiSilicon SUB PMU/Codec IC and use spmi passageway"
+	depends on OF
+	depends on HISI_SPMI
+	help
+	  This driver supports HiSilicon Hisi power management and codec IC,
+	  including regulators, codec, ADCs, Coulomb counter, etc. Memory
+	  mapped I/O ports are the way of communication with it. and use spmi
+	  passageway read sub pmu address.
+
+config HISI_PMIC_DCXO
+        tristate "HiSilicon PMU DCXO cali"
+        depends on OF
+        depends on HISI_PMIC_PMU_SPMI
+        help
+           put PMU dcxo c1 c2 calibration in fastboot.
+           Earlier, modem do this in kernel init process, which can cause pmu's clock unstable.
+
+config HISI_PMIC_AP_DCXO
+        tristate "HiSilicon PMU DCXO AP cali"
+        depends on OF
+        depends on HISI_PMIC_PMU_SPMI
+        help
+           For platform later than bal, we put PMU dcxo ap c1 c2 calibration in fastboot.
+           Earlier, factory ap do this in kernel init process, which can cause pmu's clock unstable.
+
+config HISI_HI6556V100_PMU
+        tristate "HiSilicon 6556v100 IC"
+        depends on OF
+        help
+           discriminate pmu ic for pmussi passageway.
+
+config HISI_HI6555V500_PMU
+        tristate "HiSilicon 65555v500 IC"
+        depends on OF
+        help
+           discriminate pmu ic for pmussi passageway.
+
+config HISI_HI6421V900_PMU
+        tristate "HiSilicon 6421v900 IC"
+        depends on OF
+        help
+           discriminate pmu ic for pmussi passageway.
+
+config HISI_HI6421V800_PMU
+        tristate "HiSilicon 6421v800 IC"
+        depends on OF
+        help
+	   discriminate pmu ic for pmussi passageway.
+
+config HISI_HI6555V300_PMU
+        tristate "HiSilicon 6555v300 IC"
+        depends on OF
+        help
+          discriminate pmu ic for pmussi passageway.
+
+
+config HISI_HI6421V700_PMU
+        tristate "HiSilicon 6421v700 IC"
+        depends on OF
+        help
+          discriminate pmu ic for pmussi passageway.
+
+config HISI_HI6555V200_PMU
+        tristate "HiSilicon 6555v200 IC"
+        depends on OF
+        help
+          discriminate pmu ic for 6555v200 passageway.
+
+config HISI_HI6421V600_PMU
+	tristate "HiSilicon 6421v600 IC"
+	depends on OF
+	help
+	  discriminate pmu ic for pmussi passageway.
+
+config HISI_HI6421V500_PMU
+        tristate "HiSilicon 6421v500 IC"
+        depends on OF
+        help
+          discriminate pmu ic for 6421v500 passageway.
+
+config HISI_PMIC_MNTN
+	tristate "HiSilicon Pmic Mntn"
+	depends on OF
+	help
+	  This driver supports HiSilicon Hisi power management and codec IC,
+	  including regulators, codec, ADCs, Coulomb counter, etc. Memory
+	  mapped I/O ports are the way of communication with it.
+
+config HISI_PMIC_MNTN_SPMI
+	tristate "HiSilicon spmi pmic mntn"
+	depends on OF
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver supports HiSilicon Hisi power management and codec IC,
+	  which passage is spmi,including regulators, codec, ADCs, Coulomb counter, etc.
+	  Memory mapped I/O ports are the way of communication with it.
+
+config HISI_VBAT_DROP_PRT
+    tristate "HiSilicon vbat drop protect"
+    depends on OF
+    depends on HISI_PMIC_PMU_SPMI
+    help
+      This driver supports HiSilicon battery vol drop protect by auto reducing
+        cpu core frequency.
+
+config HISI_VBAT_DROP_PRT_ATLA
+	tristate "HiSilicon platform ATLA vbat drop protect"
+	depends on OF
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver supports HiSilicon platform ATLA battery vol drop protect by auto reducing
+	    cpu core frequency.
+
+config HISI_VBAT_DROP_PRT_PHON
+	tristate "HiSilicon platform PHON vbat drop protect"
+	depends on OF
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver supports HiSilicon platform PHON battery vol drop protect by auto reducing
+	    cpu core frequency.
+
+config HISI_VBAT_DROP_PRT_ORL
+	tristate "HiSilicon platform ORL vbat drop protect"
+	depends on OF
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver supports HiSilicon platform ORL battery vol drop protect by auto reducing
+	    cpu core frequency.
+
+config HISI_VBAT_DROP_PRT_BAL
+	tristate "HiSilicon platform BAL vbat drop protect"
+	depends on OF
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver supports HiSilicon platform BAL battery vol drop protect by auto reducing
+	    cpu core frequency.
+
+config HISI_VBAT_DROP_PRT_DENV
+	tristate "HiSilicon platform DENV vbat drop protect"
+	depends on OF
+	depends on HISI_PMIC_PMU_SPMI
+	help
+	  This driver supports HiSilicon platform DENV battery vol drop protect by auto reducing
+	    cpu core frequency.
+
+config HISI_VBAT_DROP_PRT_CHAR
+        tristate "HiSilicon platform CHAR vbat drop protect"
+        depends on OF
+        depends on HISI_PMIC_PMU_SPMI
+        help
+          This driver supports HiSilicon platform CHAR battery vol drop protect by auto reducing
+            cpu core frequency.
+
 menu "Multimedia Capabilities Port drivers"
 	depends on ARCH_SA1100
 
@@ -1816,6 +2001,8 @@ config MFD_VEXPRESS_SYSREG
 	help
 	  System Registers are the platform configuration block
 	  on the ARM Ltd. Versatile Express board.
+
+source "drivers/mfd/hisi_hi6562_pmic_mipi/Kconfig"
 
 endmenu
 endif

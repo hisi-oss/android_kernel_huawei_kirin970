@@ -24,6 +24,9 @@
 
 #define CREATE_TRACE_POINTS
 #include "sync_trace.h"
+#ifdef CONFIG_HW_FDLEAK
+#include <chipset_common/hwfdleak/fdleak.h>
+#endif
 
 /*
  * SW SYNC validation framework
@@ -141,17 +144,14 @@ static void timeline_fence_release(struct dma_fence *fence)
 {
 	struct sync_pt *pt = dma_fence_to_sync_pt(fence);
 	struct sync_timeline *parent = dma_fence_parent(fence);
+	unsigned long flags;
 
+	spin_lock_irqsave(fence->lock, flags);
 	if (!list_empty(&pt->link)) {
-		unsigned long flags;
-
-		spin_lock_irqsave(fence->lock, flags);
-		if (!list_empty(&pt->link)) {
-			list_del(&pt->link);
-			rb_erase(&pt->node, &parent->pt_tree);
-		}
-		spin_unlock_irqrestore(fence->lock, flags);
+		list_del(&pt->link);
+		rb_erase(&pt->node, &parent->pt_tree);
 	}
+	spin_unlock_irqrestore(fence->lock, flags);
 
 	sync_timeline_put(parent);
 	dma_fence_free(fence);
@@ -283,7 +283,8 @@ static struct sync_pt *sync_pt_create(struct sync_timeline *obj,
 				p = &parent->rb_left;
 			} else {
 				if (dma_fence_get_rcu(&other->base)) {
-					dma_fence_put(&pt->base);
+					sync_timeline_put(obj);
+					kfree(pt);
 					pt = other;
 					goto unlock;
 				}
@@ -382,7 +383,9 @@ static long sw_sync_ioctl_create_fence(struct sync_timeline *obj,
 	}
 
 	fd_install(fd, sync_file->file);
-
+#ifdef CONFIG_HW_FDLEAK
+	fdleak_report(FDLEAK_WP_SYNCFENCE, 0);
+#endif
 	return 0;
 
 err:

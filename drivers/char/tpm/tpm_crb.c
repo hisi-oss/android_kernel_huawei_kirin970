@@ -288,29 +288,19 @@ static int crb_recv(struct tpm_chip *chip, u8 *buf, size_t count)
 	struct crb_priv *priv = dev_get_drvdata(&chip->dev);
 	unsigned int expected;
 
-	/* A sanity check that the upper layer wants to get at least the header
-	 * as that is the minimum size for any TPM response.
-	 */
-	if (count < TPM_HEADER_SIZE)
+	/* sanity check */
+	if (count < 6)
 		return -EIO;
 
-	/* If this bit is set, according to the spec, the TPM is in
-	 * unrecoverable condition.
-	 */
 	if (ioread32(&priv->regs_t->ctrl_sts) & CRB_CTRL_STS_ERROR)
 		return -EIO;
 
-	/* Read the first 8 bytes in order to get the length of the response.
-	 * We read exactly a quad word in order to make sure that the remaining
-	 * reads will be aligned.
-	 */
-	memcpy_fromio(buf, priv->rsp, 8);
-
-	expected = be32_to_cpup((__be32 *)&buf[2]);
-	if (expected > count || expected < TPM_HEADER_SIZE)
+	memcpy_fromio(buf, priv->rsp, 6);
+	expected = be32_to_cpup((__be32 *) &buf[2]);
+	if (expected > count || expected < 6)
 		return -EIO;
 
-	memcpy_fromio(&buf[8], &priv->rsp[8], expected - 8);
+	memcpy_fromio(&buf[6], &priv->rsp[6], expected - 6);
 
 	return expected;
 }
@@ -530,10 +520,8 @@ static int crb_map_io(struct acpi_device *device, struct crb_priv *priv,
 
 	priv->regs_t = crb_map_res(dev, priv, &io_res, buf->control_address,
 				   sizeof(struct crb_regs_tail));
-	if (IS_ERR(priv->regs_t)) {
-		ret = PTR_ERR(priv->regs_t);
-		goto out_relinquish_locality;
-	}
+	if (IS_ERR(priv->regs_t))
+		return PTR_ERR(priv->regs_t);
 
 	/*
 	 * PTT HW bug w/a: wake up the device to access
@@ -541,7 +529,7 @@ static int crb_map_io(struct acpi_device *device, struct crb_priv *priv,
 	 */
 	ret = __crb_cmd_ready(dev, priv);
 	if (ret)
-		goto out_relinquish_locality;
+		return ret;
 
 	pa_high = ioread32(&priv->regs_t->ctrl_cmd_pa_high);
 	pa_low  = ioread32(&priv->regs_t->ctrl_cmd_pa_low);
@@ -585,8 +573,6 @@ out:
 		priv->cmd_size = cmd_size;
 
 	__crb_go_idle(dev, priv);
-
-out_relinquish_locality:
 
 	__crb_relinquish_locality(dev, priv, 0);
 

@@ -26,14 +26,17 @@
 #include <linux/list.h>
 #include <linux/dma-mapping.h>
 
+#include <linux/hisi/usb/chip_usb_log.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb/composite.h>
+#include <linux/hisi/hitest_slt.h>
 
 #include "core.h"
 #include "debug.h"
 #include "gadget.h"
 #include "io.h"
+#include <linux/hisi/usb/dwc3_usb_interface.h>
 
 static void __dwc3_ep0_do_control_status(struct dwc3 *dwc, struct dwc3_ep *dep);
 static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
@@ -42,8 +45,8 @@ static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 static void dwc3_ep0_prepare_one_trb(struct dwc3_ep *dep,
 		dma_addr_t buf_dma, u32 len, u32 type, bool chain)
 {
-	struct dwc3_trb			*trb;
-	struct dwc3			*dwc;
+	struct dwc3_trb			*trb = NULL;
+	struct dwc3			*dwc = NULL;
 
 	dwc = dep->dwc;
 	trb = &dwc->ep0_trb[dep->trb_enqueue];
@@ -71,7 +74,7 @@ static void dwc3_ep0_prepare_one_trb(struct dwc3_ep *dep,
 static int dwc3_ep0_start_trans(struct dwc3_ep *dep)
 {
 	struct dwc3_gadget_ep_cmd_params params;
-	struct dwc3			*dwc;
+	struct dwc3			*dwc = NULL;
 	int				ret;
 
 	if (dep->flags & DWC3_EP_BUSY)
@@ -190,7 +193,16 @@ static int __dwc3_gadget_ep0_queue(struct dwc3_ep *dep,
 		__dwc3_ep0_do_control_data(dwc, dwc->eps[direction], req);
 
 		dep->flags &= ~DWC3_EP0_DIR_IN;
+
+		return 0;
 	}
+
+	/* mark the status phase already queued */
+	if (dwc->ep0_next_event == DWC3_EP0_NRDY_STATUS)
+		dwc->status_queued = true;
+
+	if (req->request.length != 0)
+		dev_WARN(dwc->dev, "status phase len %d\n", req->request.length);
 
 	return 0;
 }
@@ -230,7 +242,13 @@ out:
 
 static void dwc3_ep0_stall_and_restart(struct dwc3 *dwc)
 {
-	struct dwc3_ep		*dep;
+	struct dwc3_ep		*dep = NULL;
+
+	if (!(dwc->eps[1]->flags & DWC3_EP_ENABLED)
+		|| !(dwc->eps[0]->flags & DWC3_EP_ENABLED)) {
+		dev_info(dwc->dev, "ep0 is already disabled!\n");
+		return;
+	}
 
 	/* reinitialize physical ep1 */
 	dep = dwc->eps[1];
@@ -241,6 +259,7 @@ static void dwc3_ep0_stall_and_restart(struct dwc3 *dwc)
 	__dwc3_gadget_ep_set_halt(dep, 1, false);
 	dep->flags = DWC3_EP_ENABLED;
 	dwc->delayed_status = false;
+	dwc->status_queued = false;
 
 	if (!list_empty(&dep->pending_list)) {
 		struct dwc3_request	*req;
@@ -279,7 +298,7 @@ int dwc3_gadget_ep0_set_halt(struct usb_ep *ep, int value)
 
 void dwc3_ep0_out_start(struct dwc3 *dwc)
 {
-	struct dwc3_ep			*dep;
+	struct dwc3_ep			*dep = NULL;
 	int				ret;
 
 	complete(&dwc->ep0_in_setup);
@@ -293,7 +312,7 @@ void dwc3_ep0_out_start(struct dwc3 *dwc)
 
 static struct dwc3_ep *dwc3_wIndex_to_dep(struct dwc3 *dwc, __le16 wIndex_le)
 {
-	struct dwc3_ep		*dep;
+	struct dwc3_ep		*dep = NULL;
 	u32			windex = le16_to_cpu(wIndex_le);
 	u32			epnum;
 
@@ -305,6 +324,7 @@ static struct dwc3_ep *dwc3_wIndex_to_dep(struct dwc3 *dwc, __le16 wIndex_le)
 	if (dep->flags & DWC3_EP_ENABLED)
 		return dep;
 
+	pr_info("%s: ep %d disabled\n", __func__, epnum);
 	return NULL;
 }
 
@@ -317,16 +337,22 @@ static void dwc3_ep0_status_cmpl(struct usb_ep *ep, struct usb_request *req)
 static int dwc3_ep0_handle_status(struct dwc3 *dwc,
 		struct usb_ctrlrequest *ctrl)
 {
-	struct dwc3_ep		*dep;
+	struct dwc3_ep		*dep = NULL;
 	u32			recip;
 	u32			value;
 	u32			reg;
 	u16			usb_status = 0;
-	__le16			*response_pkt;
+	__le16			*response_pkt = NULL;
 
 	/* We don't support PTM_STATUS */
 	value = le16_to_cpu(ctrl->wValue);
 	if (value != 0)
+		return -EINVAL;
+
+	if (!(ctrl->bRequestType & USB_DIR_IN))
+		return -EINVAL;
+
+	if (!le16_to_cpu(ctrl->wLength))
 		return -EINVAL;
 
 	recip = ctrl->bRequestType & USB_RECIP_MASK;
@@ -379,6 +405,15 @@ static int dwc3_ep0_handle_status(struct dwc3 *dwc,
 	return __dwc3_gadget_ep0_queue(dep, &dwc->ep0_usb_req);
 }
 
+static int dwc3_ep0_is_dis_u1u2(struct dwc3 *dwc)
+{
+	if ((dwc->dis_u1u2_quirk != 0) || is_running_kernel_slt()) {
+		pr_err("%s: quirk or slt, disable u1u2\n", __func__);
+		return 1;
+	}
+	return 0;
+}
+
 static int dwc3_ep0_handle_u1(struct dwc3 *dwc, enum usb_device_state state,
 		int set)
 {
@@ -391,7 +426,7 @@ static int dwc3_ep0_handle_u1(struct dwc3 *dwc, enum usb_device_state state,
 		return -EINVAL;
 
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
-	if (set)
+	if (set && !(dwc3_ep0_is_dis_u1u2(dwc)))
 		reg |= DWC3_DCTL_INITU1ENA;
 	else
 		reg &= ~DWC3_DCTL_INITU1ENA;
@@ -413,7 +448,7 @@ static int dwc3_ep0_handle_u2(struct dwc3 *dwc, enum usb_device_state state,
 		return -EINVAL;
 
 	reg = dwc3_readl(dwc->regs, DWC3_DCTL);
-	if (set)
+	if (set && !(dwc3_ep0_is_dis_u1u2(dwc)))
 		reg |= DWC3_DCTL_INITU2ENA;
 	else
 		reg &= ~DWC3_DCTL_INITU2ENA;
@@ -516,7 +551,7 @@ static int dwc3_ep0_handle_intf(struct dwc3 *dwc,
 static int dwc3_ep0_handle_endpoint(struct dwc3 *dwc,
 		struct usb_ctrlrequest *ctrl, int set)
 {
-	struct dwc3_ep		*dep;
+	struct dwc3_ep		*dep = NULL;
 	enum usb_device_state	state;
 	u32			wValue;
 	u32			wIndex;
@@ -608,9 +643,32 @@ static int dwc3_ep0_delegate_req(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 	int ret;
 
 	spin_unlock(&dwc->lock);
-	ret = dwc->gadget_driver->setup(&dwc->gadget, ctrl);
+	if (dwc->pullups_connected)
+		ret = dwc->gadget_driver->setup(&dwc->gadget, ctrl);
+	else
+		ret = -ENOENT;
 	spin_lock(&dwc->lock);
 	return ret;
+}
+
+static void dwc3_setconfig_notify(enum usb_device_speed speed)
+{
+    atomic_notifier_call_chain(&device_event_nh, DEVICE_EVENT_SETCONFIG,
+            (void *)&speed);
+}
+
+static void dwc3_set_lpm_cap(struct dwc3 *dwc)
+{
+	u32 reg;
+
+	if ((dwc->revision > DWC3_REVISION_194A) &&
+	    (dwc->speed != DWC3_DCFG_SUPERSPEED) &&
+	    (dwc->speed != DWC3_DCFG_SUPERSPEED_PLUS) &&
+	    !dwc->dis_dcfg_lpm) {
+		reg = dwc3_readl(dwc->regs, DWC3_DCFG);
+		reg |= DWC3_DCFG_LPM_CAP;
+		dwc3_writel(dwc->regs, DWC3_DCFG, reg);
+	}
 }
 
 static int dwc3_ep0_set_config(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
@@ -645,9 +703,16 @@ static int dwc3_ep0_set_config(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 			 * Enable transition to U1/U2 state when
 			 * nothing is pending from application.
 			 */
-			reg = dwc3_readl(dwc->regs, DWC3_DCTL);
-			reg |= (DWC3_DCTL_ACCEPTU1ENA | DWC3_DCTL_ACCEPTU2ENA);
-			dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+			if (!(dwc3_ep0_is_dis_u1u2(dwc))) {
+				reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+				reg |= (DWC3_DCTL_ACCEPTU1ENA | DWC3_DCTL_ACCEPTU2ENA);
+				dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+			}
+
+			dwc3_set_lpm_cap(dwc);
+
+			pr_info("USB SET CONFIGURED\n");
+			dwc3_setconfig_notify(dwc->gadget.speed);
 		}
 		break;
 
@@ -709,10 +774,16 @@ static void dwc3_ep0_set_sel_cmpl(struct usb_ep *ep, struct usb_request *req)
 
 static int dwc3_ep0_set_sel(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 {
-	struct dwc3_ep	*dep;
+	struct dwc3_ep	*dep = NULL;
 	enum usb_device_state state = dwc->gadget.state;
 	u16		wLength;
 	u16		wValue;
+
+	if (unlikely(ctrl->bRequestType & USB_DIR_IN))
+		return -EINVAL;
+
+	if (unlikely(!le16_to_cpu(ctrl->wLength)))
+		return -EINVAL;
 
 	if (state == USB_STATE_DEFAULT)
 		return -EINVAL;
@@ -780,9 +851,11 @@ static int dwc3_ep0_std_request(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
 		ret = dwc3_ep0_handle_feature(dwc, ctrl, 1);
 		break;
 	case USB_REQ_SET_ADDRESS:
+		hiusb_dev_info(dwc->dev, "set_address\n");
 		ret = dwc3_ep0_set_address(dwc, ctrl);
 		break;
 	case USB_REQ_SET_CONFIGURATION:
+		hiusb_dev_info(dwc->dev, "set_configuration\n");
 		ret = dwc3_ep0_set_config(dwc, ctrl);
 		break;
 	case USB_REQ_SET_SEL:
@@ -830,21 +903,39 @@ static void dwc3_ep0_inspect_setup(struct dwc3 *dwc,
 	if (ret == USB_GADGET_DELAYED_STATUS)
 		dwc->delayed_status = true;
 
+	if (dwc->status_queued) {
+		dwc->status_queued = false;
+		if (dwc->delayed_status) {
+			pr_info("delayed status already come, will not wait for it.\n");
+			dwc->delayed_status = false;
+			usb_gadget_set_state(&dwc->gadget,
+					USB_STATE_CONFIGURED);
+		}
+	}
+
+	hiusb_dev_info(dwc->dev,"ctrl: %02x %02x %04x %04x %04x\n",
+			    ctrl->bRequestType, ctrl->bRequest,
+			    ctrl->wValue, ctrl->wIndex, ctrl->wLength);
 out:
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(dwc->dev, "ep0 setup error, ret %d!\n", ret);
+		dev_err(dwc->dev, "ctrl: %02x %02x %04x %04x %04x\n",
+			    ctrl->bRequestType, ctrl->bRequest,
+			    ctrl->wValue, ctrl->wIndex, ctrl->wLength);
 		dwc3_ep0_stall_and_restart(dwc);
+	}
 }
 
 static void dwc3_ep0_complete_data(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event)
 {
 	struct dwc3_request	*r = NULL;
-	struct usb_request	*ur;
-	struct dwc3_trb		*trb;
-	struct dwc3_ep		*ep0;
+	struct usb_request	*ur = NULL;
+	struct dwc3_trb		*trb = NULL;
+	struct dwc3_ep		*ep0 = NULL;
 	unsigned		maxp;
 	unsigned		remaining_ur_length;
-	void			*buf;
+	void			*buf = NULL;
 	u32			transferred = 0;
 	u32			status;
 	u32			length;
@@ -858,8 +949,10 @@ static void dwc3_ep0_complete_data(struct dwc3 *dwc,
 	trace_dwc3_complete_trb(ep0, trb);
 
 	r = next_request(&ep0->pending_list);
-	if (!r)
+	if (!r) {
+		dev_err(dwc->dev, "ep0 request list empty while complete data\n");
 		return;
+	}
 
 	status = DWC3_TRB_SIZE_TRBSTS(trb->size);
 	if (status == DWC3_TRBSTS_SETUP_PENDING) {
@@ -902,9 +995,9 @@ static void dwc3_ep0_complete_data(struct dwc3 *dwc,
 static void dwc3_ep0_complete_status(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event)
 {
-	struct dwc3_request	*r;
-	struct dwc3_ep		*dep;
-	struct dwc3_trb		*trb;
+	struct dwc3_request	*r = NULL;
+	struct dwc3_ep		*dep = NULL;
+	struct dwc3_trb		*trb = NULL;
 	u32			status;
 
 	dep = dwc->eps[0];
@@ -967,12 +1060,16 @@ static void dwc3_ep0_xfer_complete(struct dwc3 *dwc,
 static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 		struct dwc3_ep *dep, struct dwc3_request *req)
 {
+	unsigned int		trb_length = 0;
 	int			ret;
 
 	req->direction = !!dep->number;
 
 	if (req->request.length == 0) {
-		dwc3_ep0_prepare_one_trb(dep, dwc->ep0_trb_addr, 0,
+		if (!req->direction)
+			trb_length = dep->endpoint.maxpacket;
+
+		dwc3_ep0_prepare_one_trb(dep, dwc->bounce_addr, trb_length,
 				DWC3_TRBCTL_CONTROL_DATA, false);
 		ret = dwc3_ep0_start_trans(dep);
 	} else if (!IS_ALIGNED(req->request.length, dep->endpoint.maxpacket)
@@ -1024,9 +1121,12 @@ static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 
 		req->trb = &dwc->ep0_trb[dep->trb_enqueue - 1];
 
+		if (!req->direction)
+			trb_length = dep->endpoint.maxpacket;
+
 		/* Now prepare one extra TRB to align transfer size */
 		dwc3_ep0_prepare_one_trb(dep, dwc->bounce_addr,
-					 0, DWC3_TRBCTL_CONTROL_DATA,
+					 trb_length, DWC3_TRBCTL_CONTROL_DATA,
 					 false);
 		ret = dwc3_ep0_start_trans(dep);
 	} else {
@@ -1046,6 +1146,7 @@ static void __dwc3_ep0_do_control_data(struct dwc3 *dwc,
 
 	WARN_ON(ret < 0);
 }
+
 
 static int dwc3_ep0_start_control_status(struct dwc3_ep *dep)
 {
@@ -1140,6 +1241,8 @@ static void dwc3_ep0_xfernotready(struct dwc3 *dwc,
 			return;
 		}
 
+		dwc->status_queued = false;
+
 		dwc3_ep0_do_control_status(dwc, event);
 	}
 }
@@ -1147,6 +1250,9 @@ static void dwc3_ep0_xfernotready(struct dwc3 *dwc,
 void dwc3_ep0_interrupt(struct dwc3 *dwc,
 		const struct dwc3_event_depevt *event)
 {
+	struct dwc3_ep	*dep = dwc->eps[event->endpoint_number];
+	u8		cmd;
+
 	switch (event->endpoint_event) {
 	case DWC3_DEPEVT_XFERCOMPLETE:
 		dwc3_ep0_xfer_complete(dwc, event);
@@ -1159,7 +1265,12 @@ void dwc3_ep0_interrupt(struct dwc3 *dwc,
 	case DWC3_DEPEVT_XFERINPROGRESS:
 	case DWC3_DEPEVT_RXTXFIFOEVT:
 	case DWC3_DEPEVT_STREAMEVT:
+		break;
 	case DWC3_DEPEVT_EPCMDCMPLT:
+		cmd = DEPEVT_PARAMETER_CMD(event->parameters);
+
+		if (cmd == DWC3_DEPCMD_ENDTRANSFER)
+			dep->flags &= ~DWC3_EP_TRANSFER_STARTED;
 		break;
 	}
 }

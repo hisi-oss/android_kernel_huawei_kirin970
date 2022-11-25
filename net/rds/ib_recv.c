@@ -98,12 +98,12 @@ static void rds_ib_cache_xfer_to_ready(struct rds_ib_refill_cache *cache)
 	}
 }
 
-static int rds_ib_recv_alloc_cache(struct rds_ib_refill_cache *cache, gfp_t gfp)
+static int rds_ib_recv_alloc_cache(struct rds_ib_refill_cache *cache)
 {
 	struct rds_ib_cache_head *head;
 	int cpu;
 
-	cache->percpu = alloc_percpu_gfp(struct rds_ib_cache_head, gfp);
+	cache->percpu = alloc_percpu(struct rds_ib_cache_head);
 	if (!cache->percpu)
 	       return -ENOMEM;
 
@@ -118,13 +118,13 @@ static int rds_ib_recv_alloc_cache(struct rds_ib_refill_cache *cache, gfp_t gfp)
 	return 0;
 }
 
-int rds_ib_recv_alloc_caches(struct rds_ib_connection *ic, gfp_t gfp)
+int rds_ib_recv_alloc_caches(struct rds_ib_connection *ic)
 {
 	int ret;
 
-	ret = rds_ib_recv_alloc_cache(&ic->i_cache_incs, gfp);
+	ret = rds_ib_recv_alloc_cache(&ic->i_cache_incs);
 	if (!ret) {
-		ret = rds_ib_recv_alloc_cache(&ic->i_cache_frags, gfp);
+		ret = rds_ib_recv_alloc_cache(&ic->i_cache_frags);
 		if (ret)
 			free_percpu(ic->i_cache_incs.percpu);
 	}

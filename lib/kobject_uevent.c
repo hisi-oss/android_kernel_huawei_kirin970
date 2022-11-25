@@ -28,6 +28,9 @@
 #include <net/sock.h>
 #include <net/net_namespace.h>
 
+#ifdef CONFIG_HUAWEI_DUBAI
+#include <chipset_common/dubai/dubai.h>
+#endif
 
 u64 uevent_seqnum;
 #ifdef CONFIG_UEVENT_HELPER
@@ -340,6 +343,13 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 	struct uevent_sock *ue_sk;
 #endif
 
+	/*
+	 * Mark "remove" event done regardless of result, for some subsystems
+	 * do not want to re-trigger "remove" event via automatic cleanup.
+	 */
+	if (action == KOBJ_REMOVE)
+		kobj->state_remove_uevent_sent = 1;
+
 	pr_debug("kobject: '%s' (%p): %s\n",
 		 kobject_name(kobj), kobj, __func__);
 
@@ -441,10 +451,6 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 		kobj->state_add_uevent_sent = 1;
 		break;
 
-	case KOBJ_REMOVE:
-		kobj->state_remove_uevent_sent = 1;
-		break;
-
 	case KOBJ_UNBIND:
 		zap_modalias_env(env);
 		break;
@@ -499,6 +505,9 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 		} else
 			retval = -ENOMEM;
 	}
+#ifdef CONFIG_HUAWEI_DUBAI
+	dubai_log_uevent(devpath, action);
+#endif
 #endif
 	mutex_unlock(&uevent_sock_mutex);
 

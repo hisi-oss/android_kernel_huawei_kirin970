@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/backing-dev.h>
 #include <linux/swap.h>
+#include <linux/blkdev.h>
 
 #include "blk-wbt.h"
 
@@ -165,7 +166,7 @@ void __wbt_done(struct rq_wb *rwb, enum wbt_flags wb_acct)
  * Called on completion of a request. Note that it's also called when
  * a request is merged, when the request gets freed.
  */
-void wbt_done(struct rq_wb *rwb, struct blk_issue_stat *stat)
+void wbt_done(struct rq_wb *rwb, struct blk_issue_stat *stat, bool fg)
 {
 	if (!rwb)
 		return;
@@ -176,7 +177,11 @@ void wbt_done(struct rq_wb *rwb, struct blk_issue_stat *stat)
 			rwb->sync_cookie = NULL;
 		}
 
+#ifdef CONFIG_BLK_DEV_THROTTLING
+		if (fg)
+#else
 		if (wbt_is_read(stat))
+#endif
 			wb_timestamp(rwb, &rwb->last_comp);
 		wbt_clear_state(stat);
 	} else {
@@ -281,6 +286,13 @@ static int latency_exceeded(struct rq_wb *rwb, struct blk_rq_stat *stat)
 {
 	struct backing_dev_info *bdi = rwb->queue->backing_dev_info;
 	u64 thislat;
+	u32 io_type;
+
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	io_type = READ_FG;
+#else
+	io_type = READ;
+#endif
 
 	/*
 	 * If our stored sync issue exceeds the window size, or it
@@ -293,7 +305,7 @@ static int latency_exceeded(struct rq_wb *rwb, struct blk_rq_stat *stat)
 	 */
 	thislat = rwb_sync_issue_lat(rwb);
 	if (thislat > rwb->cur_win_nsec ||
-	    (thislat > rwb->min_lat_nsec && !stat[READ].nr_samples)) {
+	    (thislat > rwb->min_lat_nsec && !stat[io_type].nr_samples)) {
 		trace_wbt_lat(bdi, thislat);
 		return LAT_EXCEEDED;
 	}
@@ -317,11 +329,19 @@ static int latency_exceeded(struct rq_wb *rwb, struct blk_rq_stat *stat)
 	/*
 	 * If the 'min' latency exceeds our target, step down.
 	 */
-	if (stat[READ].min > rwb->min_lat_nsec) {
-		trace_wbt_lat(bdi, stat[READ].min);
+	if (stat[io_type].min > rwb->min_lat_nsec) {
+		trace_wbt_lat(bdi, stat[io_type].min);
 		trace_wbt_stat(bdi, stat);
 		return LAT_EXCEEDED;
 	}
+
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	if (stat[WRITE_FG].min > rwb->min_lat_nsec) {
+		trace_wbt_lat(bdi, stat[WRITE_FG].min);
+		trace_wbt_stat(bdi, stat);
+		return LAT_EXCEEDED;
+	}
+#endif
 
 	if (rwb->scale_step)
 		trace_wbt_stat(bdi, stat);
@@ -510,7 +530,7 @@ static inline bool may_queue(struct rq_wb *rwb, struct rq_wait *rqw,
 	 * this only happens if the task was sleeping in __wbt_wait(),
 	 * and someone turned it off at the same time.
 	 */
-	if (!rwb_enabled(rwb)) {
+	if (!rwb_enabled(rwb) || wbt_mode(rwb) != WBT_BLK) {
 		atomic_inc(&rqw->inflight);
 		return true;
 	}
@@ -558,23 +578,53 @@ static void __wbt_wait(struct rq_wb *rwb, unsigned long rw, spinlock_t *lock)
 	finish_wait(&rqw->wait, &wait);
 }
 
-static inline bool wbt_should_throttle(struct rq_wb *rwb, struct bio *bio)
+static inline bool __wbt_should_throttle(struct rq_wb *rwb, unsigned int opf)
 {
-	const int op = bio_op(bio);
+	unsigned op = opf & REQ_OP_MASK;
 
 	/*
-	 * If not a WRITE, do nothing
+	 * If not a WRITE (or a discard), do nothing
 	 */
-	if (op != REQ_OP_WRITE)
+	if ((op != REQ_OP_WRITE) || (op == REQ_OP_DISCARD))
+		return false;
+
+	if ((opf & REQ_META) || (opf & REQ_SYNC))
 		return false;
 
 	/*
 	 * Don't throttle WRITE_ODIRECT
 	 */
-	if ((bio->bi_opf & (REQ_SYNC | REQ_IDLE)) == (REQ_SYNC | REQ_IDLE))
+	if ((opf & (REQ_SYNC | REQ_IDLE)) == (REQ_SYNC | REQ_IDLE))
 		return false;
 
 	return true;
+}
+
+static inline bool wbt_should_throttle(struct rq_wb *rwb, struct bio *bio)
+{
+#ifdef CONFIG_MAS_UNISTORE_PRESERVE
+	if (bio->bi_disk && bio->bi_disk->queue &&
+		blk_queue_query_unistore_enable(bio->bi_disk->queue))
+		return __wbt_should_throttle(rwb, bio->mas_bio.bi_opf);
+#endif
+	return __wbt_should_throttle(rwb, bio->bi_opf);
+}
+
+/*
+ * It's a simply and rough way to kick bio, bio which
+ * has been tracked by wbt(on fs) set NOMERGE after bio_alloc,
+ * so we kick the bio with NOMERGE once it's full of pages.
+ */
+bool wbt_need_kick_bio(struct bio *bio)
+{
+	return (bio->bi_vcnt == bio->bi_max_vecs);
+}
+
+static void wbt_add_inflight(struct rq_wb *rwb)
+{
+	struct rq_wait *rqw = get_rq_wait(rwb, current_is_kswapd());
+
+	atomic_inc(&rqw->inflight);
 }
 
 /*
@@ -599,7 +649,10 @@ enum wbt_flags wbt_wait(struct rq_wb *rwb, struct bio *bio, spinlock_t *lock)
 		return ret;
 	}
 
-	__wbt_wait(rwb, bio->bi_opf, lock);
+	if (wbt_mode(rwb) == WBT_FS)
+		wbt_add_inflight(rwb);
+	else
+		__wbt_wait(rwb, bio->bi_opf, lock);
 
 	if (!blk_stat_is_active(rwb->cb))
 		rwb_arm_timer(rwb);
@@ -610,7 +663,103 @@ enum wbt_flags wbt_wait(struct rq_wb *rwb, struct bio *bio, spinlock_t *lock)
 	return ret | WBT_TRACKED;
 }
 
-void wbt_issue(struct rq_wb *rwb, struct blk_issue_stat *stat)
+/* min wbt io size = 128k(32 pages) */
+#define wbt_min_sectors	32
+
+int wbt_max_bio_blocks(struct block_device *bdev, unsigned int opf,
+		int max, bool *nomerge)
+{
+	int wbt_max;
+	struct request_queue *q;
+	struct rq_wb *rwb;
+
+	wbt_max = max;
+	*nomerge = false;
+	if (unlikely(!bdev) || unlikely(!bdev->bd_disk))
+		goto out;
+
+	q = bdev_get_queue(bdev);
+	if (unlikely(!q))
+		goto out;
+
+	rwb = q->rq_wb;
+	if (!rwb_enabled(rwb) || (wbt_mode(rwb) != WBT_FS)
+			|| !__wbt_should_throttle(rwb, opf))
+		goto out;
+
+	wbt_max = max;
+	if (rwb->scale_step) {
+		wbt_max = wbt_min_sectors;
+		*nomerge = true;
+	}
+
+out:
+	return wbt_max;
+}
+
+static unsigned int wbt_get_wbc_limit(struct rq_wb *rwb,
+		struct writeback_control *wbc)
+{
+	unsigned long rw = 0;
+
+	if (wbc->for_kupdate || wbc->for_background)
+		rw |= REQ_BACKGROUND;
+	if (wbc->sync_mode == WB_SYNC_ALL || wbc->for_sync == 1)
+		rw |= REQ_SYNC;
+
+	return get_limit(rwb, rw);
+}
+
+bool wbt_fs_get_quota(struct request_queue *q, struct writeback_control *wbc)
+{
+	struct rq_wb *rwb = q->rq_wb;
+	struct rq_wait *rqw = get_rq_wait(rwb, current_is_kswapd());
+
+	if (!rwb_enabled(rwb) || wbt_mode(rwb) != WBT_FS
+			|| wbc->sync_mode == WB_SYNC_ALL
+			|| wbc->for_sync == 1)
+		return true;
+
+	if (atomic_read(&rqw->inflight) < (int)wbt_get_wbc_limit(rwb, wbc))
+		return true;
+
+	return false;
+}
+
+void wbt_fs_wait(struct request_queue *q, struct writeback_control *wbc)
+{
+	int limit;
+	DEFINE_WAIT(wait);
+	struct rq_wb *rwb = q->rq_wb;
+	struct rq_wait *rqw = get_rq_wait(rwb, current_is_kswapd());
+
+	limit = (int)wbt_get_wbc_limit(rwb, wbc);
+	/*
+	 * inc it here even if disabled, since we'll dec it at completion.
+	 * this only happens if the task was sleeping in __wbt_wait(),
+	 * and someone turned it off at the same time.
+	 */
+	if (!rwb_enabled(rwb) || atomic_read(&rqw->inflight) < limit)
+		return;
+
+	do {
+		prepare_to_wait_exclusive(&rqw->wait, &wait,
+						TASK_UNINTERRUPTIBLE);
+
+		if (wbt_mode(rwb) != WBT_FS)
+			break;
+
+		if (!rwb_enabled(rwb)
+				|| atomic_read(&rqw->inflight) < limit)
+			break;
+
+		io_schedule();
+	} while (1);
+
+	finish_wait(&rqw->wait, &wait);
+}
+
+void wbt_issue(struct rq_wb *rwb, struct blk_issue_stat *stat, bool fg)
 {
 	if (!rwb_enabled(rwb))
 		return;
@@ -623,7 +772,11 @@ void wbt_issue(struct rq_wb *rwb, struct blk_issue_stat *stat)
 	 * only use the address to compare with, which is why we store the
 	 * sync_issue time locally.
 	 */
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	if (!wbt_is_tracked(stat) && !rwb->sync_issue && fg) {
+#else
 	if (wbt_is_read(stat) && !rwb->sync_issue) {
+#endif
 		rwb->sync_cookie = stat;
 		rwb->sync_issue = blk_stat_time(stat);
 	}
@@ -700,10 +853,29 @@ static int wbt_data_dir(const struct request *rq)
 {
 	const int op = req_op(rq);
 
-	if (op == REQ_OP_READ)
+	if (op == REQ_OP_READ) {
+#ifdef CONFIG_BLK_DEV_THROTTLING
+#ifdef CONFIG_MAS_UNISTORE_PRESERVE
+		if (blk_queue_query_unistore_enable(rq->q) &&
+			(rq->issue_stat.bi_opf & REQ_FG))
+			return READ_FG;
+#endif
+		if (rq->cmd_flags & REQ_FG)
+			return READ_FG;
+#endif
 		return READ;
-	else if (op == REQ_OP_WRITE || op == REQ_OP_FLUSH)
+	} else if (op == REQ_OP_WRITE || op == REQ_OP_FLUSH) {
+#ifdef CONFIG_BLK_DEV_THROTTLING
+#ifdef CONFIG_MAS_UNISTORE_PRESERVE
+		if (blk_queue_query_unistore_enable(rq->q) &&
+			(rq->issue_stat.bi_opf & REQ_FG))
+			return WRITE_FG;
+#endif
+		if (rq->cmd_flags & REQ_FG)
+			return WRITE_FG;
+#endif
 		return WRITE;
+	}
 
 	/* don't account */
 	return -1;
@@ -712,6 +884,7 @@ static int wbt_data_dir(const struct request *rq)
 int wbt_init(struct request_queue *q)
 {
 	struct rq_wb *rwb;
+	unsigned int buckets = 2;
 	int i;
 
 	BUILD_BUG_ON(WBT_NR_BITS > BLK_STAT_RES_BITS);
@@ -720,7 +893,11 @@ int wbt_init(struct request_queue *q)
 	if (!rwb)
 		return -ENOMEM;
 
-	rwb->cb = blk_stat_alloc_callback(wb_timer_fn, wbt_data_dir, 2, rwb);
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	buckets = 4;
+#endif
+	rwb->cb = blk_stat_alloc_callback(wb_timer_fn, wbt_data_dir,
+					  buckets, rwb);
 	if (!rwb->cb) {
 		kfree(rwb);
 		return -ENOMEM;
@@ -745,7 +922,7 @@ int wbt_init(struct request_queue *q)
 	q->rq_wb = rwb;
 	blk_stat_add_callback(q, rwb->cb);
 
-	rwb->min_lat_nsec = wbt_default_latency_nsec(q);
+	rwb->min_lat_nsec = 0;
 
 	wbt_set_queue_depth(rwb, blk_queue_depth(q));
 	wbt_set_write_cache(rwb, test_bit(QUEUE_FLAG_WC, &q->queue_flags));

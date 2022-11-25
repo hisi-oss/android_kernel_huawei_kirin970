@@ -116,6 +116,39 @@
 #include <net/sock_reuseport.h>
 #include <net/addrconf.h>
 
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+#include <hwnet/ipv4/wifi_delayst.h>
+#endif
+
+#ifdef CONFIG_DOZE_FILTER
+#include <huawei_platform/power/wifi_filter/wifi_filter.h>
+#endif
+
+#ifdef CONFIG_HUAWEI_XENGINE
+#include <emcom/emcom_xengine.h>
+#endif
+
+#ifdef CONFIG_HW_HIDATA_HIMOS
+#include <huawei_platform/net/himos/hw_himos_udp_stats.h>
+#endif
+
+#ifdef CONFIG_CHR_NETLINK_MODULE
+#include <hwnet/chr/chr_interface.h>
+#endif
+
+#ifdef CONFIG_MPTCP_EPC
+#include <net/hw_mptcp_epc.h>
+#endif
+
+#ifdef CONFIG_HW_NETWORK_QOE
+#include <hwnet/booster/ip_para_collec_ex.h>
+#endif
+#ifdef CONFIG_HW_NETWORK_SLICE
+#include <hwnet/booster/network_slice_route.h>
+#endif
+#ifdef CONFIG_HW_PACKET_TRACKER
+#include <hwnet/booster/hw_pt.h>
+#endif
 struct udp_table udp_table __read_mostly;
 EXPORT_SYMBOL(udp_table);
 
@@ -131,6 +164,9 @@ EXPORT_SYMBOL(sysctl_udp_wmem_min);
 atomic_long_t udp_memory_allocated;
 EXPORT_SYMBOL(udp_memory_allocated);
 
+#ifdef CONFIG_HW_NETWORK_AWARE
+extern void tcp_network_aware(bool is_recving);
+#endif
 #define MAX_UDP_PORTS 65536
 #define PORTS_PER_CHAIN (MAX_UDP_PORTS / UDP_HTABLE_SIZE_MIN)
 
@@ -293,6 +329,13 @@ int udp_lib_get_port(struct sock *sk, unsigned short snum,
 	} else {
 		hslot = udp_hashslot(udptable, net, snum);
 		spin_lock_bh(&hslot->lock);
+
+		if (inet_is_local_reserved_port(net, snum) &&
+		    !sysctl_local_reserved_ports_bind_ctrl &&
+		    (!sysctl_local_reserved_ports_bind_pid ||
+		     sysctl_local_reserved_ports_bind_pid != current->tgid))
+			goto fail_unlock;
+
 		if (hslot->count > 10) {
 			int exist;
 			unsigned int slot2 = udp_sk(sk)->udp_portaddr_hash ^ snum;
@@ -419,7 +462,7 @@ static int compute_score(struct sock *sk, struct net *net,
 			score += 4;
 	}
 
-	if (sk->sk_incoming_cpu == raw_smp_processor_id())
+	if (READ_ONCE(sk->sk_incoming_cpu) == raw_smp_processor_id())
 		score++;
 	return score;
 }
@@ -563,7 +606,11 @@ static inline struct sock *__udp4_lib_lookup_skb(struct sk_buff *skb,
 struct sock *udp4_lib_lookup_skb(struct sk_buff *skb,
 				 __be16 sport, __be16 dport)
 {
-	return __udp4_lib_lookup_skb(skb, sport, dport, &udp_table);
+	const struct iphdr *iph = ip_hdr(skb);
+
+	return __udp4_lib_lookup(dev_net(skb->dev), iph->saddr, sport,
+				 iph->daddr, dport, inet_iif(skb),
+				 inet_sdif(skb), &udp_table, NULL);
 }
 EXPORT_SYMBOL_GPL(udp4_lib_lookup_skb);
 
@@ -783,7 +830,8 @@ void udp_set_csum(bool nocheck, struct sk_buff *skb,
 }
 EXPORT_SYMBOL(udp_set_csum);
 
-static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4)
+static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4,
+			struct inet_cork *cork)
 {
 	struct sock *sk = skb->sk;
 	struct inet_sock *inet = inet_sk(sk);
@@ -793,7 +841,9 @@ static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4)
 	int offset = skb_transport_offset(skb);
 	int len = skb->len - offset;
 	__wsum csum = 0;
-
+#ifdef CONFIG_HW_HIDATA_HIMOS
+	int skb_len = skb->len;
+#endif
 	/*
 	 * Create a UDP header
 	 */
@@ -802,6 +852,21 @@ static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4)
 	uh->dest = fl4->fl4_dport;
 	uh->len = htons(len);
 	uh->check = 0;
+
+	if (cork->gso_size) {
+		const int hlen = skb_network_header_len(skb) +
+				 sizeof(struct udphdr);
+
+		/*lint -e574*/
+		if (hlen + cork->gso_size > cork->fragsize)
+			return -EINVAL;
+		/*lint +e574*/
+		if (skb->len > cork->gso_size * UDP_MAX_SEGMENTS)
+			return -EINVAL;
+
+		skb_shinfo(skb)->gso_size = cork->gso_size;
+		skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
+	}
 
 	if (is_udplite)  				 /*     UDP-Lite      */
 		csum = udplite_csum(skb);
@@ -829,13 +894,21 @@ send:
 	err = ip_send_skb(sock_net(sk), skb);
 	if (err) {
 		if (err == -ENOBUFS && !inet->recverr) {
+			/*lint -e666*/
 			UDP_INC_STATS(sock_net(sk),
 				      UDP_MIB_SNDBUFERRORS, is_udplite);
+			/*lint +e666*/
 			err = 0;
 		}
-	} else
+	} else {
+		/*lint -e666*/
 		UDP_INC_STATS(sock_net(sk),
 			      UDP_MIB_OUTDATAGRAMS, is_udplite);
+		/*lint +e666*/
+#ifdef CONFIG_HW_HIDATA_HIMOS
+		himos_udp_stats(sk, 0, skb_len);
+#endif
+	}
 	return err;
 }
 
@@ -853,8 +926,12 @@ int udp_push_pending_frames(struct sock *sk)
 	skb = ip_finish_skb(sk, fl4);
 	if (!skb)
 		goto out;
-
-	err = udp_send_skb(skb, fl4);
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	if (DELAY_STATISTIC_SWITCH_ON)
+		delay_record_first_combine(sk, skb,
+			TP_SKB_DIRECT_SND, TP_SKB_TYPE_UDP);
+#endif
+	err = udp_send_skb(skb, fl4, &inet->cork.base);
 
 out:
 	up->len = 0;
@@ -862,6 +939,45 @@ out:
 	return err;
 }
 EXPORT_SYMBOL(udp_push_pending_frames);
+
+static int __udp_cmsg_send(struct cmsghdr *cmsg, u16 *gso_size)
+{
+	switch (cmsg->cmsg_type) {
+	case UDP_SEGMENT:
+		if (cmsg->cmsg_len != CMSG_LEN(sizeof(__u16)))
+			return -EINVAL;
+		*gso_size = *(__u16 *)CMSG_DATA(cmsg);
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size)
+{
+	struct cmsghdr *cmsg;
+	bool need_ip = false;
+	int err;
+
+	for_each_cmsghdr(cmsg, msg) {
+		if (!CMSG_OK(msg, cmsg))
+			return -EINVAL;
+
+		if (cmsg->cmsg_level != SOL_UDP) {
+			need_ip = true;
+			continue;
+		}
+
+		err = __udp_cmsg_send(cmsg, gso_size);
+		if (err)
+			return err;
+	}
+
+	return need_ip;
+}
+/*lint -e580*/
+EXPORT_SYMBOL_GPL(udp_cmsg_send);
+/*lint +e580*/
 
 int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 {
@@ -882,6 +998,18 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	int (*getfrag)(void *, char *, int, int, int, struct sk_buff *);
 	struct sk_buff *skb;
 	struct ip_options_data opt_copy;
+#ifdef CONFIG_HUAWEI_XENGINE
+	bool is_accelerate = false;
+	struct sockaddr_in mpflow_usin = {0};
+#endif
+#ifdef CONFIG_HW_NETWORK_SLICE
+	struct sockaddr_in slice_usin = {0};
+#endif
+
+#ifdef CONFIG_MPTCP_EPC
+	struct sockaddr_in *server_addr = (struct sockaddr_in *) (&(up->server_addr));
+	int mutp_tot_len = 0;
+#endif
 
 	if (len > 0xFFFF)
 		return -EMSGSIZE;
@@ -893,6 +1021,17 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	if (msg->msg_flags & MSG_OOB) /* Mirror BSD error message compatibility */
 		return -EOPNOTSUPP;
 
+#ifdef CONFIG_HW_NETWORK_AWARE
+	tcp_network_aware(false);
+#endif
+#ifdef CONFIG_HUAWEI_XENGINE
+	is_accelerate = emcom_xengine_hook_ul_stub(sk);
+	if (!is_accelerate)
+		EMCOM_XENGINE_SET_ACCSTATE(sk, EMCOM_XENGINE_ACC_NORMAL);
+#endif
+#ifdef CONFIG_HUAWEI_BASTET
+	bst_fg_custom_process(sk, msg, (uint8_t)BST_FG_UDP_BITMAP);
+#endif
 	ipc.opt = NULL;
 	ipc.tx_flags = 0;
 	ipc.ttl = 0;
@@ -929,7 +1068,9 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 			if (usin->sin_family != AF_UNSPEC)
 				return -EAFNOSUPPORT;
 		}
-
+#ifdef CONFIG_MPTCP_EPC
+		mutp_rewrite_dst_addr(sk, (struct sockaddr *)usin);
+#endif
 		daddr = usin->sin_addr.s_addr;
 		dport = usin->sin_port;
 		if (dport == 0)
@@ -945,13 +1086,38 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		connected = 1;
 	}
 
+#ifdef CONFIG_HW_NETWORK_SLICE
+	slice_usin.sin_addr.s_addr = daddr;
+	slice_usin.sin_port = dport;
+	slice_usin.sin_family = AF_INET;
+	slice_rules_lookup(sk, (struct sockaddr *)&slice_usin, IPPROTO_UDP);
+#endif
+
+#ifdef CONFIG_MPTCP_EPC
+	mutp_tot_len = (server_addr->sin_addr.s_addr != 0 && server_addr->sin_port != 0) ?
+		MUTP_HEADER_LEN + sizeof(struct iphdr) + (ipc.opt ? ipc.opt->opt.optlen : 0) + sizeof(struct udphdr) : 0;
+#endif
+
+#ifdef CONFIG_HUAWEI_XENGINE
+	mpflow_usin.sin_addr.s_addr = daddr;
+	mpflow_usin.sin_port = dport;
+	mpflow_usin.sin_family = AF_INET;
+
+	emcom_xengine_mpflow_ai_bind2device(sk,
+		(struct sockaddr *)(&mpflow_usin));
+#endif
+
 	ipc.sockc.tsflags = sk->sk_tsflags;
 	ipc.addr = inet->inet_saddr;
 	ipc.oif = sk->sk_bound_dev_if;
+	ipc.gso_size = up->gso_size;
 
 	if (msg->msg_controllen) {
-		err = ip_cmsg_send(sk, msg, &ipc, sk->sk_family == AF_INET6);
-		if (unlikely(err)) {
+		err = udp_cmsg_send(sk, msg, &ipc.gso_size);
+		if (err > 0)
+			err = ip_cmsg_send(sk, msg, &ipc,
+					   sk->sk_family == AF_INET6);
+		if (unlikely(err < 0)) {
 			kfree(ipc.opt);
 			return err;
 		}
@@ -1045,12 +1211,44 @@ back_from_confirm:
 
 	/* Lockless fast path for the non-corking case. */
 	if (!corkreq) {
+#ifdef CONFIG_MPTCP_EPC
+		struct inet_cork cork;
+		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen + mutp_tot_len,
+				  sizeof(struct udphdr) + mutp_tot_len,
+				  &ipc, &rt,
+				  &cork, msg->msg_flags);
+		mutp_fill_mutp_header(sk, skb);
+#else
+		struct inet_cork cork;
+
 		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen,
 				  sizeof(struct udphdr), &ipc, &rt,
-				  msg->msg_flags);
+				  &cork, msg->msg_flags);
+#endif
 		err = PTR_ERR(skb);
+#ifdef CONFIG_HISI_PAGE_TRACE
 		if (!IS_ERR_OR_NULL(skb))
-			err = udp_send_skb(skb, fl4);
+			alloc_skb_with_frags_stats_inc(UDP_SENDMSG_1_COUNT);
+#endif
+		if (!IS_ERR_OR_NULL(skb))
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+		{
+			if (DELAY_STATISTIC_SWITCH_ON)
+				delay_record_first_combine(sk, skb,
+					TP_SKB_DIRECT_SND, TP_SKB_TYPE_UDP);
+#endif
+#ifdef CONFIG_HW_PACKET_TRACKER
+			{
+				hw_pt_set_skb_stamp(skb);
+#endif
+				err = udp_send_skb(skb, fl4, &cork);
+#ifdef CONFIG_HW_PACKET_TRACKER
+			}
+#endif
+
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+		}
+#endif
 		goto out;
 	}
 
@@ -1079,6 +1277,10 @@ do_append_data:
 	err = ip_append_data(sk, fl4, getfrag, msg, ulen,
 			     sizeof(struct udphdr), &ipc, &rt,
 			     corkreq ? msg->msg_flags|MSG_MORE : msg->msg_flags);
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (!err)
+		alloc_skb_with_frags_stats_inc(UDP_SENDMSG_2_COUNT);
+#endif
 	if (err)
 		udp_flush_pending_frames(sk);
 	else if (!corkreq)
@@ -1189,6 +1391,20 @@ static void udp_set_dev_scratch(struct sk_buff *skb)
 	 */
 	if (likely(!skb_sec_path(skb)))
 		scratch->_tsize_state |= UDP_SKB_IS_STATELESS;
+}
+
+static void udp_skb_csum_unnecessary_set(struct sk_buff *skb)
+{
+	/* We come here after udp_lib_checksum_complete() returned 0.
+	 * This means that __skb_checksum_complete() might have
+	 * set skb->csum_valid to 1.
+	 * On 64bit platforms, we can set csum_unnecessary
+	 * to true, but only if the skb is not shared.
+	 */
+#if BITS_PER_LONG == 64
+	if (!skb_shared(skb))
+		udp_skb_scratch(skb)->csum_unnecessary = true;
+#endif
 }
 
 static int udp_skb_truesize(struct sk_buff *skb)
@@ -1320,7 +1536,7 @@ int __udp_enqueue_schedule_skb(struct sock *sk, struct sk_buff *skb)
 	 * queue contains some other skb
 	 */
 	rmem = atomic_add_return(size, &sk->sk_rmem_alloc);
-	if (rmem > (size + sk->sk_rcvbuf))
+	if (rmem > (size + (unsigned int)sk->sk_rcvbuf))
 		goto uncharge_drop;
 
 	spin_lock(&list->lock);
@@ -1426,10 +1642,7 @@ static struct sk_buff *__first_packet_length(struct sock *sk,
 			*total += skb->truesize;
 			kfree_skb(skb);
 		} else {
-			/* the csum related bits could be changed, refresh
-			 * the scratch area
-			 */
-			udp_set_dev_scratch(skb);
+			udp_skb_csum_unnecessary_set(skb);
 			break;
 		}
 	}
@@ -1453,7 +1666,7 @@ static int first_packet_length(struct sock *sk)
 
 	spin_lock_bh(&rcvq->lock);
 	skb = __first_packet_length(sk, rcvq, &total);
-	if (!skb && !skb_queue_empty(sk_queue)) {
+	if (!skb && !skb_queue_empty_lockless(sk_queue)) {
 		spin_lock(&sk_queue->lock);
 		skb_queue_splice_tail_init(sk_queue, rcvq);
 		spin_unlock(&sk_queue->lock);
@@ -1528,7 +1741,7 @@ struct sk_buff *__skb_recv_udp(struct sock *sk, unsigned int flags,
 				return skb;
 			}
 
-			if (skb_queue_empty(sk_queue)) {
+			if (skb_queue_empty_lockless(sk_queue)) {
 				spin_unlock_bh(&queue->lock);
 				goto busy_check;
 			}
@@ -1555,7 +1768,7 @@ busy_check:
 				break;
 
 			sk_busy_loop(sk, flags & MSG_DONTWAIT);
-		} while (!skb_queue_empty(sk_queue));
+		} while (!skb_queue_empty_lockless(sk_queue));
 
 		/* sk_queue is empty, reader_queue may contain peeked packets */
 	} while (timeo &&
@@ -1583,6 +1796,9 @@ int udp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock,
 	int err;
 	int is_udplite = IS_UDPLITE(sk);
 	bool checksum_valid = false;
+#ifdef CONFIG_MPTCP_EPC
+	bool is_mutp = false;
+#endif
 
 	if (flags & MSG_ERRQUEUE)
 		return ip_recv_error(sk, msg, len, addr_len);
@@ -1594,8 +1810,19 @@ try_again:
 	if (!skb)
 		return err;
 
+#ifdef CONFIG_HW_NETWORK_AWARE
+	tcp_network_aware(true);
+#endif
+#ifdef CONFIG_CHR_NETLINK_MODULE
+	chr_update_buf_time(ktime_to_ns(skb->tstamp), SOL_UDP);
+#endif
 	ulen = udp_skb_len(skb);
 	copied = len;
+
+#ifdef CONFIG_MPTCP_EPC
+	is_mutp = mutp_decode_recv(skb, true, &off);
+#endif
+
 	if (copied > ulen - off)
 		copied = ulen - off;
 	else if (copied < ulen)
@@ -1637,17 +1864,25 @@ try_again:
 		return err;
 	}
 
-	if (!peeked)
+	if (!peeked) {
 		UDP_INC_STATS(sock_net(sk),
 			      UDP_MIB_INDATAGRAMS, is_udplite);
+#ifdef CONFIG_HW_HIDATA_HIMOS
+		himos_udp_stats(sk, ulen, 0);
+#endif
+	}
 
 	sock_recv_ts_and_drops(msg, sk, skb);
 
 	/* Copy the address. */
 	if (sin) {
 		sin->sin_family = AF_INET;
+#ifndef CONFIG_MPTCP_EPC
 		sin->sin_port = udp_hdr(skb)->source;
 		sin->sin_addr.s_addr = ip_hdr(skb)->saddr;
+#else
+		mutp_rewrite_msg_addr(is_mutp, skb, sin);
+#endif
 		memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
 		*addr_len = sizeof(*sin);
 	}
@@ -1657,7 +1892,14 @@ try_again:
 	err = copied;
 	if (flags & MSG_TRUNC)
 		err = ulen;
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	if (DELAY_STATISTIC_SWITCH_ON)
+		delay_record_rcv_combine(skb, sk, TP_SKB_TYPE_UDP);
+#endif
 
+#ifdef CONFIG_HW_PACKET_TRACKER
+	hw_pt_l4_downlink_out(sk, skb);
+#endif
 	skb_consume_udp(sk, skb, peeking ? -err : err);
 	return err;
 
@@ -1859,7 +2101,9 @@ static int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 		encap_rcv = ACCESS_ONCE(up->encap_rcv);
 		if (encap_rcv) {
 			int ret;
-
+#ifdef CONFIG_HW_HIDATA_HIMOS
+			int len = skb->len;
+#endif
 			/* Verify checksum before giving to encap */
 			if (udp_lib_checksum_complete(skb))
 				goto csum_error;
@@ -1869,6 +2113,9 @@ static int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 				__UDP_INC_STATS(sock_net(sk),
 						UDP_MIB_INDATAGRAMS,
 						is_udplite);
+#ifdef CONFIG_HW_HIDATA_HIMOS
+				himos_udp_stats(sk, len, 0);
+#endif
 				return -ret;
 			}
 		}
@@ -1879,7 +2126,7 @@ static int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	/*
 	 * 	UDP-Lite specific tests, ignored on UDP sockets
 	 */
-	if ((is_udplite & UDPLITE_RECV_CC)  &&  UDP_SKB_CB(skb)->partial_cov) {
+	if ((up->pcflag & UDPLITE_RECV_CC)  &&  UDP_SKB_CB(skb)->partial_cov) {
 
 		/*
 		 * MIB statistics other than incrementing the error count are
@@ -1919,7 +2166,9 @@ static int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 		goto drop;
 
 	udp_csum_pull_header(skb);
-
+#ifdef CONFIG_HW_PACKET_TRACKER
+	hw_pt_l4_downlink_in(sk, skb, false);
+#endif
 	ipv4_pktinfo_prepare(sk, skb);
 	return __udp_queue_rcv_skb(sk, skb);
 
@@ -2077,6 +2326,10 @@ static int udp_unicast_rcv_skb(struct sock *sk, struct sk_buff *skb,
 		skb_checksum_try_convert(skb, IPPROTO_UDP, uh->check,
 					 inet_compute_pseudo);
 
+#ifdef CONFIG_HW_NETWORK_QOE
+	udp_in_hook(skb, sk);
+#endif
+
 	ret = udp_queue_rcv_skb(sk, skb);
 
 	/* a return value > 0 means to resubmit the input, but
@@ -2161,6 +2414,9 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	 * Hmm.  We got an UDP packet to a port to which we
 	 * don't wanna listen.  Ignore it.
 	 */
+	#ifdef CONFIG_DOZE_FILTER
+		get_filter_infoEx(skb);
+	#endif
 	kfree_skb(skb);
 	return 0;
 
@@ -2266,7 +2522,6 @@ int udp_v4_early_demux(struct sk_buff *skb)
 
 	if (skb->pkt_type == PACKET_MULTICAST) {
 		in_dev = __in_dev_get_rcu(skb->dev);
-
 		if (!in_dev)
 			return 0;
 
@@ -2388,6 +2643,12 @@ int udp_lib_setsockopt(struct sock *sk, int level, int optname,
 		up->no_check6_rx = valbool;
 		break;
 
+	case UDP_SEGMENT:
+		if (val < 0 || val > USHRT_MAX)
+			return -EINVAL;
+		up->gso_size = val;
+		break;
+
 	/*
 	 * 	UDP-Lite's partial checksum coverage (RFC 3828).
 	 */
@@ -2478,6 +2739,10 @@ int udp_lib_getsockopt(struct sock *sk, int level, int optname,
 		val = up->no_check6_rx;
 		break;
 
+	case UDP_SEGMENT:
+		val = up->gso_size;
+		break;
+
 	/* The following two cannot be changed on UDP sockets, the return is
 	 * always 0 (which corresponds to the full checksum coverage of UDP). */
 	case UDPLITE_SEND_CSCOV:
@@ -2535,7 +2800,7 @@ unsigned int udp_poll(struct file *file, struct socket *sock, poll_table *wait)
 	unsigned int mask = datagram_poll(file, sock, wait);
 	struct sock *sk = sock->sk;
 
-	if (!skb_queue_empty(&udp_sk(sk)->reader_queue))
+	if (!skb_queue_empty_lockless(&udp_sk(sk)->reader_queue))
 		mask |= POLLIN | POLLRDNORM;
 
 	sock_rps_record_flow(sk);

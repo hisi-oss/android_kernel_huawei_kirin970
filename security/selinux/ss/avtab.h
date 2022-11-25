@@ -84,7 +84,11 @@ struct avtab_node {
 };
 
 struct avtab {
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	struct avtab_node **htable;
+#else
 	struct flex_array *htable;
+#endif
 	u32 nel;	/* number of elements */
 	u32 nslot;      /* number of hash slots */
 	u32 mask;       /* mask to compute hash func */

@@ -71,7 +71,7 @@ struct rpmsg_endpoint *rpmsg_create_ept(struct rpmsg_device *rpdev,
 					rpmsg_rx_cb_t cb, void *priv,
 					struct rpmsg_channel_info chinfo)
 {
-	if (WARN_ON(!rpdev))
+	if (WARN_ON(!rpdev)) /*lint !e146 !e665*/
 		return NULL;
 
 	return rpdev->ops->create_ept(rpdev, cb, priv, chinfo);
@@ -113,7 +113,7 @@ EXPORT_SYMBOL(rpmsg_destroy_ept);
  */
 int rpmsg_send(struct rpmsg_endpoint *ept, void *data, int len)
 {
-	if (WARN_ON(!ept))
+	if (WARN_ON(!ept)) /*lint !e146 !e665*/ 
 		return -EINVAL;
 	if (!ept->ops->send)
 		return -ENXIO;
@@ -174,7 +174,7 @@ EXPORT_SYMBOL(rpmsg_sendto);
 int rpmsg_send_offchannel(struct rpmsg_endpoint *ept, u32 src, u32 dst,
 			  void *data, int len)
 {
-	if (WARN_ON(!ept))
+	if (WARN_ON(!ept)) /*lint !e146 !e665*/
 		return -EINVAL;
 	if (!ept->ops->send_offchannel)
 		return -ENXIO;
@@ -202,7 +202,7 @@ EXPORT_SYMBOL(rpmsg_send_offchannel);
  */
 int rpmsg_trysend(struct rpmsg_endpoint *ept, void *data, int len)
 {
-	if (WARN_ON(!ept))
+	if (WARN_ON(!ept)) /*lint !e146 !e665*/
 		return -EINVAL;
 	if (!ept->ops->trysend)
 		return -ENXIO;
@@ -230,7 +230,7 @@ EXPORT_SYMBOL(rpmsg_trysend);
  */
 int rpmsg_trysendto(struct rpmsg_endpoint *ept, void *data, int len, u32 dst)
 {
-	if (WARN_ON(!ept))
+	if (WARN_ON(!ept)) /*lint !e146 !e665*/
 		return -EINVAL;
 	if (!ept->ops->trysendto)
 		return -ENXIO;
@@ -250,7 +250,7 @@ EXPORT_SYMBOL(rpmsg_trysendto);
 unsigned int rpmsg_poll(struct rpmsg_endpoint *ept, struct file *filp,
 			poll_table *wait)
 {
-	if (WARN_ON(!ept))
+	if (WARN_ON(!ept)) /*lint !e146 !e665*/
 		return 0;
 	if (!ept->ops->poll)
 		return 0;
@@ -281,7 +281,7 @@ EXPORT_SYMBOL(rpmsg_poll);
 int rpmsg_trysend_offchannel(struct rpmsg_endpoint *ept, u32 src, u32 dst,
 			     void *data, int len)
 {
-	if (WARN_ON(!ept))
+	if (WARN_ON(!ept)) /*lint !e146 !e665*/
 		return -EINVAL;
 	if (!ept->ops->trysend_offchannel)
 		return -ENXIO;
@@ -334,10 +334,10 @@ field##_show(struct device *dev,					\
 static DEVICE_ATTR_RO(field);
 
 /* for more info, see Documentation/ABI/testing/sysfs-bus-rpmsg */
-rpmsg_show_attr(name, id.name, "%s\n");
-rpmsg_show_attr(src, src, "0x%x\n");
-rpmsg_show_attr(dst, dst, "0x%x\n");
-rpmsg_show_attr(announce, announce ? "true" : "false", "%s\n");
+rpmsg_show_attr(name, id.name, "%s\n");/*lint !e421*/
+rpmsg_show_attr(src, src, "0x%x\n");/*lint !e421*/
+rpmsg_show_attr(dst, dst, "0x%x\n");/*lint !e421*/
+rpmsg_show_attr(announce, announce ? "true" : "false", "%s\n");/*lint !e421 !e665*/
 
 static ssize_t modalias_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
@@ -349,7 +349,7 @@ static ssize_t modalias_show(struct device *dev,
 	if (len != -ENODEV)
 		return len;
 
-	return sprintf(buf, RPMSG_DEVICE_MODALIAS_FMT "\n", rpdev->id.name);
+	return sprintf(buf, RPMSG_DEVICE_MODALIAS_FMT "\n", rpdev->id.name);/*lint !e421*/
 }
 static DEVICE_ATTR_RO(modalias);
 

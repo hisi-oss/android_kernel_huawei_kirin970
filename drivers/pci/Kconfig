@@ -1,6 +1,9 @@
 #
 # PCI configuration
 #
+config PCIE_DEVICE_LEGACY_INT
+	bool "Phoenix PC use legacy interrupt for pcie device"
+	default n
 
 source "drivers/pci/pcie/Kconfig"
 

@@ -162,7 +162,11 @@ static int i2c_dw_init_slave(struct dw_i2c_dev *dev)
 		dev_warn(dev->dev,
 			 "Hardware too old to adjust SDA hold time.\n");
 	}
-
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+	dw_writel(dev, 15, DW_IC_TX_TL);
+	dw_writel(dev, 15, DW_IC_RX_TL);
+	i2c_dw_dma_fifo_cfg(dev);
+#endif
 	i2c_dw_configure_fifo_slave(dev);
 	i2c_dw_release_lock(dev);
 
@@ -206,6 +210,7 @@ static int i2c_dw_unreg_slave(struct i2c_client *slave)
 
 	dev->disable_int(dev);
 	dev->disable(dev);
+	synchronize_irq(dev->irq);
 	dev->slave = NULL;
 	pm_runtime_put(dev->dev);
 

@@ -18,6 +18,7 @@
 #define _ION_H
 
 #include <linux/device.h>
+#include <linux/dma-buf.h>
 #include <linux/dma-direction.h>
 #include <linux/kref.h>
 #include <linux/mm_types.h>
@@ -70,6 +71,7 @@ struct ion_platform_heap {
  * @sg_table:		the sg table for the buffer if dmap_cnt is not zero
  */
 struct ion_buffer {
+	u64 magic;
 	union {
 		struct rb_node node;
 		struct list_head list;
@@ -85,6 +87,17 @@ struct ion_buffer {
 	void *vaddr;
 	struct sg_table *sg_table;
 	struct list_head attachments;
+	char task_comm[TASK_COMM_LEN];
+	pid_t pid;
+#if defined(CONFIG_ION_HISI_SECSG) || defined(CONFIG_ION_HISI_DMA_POOL)
+	unsigned int id;
+#endif
+
+#ifdef CONFIG_HISI_LB
+	unsigned int plc_id;
+	unsigned long offset;
+	size_t lb_size;
+#endif
 };
 void ion_buffer_destroy(struct ion_buffer *buffer);
 
@@ -102,6 +115,7 @@ struct ion_device {
 	struct rw_semaphore lock;
 	struct plist_head heaps;
 	struct dentry *debug_root;
+	struct dentry *heaps_debug_root;
 	int heap_cnt;
 };
 
@@ -190,14 +204,6 @@ struct ion_heap {
 
 	int (*debug_show)(struct ion_heap *heap, struct seq_file *, void *);
 };
-
-/**
- * ion_buffer_cached - this ion buffer is cached
- * @buffer:		buffer
- *
- * indicates whether this ion buffer is cached
- */
-bool ion_buffer_cached(struct ion_buffer *buffer);
 
 /**
  * ion_buffer_fault_user_mappings - fault in user mappings of this buffer
@@ -319,7 +325,6 @@ size_t ion_heap_freelist_size(struct ion_heap *heap);
  * @gfp_mask:		gfp_mask to use from alloc
  * @order:		order of pages in the pool
  * @list:		plist node for list of pools
- * @cached:		it's cached pool or not
  *
  * Allows you to keep a pool of pre allocated pages to use from your heap.
  * Keeping a pool of pages that is ready for dma, ie any cached mapping have
@@ -329,7 +334,6 @@ size_t ion_heap_freelist_size(struct ion_heap *heap);
 struct ion_page_pool {
 	int high_count;
 	int low_count;
-	bool cached;
 	struct list_head high_items;
 	struct list_head low_items;
 	struct mutex mutex;
@@ -338,11 +342,17 @@ struct ion_page_pool {
 	struct plist_node list;
 };
 
-struct ion_page_pool *ion_page_pool_create(gfp_t gfp_mask, unsigned int order,
-					   bool cached);
+struct ion_page_pool *ion_page_pool_create(gfp_t gfp_mask, unsigned int order);
 void ion_page_pool_destroy(struct ion_page_pool *pool);
 struct page *ion_page_pool_alloc(struct ion_page_pool *pool);
+#ifdef CONFIG_ZONE_MEDIA_OPT
+struct page *ion_page_pool_alloc_with_gfp(struct ion_page_pool *pool,
+					  gfp_t gfp_mask);
+#endif
 void ion_page_pool_free(struct ion_page_pool *pool, struct page *page);
+void ion_page_pool_free_immediate(struct ion_page_pool *pool,
+					struct page *page);
+int ion_page_pool_total(struct ion_page_pool *pool, bool high);
 
 /** ion_page_pool_shrink - shrinks the size of the memory cached in the pool
  * @pool:		the pool
@@ -358,4 +368,11 @@ long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 
 int ion_query_heaps(struct ion_heap_query *query);
 
+struct ion_device *get_ion_device(void);
+
+unsigned long get_ion_total_size(void);
+
+void set_sys_pool_watermark(unsigned long watermark);
+
+extern atomic64_t shrink_msleep_count;
 #endif /* _ION_H */

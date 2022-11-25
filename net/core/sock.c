@@ -139,8 +139,29 @@
 
 #include <trace/events/sock.h>
 
+#ifdef CONFIG_MPTCP
+#include <net/mptcp.h>
+#include <net/inet_common.h>
+#endif
 #include <net/tcp.h>
+
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+#include <linux/android_aid.h>
+#endif
+
 #include <net/busy_poll.h>
+
+#ifdef CONFIG_HUAWEI_XENGINE
+#include <emcom/emcom_xengine.h>
+#endif
+
+#ifdef CONFIG_HW_DPIMARK_MODULE
+#include <hwnet/hw_dpi_mark/dpi_hw_hook.h>
+#endif
+
+#ifdef CONFIG_HUAWEI_TRACK_SOCKET
+#include "net/track_tcp_socket.h"
+#endif
 
 static DEFINE_MUTEX(proto_list_mutex);
 static LIST_HEAD(proto_list);
@@ -569,7 +590,11 @@ static int sock_setbindtodevice(struct sock *sk, char __user *optval,
 
 	/* Sorry... */
 	ret = -EPERM;
-	if (!ns_capable(net->user_ns, CAP_NET_RAW))
+	if (!ns_capable(net->user_ns, CAP_NET_RAW)
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+		&& !in_egroup_p(AID_INET)
+#endif
+		)
 		goto out;
 
 	ret = -EINVAL;
@@ -700,7 +725,25 @@ int sock_setsockopt(struct socket *sock, int level, int optname,
 	/*
 	 *	Options without arguments
 	 */
+#ifdef CONFIG_HUAWEI_XENGINE
+	if (optname == SO_XENGINE_PROXYUID)
+		return emcom_xengine_setproxyuid(sk, optval, optlen);
 
+	if (optname == SO_XENGINE_SOCKFLAG)
+		return emcom_xengine_setsockflag(sk, optval, optlen);
+
+	if (optname == SO_XENGINE_BINDTODEVICE)
+		return emcom_xengine_setbind2device(sk, optval, optlen);
+#endif
+
+#ifdef CONFIG_HUAWEI_TRACK_SOCKET
+	if (optname == SO_HUAWEI_TRACK_SOCKET) {
+		if (sk->sk_protocol != IPPROTO_TCP)
+			return -ENOTSUPP;
+		else
+			return process_track_socket_cmd(sk, optval, optlen);
+	}
+#endif
 	if (optname == SO_BINDTODEVICE)
 		return sock_setbindtodevice(sk, optval, optlen);
 
@@ -735,7 +778,6 @@ int sock_setsockopt(struct socket *sock, int level, int optname,
 		break;
 	case SO_DONTROUTE:
 		sock_valbool_flag(sk, SOCK_LOCALROUTE, valbool);
-		sk_dst_reset(sk);
 		break;
 	case SO_BROADCAST:
 		sock_valbool_flag(sk, SOCK_BROADCAST, valbool);
@@ -987,8 +1029,13 @@ set_rcvbuf:
 	case SO_MARK:
 		if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
 			ret = -EPERM;
-		else
+		else {
+#ifdef CONFIG_HW_DPIMARK_MODULE
+			sk->sk_mark = get_mplk_somark(sk, val);
+#else
 			sk->sk_mark = val;
+#endif
+		}
 		break;
 
 	case SO_RXQ_OVFL:
@@ -1039,7 +1086,7 @@ set_rcvbuf:
 		break;
 
 	case SO_INCOMING_CPU:
-		sk->sk_incoming_cpu = val;
+		WRITE_ONCE(sk->sk_incoming_cpu, val);
 		break;
 
 	case SO_CNX_ADVICE:
@@ -1351,15 +1398,12 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		break;
 
 	case SO_INCOMING_CPU:
-		v.val = sk->sk_incoming_cpu;
+		v.val = READ_ONCE(sk->sk_incoming_cpu);
 		break;
 
 	case SO_MEMINFO:
 	{
 		u32 meminfo[SK_MEMINFO_VARS];
-
-		if (get_user(len, optlen))
-			return -EFAULT;
 
 		sk_get_meminfo(sk, meminfo);
 
@@ -1377,7 +1421,12 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		/* aggregate non-NAPI IDs down to 0 */
 		if (v.val < MIN_NAPI_ID)
 			v.val = 0;
+		break;
+#endif
 
+#ifdef CONFIG_HUAWEI_XENGINE
+	case SO_XENGINE_SOCKFLAG:
+		v.val = sk->hicom_flag;
 		break;
 #endif
 
@@ -1416,6 +1465,23 @@ lenout:
  */
 static inline void sock_lock_init(struct sock *sk)
 {
+#ifdef CONFIG_MPTCP
+	/* Reclassify the lock-class for subflows */
+	if (sk->sk_type == SOCK_STREAM && sk->sk_protocol == IPPROTO_TCP)
+		if (mptcp(tcp_sk(sk)) || tcp_sk(sk)->is_master_sk) {
+			sock_lock_init_class_and_name(sk, meta_slock_key_name,
+						      &meta_slock_key,
+						      meta_key_name,
+						      &meta_key);
+
+			/* We don't yet have the mptcp-point.
+			 * Thus we still need inet_sock_destruct
+			 */
+			sk->sk_destruct = inet_sock_destruct;
+			return;
+		}
+#endif
+
 	if (sk->sk_kern_sock)
 		sock_lock_init_class_and_name(
 			sk,
@@ -1464,8 +1530,17 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		sk = kmem_cache_alloc(slab, priority & ~__GFP_ZERO);
 		if (!sk)
 			return sk;
+#ifdef CONFIG_MPTCP
+		if (priority & __GFP_ZERO) {
+			if (prot->clear_sk)
+				prot->clear_sk(sk, prot->obj_size);
+			else
+				sk_prot_clear_nulls(sk, prot->obj_size);
+		}
+#else
 		if (priority & __GFP_ZERO)
 			sk_prot_clear_nulls(sk, prot->obj_size);
+#endif
 	} else
 		sk = kmalloc(prot->obj_size, priority);
 
@@ -1539,8 +1614,33 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 
 		mem_cgroup_sk_alloc(sk);
 		cgroup_sk_alloc(&sk->sk_cgrp_data);
+#ifdef CONFIG_HWDPI_MODULE
+		sk->sk_hwdpi_mark = 0;
+#endif
+
+#ifdef CONFIG_HW_NETQOS_SCHED
+		sk->sk_netqos_level = -1;
+		sk->sk_netqos_time = 0;
+		sk->sk_netqos_ttime = 0;
+		sk->sk_netqos_tx = 0;
+		sk->sk_netqos_rx = 0;
+#endif
+
 		sock_update_classid(&sk->sk_cgrp_data);
 		sock_update_netprioidx(&sk->sk_cgrp_data);
+
+#ifdef CONFIG_CGROUP_BPF
+		sk->sk_process_name[0] = '\0';
+#endif
+
+#ifdef CONFIG_HUAWEI_KSTATE
+		sk->sk_pid = 0;
+#endif
+
+#ifdef CONFIG_HUAWEI_TRACK_SOCKET
+		sk->track_flag = 0;
+		sk->track_index = -1;
+#endif
 	}
 
 	return sk;
@@ -1555,6 +1655,10 @@ static void __sk_destruct(struct rcu_head *head)
 	struct sock *sk = container_of(head, struct sock, sk_rcu);
 	struct sk_filter *filter;
 
+#ifdef CONFIG_HUAWEI_BASTET
+	bastet_sock_release(sk);
+#endif
+
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
 
@@ -1564,8 +1668,6 @@ static void __sk_destruct(struct rcu_head *head)
 		sk_filter_uncharge(sk, filter);
 		RCU_INIT_POINTER(sk->sk_filter, NULL);
 	}
-	if (rcu_access_pointer(sk->sk_reuseport_cb))
-		reuseport_detach_sock(sk);
 
 	sock_disable_timestamp(sk, SK_FLAGS_TIMESTAMP);
 
@@ -1588,7 +1690,14 @@ static void __sk_destruct(struct rcu_head *head)
 
 void sk_destruct(struct sock *sk)
 {
-	if (sock_flag(sk, SOCK_RCU_FREE))
+	bool use_call_rcu = sock_flag(sk, SOCK_RCU_FREE);
+
+	if (rcu_access_pointer(sk->sk_reuseport_cb)) {
+		reuseport_detach_sock(sk);
+		use_call_rcu = true;
+	}
+
+	if (use_call_rcu)
 		call_rcu(&sk->sk_rcu, __sk_destruct);
 	else
 		__sk_destruct(&sk->sk_rcu);
@@ -1680,10 +1789,19 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		newsk->sk_send_head	= NULL;
 		newsk->sk_userlocks	= sk->sk_userlocks & ~SOCK_BINDPORT_LOCK;
 		atomic_set(&newsk->sk_zckey, 0);
+#ifdef CONFIG_HUAWEI_BASTET
+		if (sk_fullsock(newsk)) {
+			newsk->bastet = NULL;
+			newsk->reconn = NULL;
+		}
+#endif
 
 		sock_reset_flag(newsk, SOCK_DONE);
+#ifdef CONFIG_MPTCP
+		sock_reset_flag(newsk, SOCK_MPTCP);
+#endif
 		mem_cgroup_sk_alloc(newsk);
-		cgroup_sk_alloc(&newsk->sk_cgrp_data);
+		cgroup_sk_clone(&newsk->sk_cgrp_data);
 
 		rcu_read_lock();
 		filter = rcu_dereference(sk->sk_filter);
@@ -2163,8 +2281,8 @@ static void sk_leave_memory_pressure(struct sock *sk)
 	} else {
 		unsigned long *memory_pressure = sk->sk_prot->memory_pressure;
 
-		if (memory_pressure && *memory_pressure)
-			*memory_pressure = 0;
+		if (memory_pressure && READ_ONCE(*memory_pressure))
+			WRITE_ONCE(*memory_pressure, 0);
 	}
 }
 
@@ -2225,6 +2343,67 @@ bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag)
 }
 EXPORT_SYMBOL(sk_page_frag_refill);
 
+int sk_alloc_sg(struct sock *sk, int len, struct scatterlist *sg,
+		int sg_start, int *sg_curr_index, unsigned int *sg_curr_size,
+		int first_coalesce)
+{
+	int sg_curr = *sg_curr_index, use = 0, rc = 0;
+	unsigned int size = *sg_curr_size;
+	struct page_frag *pfrag;
+	struct scatterlist *sge;
+
+	len -= size;
+	pfrag = sk_page_frag(sk);
+
+	while (len > 0) {
+		unsigned int orig_offset;
+
+		if (!sk_page_frag_refill(sk, pfrag)) {
+			rc = -ENOMEM;
+			goto out;
+		}
+
+		use = min_t(int, len, pfrag->size - pfrag->offset);
+
+		if (!sk_wmem_schedule(sk, use)) {
+			rc = -ENOMEM;
+			goto out;
+		}
+
+		sk_mem_charge(sk, use);
+		size += use;
+		orig_offset = pfrag->offset;
+		pfrag->offset += use;
+
+		sge = sg + sg_curr - 1;
+		if (sg_curr > first_coalesce && sg_page(sg) == pfrag->page &&
+		    sg->offset + sg->length == orig_offset) {
+			sg->length += use;
+		} else {
+			sge = sg + sg_curr;
+			sg_unmark_end(sge);
+			sg_set_page(sge, pfrag->page, use, orig_offset);
+			get_page(pfrag->page);
+			sg_curr++;
+
+			if (sg_curr == MAX_SKB_FRAGS)
+				sg_curr = 0;
+
+			if (sg_curr == sg_start) {
+				rc = -ENOSPC;
+				break;
+			}
+		}
+
+		len -= use;
+	}
+out:
+	*sg_curr_size = size;
+	*sg_curr_index = sg_curr;
+	return rc;
+}
+EXPORT_SYMBOL(sk_alloc_sg);
+
 static void __lock_sock(struct sock *sk)
 	__releases(&sk->sk_lock.slock)
 	__acquires(&sk->sk_lock.slock)
@@ -2243,7 +2422,7 @@ static void __lock_sock(struct sock *sk)
 	finish_wait(&sk->sk_lock.wq, &wait);
 }
 
-void __release_sock(struct sock *sk)
+static void __release_sock(struct sock *sk)
 	__releases(&sk->sk_lock.slock)
 	__acquires(&sk->sk_lock.slock)
 {
@@ -2743,7 +2922,25 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 
 	sk->sk_max_pacing_rate = ~0U;
 	sk->sk_pacing_rate = ~0U;
+	sk->sk_pacing_shift = 10;
 	sk->sk_incoming_cpu = -1;
+
+#ifdef CONFIG_HW_DPIMARK_MODULE
+	sk->sk_born_stamp = jiffies;
+#endif
+
+#ifdef CONFIG_HUAWEI_XENGINE
+	sk->hicom_flag = 0;
+	sk->is_mp_flow_bind = 0;
+#endif
+
+#ifdef CONFIG_HW_CHR_TCP_SMALL_WIN_MONITOR
+	sk->win_cnt = 0;
+	sk->mime_type = 0;
+	sk->small_win_stamp = jiffies;
+	sk->win_flag = true;
+#endif
+
 	/*
 	 * Before updating sk_refcnt, we must commit prior changes to memory
 	 * (Documentation/RCU/rculist_nulls.txt for details)
@@ -3379,7 +3576,7 @@ bool sk_busy_loop_end(void *p, unsigned long start_time)
 {
 	struct sock *sk = p;
 
-	return !skb_queue_empty(&sk->sk_receive_queue) ||
+	return !skb_queue_empty_lockless(&sk->sk_receive_queue) ||
 	       sk_busy_loop_timeout(sk, start_time);
 }
 EXPORT_SYMBOL(sk_busy_loop_end);

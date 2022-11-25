@@ -53,9 +53,30 @@ asmlinkage void pmull_ghash_update_p64(int blocks, u64 dg[], const char *src,
 				       struct ghash_key const *k,
 				       const char *head);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __cfi_pmull_ghash_update_p64(int blocks, u64 dg[], const char *src,
+						struct ghash_key const *k,
+						const char *head)
+{
+	pmull_ghash_update_p64(blocks, dg, src, k, head);
+}
+#define pmull_ghash_update_p64 __cfi_pmull_ghash_update_p64
+#endif
+
 asmlinkage void pmull_ghash_update_p8(int blocks, u64 dg[], const char *src,
 				      struct ghash_key const *k,
 				      const char *head);
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __cfi_pmull_ghash_update_p8(int blocks, u64 dg[], const char *src,
+					       struct ghash_key const *k,
+					       const char *head)
+
+{
+	pmull_ghash_update_p8(blocks, dg, src, k, head);
+}
+#define pmull_ghash_update_p8 __cfi_pmull_ghash_update_p8
+#endif
 
 static void (*pmull_ghash_update)(int blocks, u64 dg[], const char *src,
 				  struct ghash_key const *k,
@@ -65,14 +86,51 @@ asmlinkage void pmull_gcm_encrypt(int blocks, u64 dg[], u8 dst[],
 				  const u8 src[], struct ghash_key const *k,
 				  u8 ctr[], int rounds, u8 ks[]);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __cfi_pmull_gcm_encrypt(int blocks, u64 dg[], u8 dst[],
+					   const u8 src[], struct ghash_key const *k,
+					   u8 ctr[], int rounds, u8 ks[])
+{
+	pmull_gcm_encrypt(blocks, dg, dst, src, k, ctr, rounds, ks);
+}
+#define pmull_gcm_encrypt __cfi_pmull_gcm_encrypt
+#endif
+
 asmlinkage void pmull_gcm_decrypt(int blocks, u64 dg[], u8 dst[],
 				  const u8 src[], struct ghash_key const *k,
 				  u8 ctr[], int rounds);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __cfi_pmull_gcm_decrypt(int blocks, u64 dg[], u8 dst[],
+					   const u8 src[], struct ghash_key const *k,
+					   u8 ctr[], int rounds)
+{
+	pmull_gcm_decrypt(blocks, dg, dst, src, k, ctr, rounds);
+}
+#define pmull_gcm_decrypt __cfi_pmull_gcm_decrypt
+#endif
+
 asmlinkage void pmull_gcm_encrypt_block(u8 dst[], u8 const src[],
 					u32 const rk[], int rounds);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __cfi_pmull_gcm_encrypt_block(u8 dst[], u8 const src[],
+						 u32 const rk[], int rounds)
+{
+	pmull_gcm_encrypt_block(dst, src, rk, rounds);
+}
+#define pmull_gcm_encrypt_block __cfi_pmull_gcm_encrypt_block
+#endif
+
 asmlinkage void __aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __cfi_aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_encrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_encrypt __cfi_aes_arm64_encrypt
+#endif
 
 static int ghash_init(struct shash_desc *desc)
 {

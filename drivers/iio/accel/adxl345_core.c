@@ -21,8 +21,6 @@
 #define ADXL345_REG_DATAX0		0x32
 #define ADXL345_REG_DATAY0		0x34
 #define ADXL345_REG_DATAZ0		0x36
-#define ADXL345_REG_DATA_AXIS(index)	\
-	(ADXL345_REG_DATAX0 + (index) * sizeof(__le16))
 
 #define ADXL345_POWER_CTL_MEASURE	BIT(3)
 #define ADXL345_POWER_CTL_STANDBY	0x00
@@ -49,19 +47,19 @@ struct adxl345_data {
 	u8 data_range;
 };
 
-#define ADXL345_CHANNEL(index, axis) {					\
+#define ADXL345_CHANNEL(reg, axis) {					\
 	.type = IIO_ACCEL,						\
 	.modified = 1,							\
 	.channel2 = IIO_MOD_##axis,					\
-	.address = index,						\
+	.address = reg,							\
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),			\
 	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE),		\
 }
 
 static const struct iio_chan_spec adxl345_channels[] = {
-	ADXL345_CHANNEL(0, X),
-	ADXL345_CHANNEL(1, Y),
-	ADXL345_CHANNEL(2, Z),
+	ADXL345_CHANNEL(ADXL345_REG_DATAX0, X),
+	ADXL345_CHANNEL(ADXL345_REG_DATAY0, Y),
+	ADXL345_CHANNEL(ADXL345_REG_DATAZ0, Z),
 };
 
 static int adxl345_read_raw(struct iio_dev *indio_dev,
@@ -69,7 +67,7 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 			    int *val, int *val2, long mask)
 {
 	struct adxl345_data *data = iio_priv(indio_dev);
-	__le16 accel;
+	__le16 regval;
 	int ret;
 
 	switch (mask) {
@@ -79,13 +77,12 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 		 * ADXL345_REG_DATA(X0/Y0/Z0) contain the least significant byte
 		 * and ADXL345_REG_DATA(X0/Y0/Z0) + 1 the most significant byte
 		 */
-		ret = regmap_bulk_read(data->regmap,
-				       ADXL345_REG_DATA_AXIS(chan->address),
-				       &accel, sizeof(accel));
+		ret = regmap_bulk_read(data->regmap, chan->address, &regval,
+				       sizeof(regval));
 		if (ret < 0)
 			return ret;
 
-		*val = sign_extend32(le16_to_cpu(accel), 12);
+		*val = sign_extend32(le16_to_cpu(regval), 12);
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;

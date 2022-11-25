@@ -50,6 +50,7 @@
 #define COMPAT_PSR_I_BIT	0x00000080
 #define COMPAT_PSR_A_BIT	0x00000100
 #define COMPAT_PSR_E_BIT	0x00000200
+#define PSR_AA32_SSBS_BIT	0x00800000
 #define COMPAT_PSR_J_BIT	0x01000000
 #define COMPAT_PSR_Q_BIT	0x08000000
 #define COMPAT_PSR_V_BIT	0x10000000
@@ -136,7 +137,12 @@ struct pt_regs {
 #endif
 
 	u64 orig_addr_limit;
-	u64 unused;	// maintain 16 byte alignment
+#ifdef CONFIG_HKIP_ADDR_LIMIT_PROTECTION
+	u32 orig_addr_limit_hkip[2];
+#else
+	u64 unused;
+#endif
+	// maintain 16 byte alignment
 	u64 stackframe[2];
 };
 
@@ -276,6 +282,14 @@ static inline void procedure_link_pointer_set(struct pt_regs *regs,
 
 #undef profile_pc
 extern unsigned long profile_pc(struct pt_regs *regs);
+
+#ifdef CONFIG_HISI_BB
+/*
+ * Get pt_regs info in handling exception.
+ * @regs: where to store pt_regs info
+ */
+extern void get_pt_regs(struct pt_regs *regs);
+#endif
 
 #endif /* __ASSEMBLY__ */
 #endif

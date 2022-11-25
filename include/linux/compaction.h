@@ -244,4 +244,8 @@ static inline void compaction_unregister_node(struct node *node)
 }
 #endif /* CONFIG_COMPACTION && CONFIG_SYSFS && CONFIG_NUMA */
 
+#if defined(CONFIG_COMPACTION) && defined(CONFIG_ION_HISI_CPA)
+void cpa_compact_nodes(int compact_model, int order, unsigned long nrpages);
+#endif
+
 #endif /* _LINUX_COMPACTION_H */

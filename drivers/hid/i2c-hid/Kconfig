@@ -15,4 +15,14 @@ config I2C_HID
 	  This support is also available as a module.  If so, the module
 	  will be called i2c-hid.
 
+config HUAWEI_ARMPC_I2C_HID
+	bool "HUAWEI armpc hid driver"
+	default n
+	depends on I2C_HID
+	---help---
+	  Say Y here if you use a keyboard or a clickpad (Synopsys and ELAN) HID
+	  based devices which is connected to your computer via I2C.
+
+	  If unsure, say N.
+
 endmenu

@@ -51,6 +51,15 @@ extern void hotplug_cpu__broadcast_tick_pull(int dead_cpu);
 static inline void hotplug_cpu__broadcast_tick_pull(int dead_cpu) { }
 #endif
 
+
+#ifdef CONFIG_CPU_IDLE_GOV_MENU
+extern void menu_hrtimer_cancel(void);
+#else
+static inline void menu_hrtimer_cancel(void) {}
+#endif
+
+
+
 enum tick_broadcast_mode {
 	TICK_BROADCAST_OFF,
 	TICK_BROADCAST_ON,
@@ -134,6 +143,9 @@ static inline void tick_nohz_idle_stop_tick_protected(void)
 	local_irq_enable();
 }
 
+#ifdef CONFIG_CPUSET_TASKS_CROWDED_WORKAROUND
+u64 get_cpu_nonidle_time_us(int cpu);
+#endif
 #else /* !CONFIG_NO_HZ_COMMON */
 #define tick_nohz_enabled (0)
 static inline int tick_nohz_tick_stopped(void) { return 0; }
@@ -153,6 +165,10 @@ static inline u64 get_cpu_idle_time_us(int cpu, u64 *unused) { return -1; }
 static inline u64 get_cpu_iowait_time_us(int cpu, u64 *unused) { return -1; }
 
 static inline void tick_nohz_idle_stop_tick_protected(void) { }
+
+#ifdef CONFIG_CPUSET_TASKS_CROWDED_WORKAROUND
+static inline u64 get_cpu_nonidle_time_us(int cpu) { return 0; }
+#endif
 #endif /* !CONFIG_NO_HZ_COMMON */
 
 #ifdef CONFIG_NO_HZ_FULL
@@ -258,7 +274,19 @@ extern void __tick_nohz_task_switch(void);
 #else
 static inline int housekeeping_any_cpu(void)
 {
+#ifdef CONFIG_CPU_ISOLATION_OPT
+	cpumask_t available;
+	int cpu;
+
+	cpumask_andnot(&available, cpu_online_mask, cpu_isolated_mask);
+	cpu = cpumask_any(&available);
+	if (cpu >= nr_cpu_ids)
+		cpu = smp_processor_id();
+
+	return cpu;
+#else
 	return smp_processor_id();
+#endif
 }
 static inline bool tick_nohz_full_enabled(void) { return false; }
 static inline bool tick_nohz_full_cpu(int cpu) { return false; }
@@ -296,7 +324,11 @@ static inline bool is_housekeeping_cpu(int cpu)
 	if (tick_nohz_full_enabled())
 		return cpumask_test_cpu(cpu, housekeeping_mask);
 #endif
+#ifdef CONFIG_CPU_ISOLATION_OPT
+	return !cpu_isolated(cpu);
+#else
 	return true;
+#endif
 }
 
 static inline void housekeeping_affine(struct task_struct *t)

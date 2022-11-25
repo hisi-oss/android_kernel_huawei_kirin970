@@ -8,6 +8,13 @@
  * (C) 2007 SGI, Christoph Lameter
  */
 #include <linux/kobject.h>
+#include <linux/mm.h>
+#ifdef CONFIG_MEMCG_PROTECT_LRU
+#include <linux/slab.h>
+#endif
+#ifdef CONFIG_KASAN
+#include <linux/kasan.h>
+#endif
 
 enum stat_item {
 	ALLOC_FASTPATH,		/* Allocation from cpu slab */
@@ -121,6 +128,11 @@ struct kmem_cache {
 	unsigned long random;
 #endif
 
+#ifdef CONFIG_HW_SLUB_DF
+	unsigned long hw_random_malloc;
+	unsigned long hw_random_free;
+#endif
+
 #ifdef CONFIG_NUMA
 	/*
 	 * Defragmentation by allocating from a remote node.
@@ -167,6 +179,9 @@ void object_err(struct kmem_cache *s, struct page *page,
 		u8 *object, char *reason);
 
 void *fixup_red_left(struct kmem_cache *s, void *p);
+#ifdef CONFIG_HW_SLUB_DF
+int set_harden_double_free_status(bool status);
+#endif
 
 static inline void *nearest_obj(struct kmem_cache *cache, struct page *page,
 				void *x) {
@@ -178,5 +193,9 @@ static inline void *nearest_obj(struct kmem_cache *cache, struct page *page,
 	result = fixup_red_left(cache, result);
 	return result;
 }
+
+#ifdef CONFIG_SLABINFO
+void show_slab(bool verbose);
+#endif
 
 #endif /* _LINUX_SLUB_DEF_H */

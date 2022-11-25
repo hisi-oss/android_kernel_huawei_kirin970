@@ -86,6 +86,10 @@
 #include <linux/msg.h>
 #include <linux/shm.h>
 #include <linux/bpf.h>
+#include <chipset_common/security/kshield.h>
+#ifdef CONFIG_HKIP_PROTECT_CRED
+#include <linux/hisi/prmem.h>
+#endif
 
 #include "avc.h"
 #include "objsec.h"
@@ -114,8 +118,14 @@ static int __init enforcing_setup(char *str)
 __setup("enforcing=", enforcing_setup);
 #endif
 
+#if defined(CONFIG_HKIP_SELINUX_PROT) && !defined(CONFIG_SECURITY_SELINUX_DISABLE)
+#define __selinux_enabled_prot  __ro_after_init
+#else
+#define __selinux_enabled_prot
+#endif
+
 #ifdef CONFIG_SECURITY_SELINUX_BOOTPARAM
-int selinux_enabled = CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE;
+int selinux_enabled __selinux_enabled_prot = CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE;
 
 static int __init selinux_enabled_setup(char *str)
 {
@@ -126,7 +136,7 @@ static int __init selinux_enabled_setup(char *str)
 }
 __setup("selinux=", selinux_enabled_setup);
 #else
-int selinux_enabled = 1;
+int selinux_enabled __selinux_enabled_prot = 1;
 #endif
 
 static struct kmem_cache *sel_inode_cache;
@@ -192,12 +202,17 @@ static void cred_init_security(void)
 	struct cred *cred = (struct cred *) current->real_cred;
 	struct task_security_struct *tsec;
 
+	validate_task_creds(current);
 	tsec = kzalloc(sizeof(struct task_security_struct), GFP_KERNEL);
 	if (!tsec)
 		panic("SELinux:  Failed to initialize initial task.\n");
 
 	tsec->osid = tsec->sid = SECINITSID_KERNEL;
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	wr_assign(cred->security, tsec);
+#else
 	cred->security = tsec;
+#endif
 }
 
 /*
@@ -2840,7 +2855,7 @@ static int selinux_sb_kern_mount(struct super_block *sb, int flags, void *data)
 		return rc;
 
 	/* Allow all mounts performed by the kernel */
-	if (flags & (MS_KERNMOUNT | MS_SUBMOUNT))
+	if (flags & MS_KERNMOUNT)
 		return 0;
 
 	ad.type = LSM_AUDIT_DATA_DENTRY;
@@ -3826,7 +3841,14 @@ static void selinux_cred_free(struct cred *cred)
 	 * security_prepare_creds() returned an error.
 	 */
 	BUG_ON(cred->security && (unsigned long) cred->security < PAGE_SIZE);
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	if (is_wr(cred, sizeof(struct cred)))
+		wr_assign(cred->security, (void *) 0x7UL);
+	else
+		cred->security = (void *) 0x7UL;
+#else
 	cred->security = (void *) 0x7UL;
+#endif
 	kfree(tsec);
 }
 
@@ -5116,39 +5138,59 @@ static int selinux_tun_dev_open(void *security)
 
 static int selinux_nlmsg_perm(struct sock *sk, struct sk_buff *skb)
 {
-	int err = 0;
-	u32 perm;
+	int rc = 0;
+	unsigned int msg_len;
+	unsigned int data_len = skb->len;
+	unsigned char *data = skb->data;
 	struct nlmsghdr *nlh;
 	struct sk_security_struct *sksec = sk->sk_security;
+	u16 sclass = sksec->sclass;
+	u32 perm;
 
-	if (skb->len < NLMSG_HDRLEN) {
-		err = -EINVAL;
-		goto out;
-	}
-	nlh = nlmsg_hdr(skb);
+	while (data_len >= nlmsg_total_size(0)) {
+		nlh = (struct nlmsghdr *)data;
 
-	err = selinux_nlmsg_lookup(sksec->sclass, nlh->nlmsg_type, &perm);
-	if (err) {
-		if (err == -EINVAL) {
+		/* NOTE: the nlmsg_len field isn't reliably set by some netlink
+		 *       users which means we can't reject skb's with bogus
+		 *       length fields; our solution is to follow what
+		 *       netlink_rcv_skb() does and simply skip processing at
+		 *       messages with length fields that are clearly junk
+		 */
+		if (nlh->nlmsg_len < NLMSG_HDRLEN || nlh->nlmsg_len > data_len)
+			return 0;
+
+		rc = selinux_nlmsg_lookup(sclass, nlh->nlmsg_type, &perm);
+		if (rc == 0) {
+			rc = sock_has_perm(sk, perm);
+			if (rc)
+				return rc;
+		} else if (rc == -EINVAL) {
+			/* -EINVAL is a missing msg/perm mapping */
 			pr_warn_ratelimited("SELinux: unrecognized netlink"
-			       " message: protocol=%hu nlmsg_type=%hu sclass=%s"
-			       " pig=%d comm=%s\n",
-			       sk->sk_protocol, nlh->nlmsg_type,
-			       secclass_map[sksec->sclass - 1].name,
-			       task_pid_nr(current), current->comm);
-			if (!selinux_enforcing || security_get_allow_unknown())
-				err = 0;
+				" message: protocol=%hu nlmsg_type=%hu sclass=%s"
+				" pid=%d comm=%s\n",
+				sk->sk_protocol, nlh->nlmsg_type,
+				secclass_map[sclass - 1].name,
+				task_pid_nr(current), current->comm);
+			if (selinux_enforcing && !security_get_allow_unknown())
+				return rc;
+			rc = 0;
+		} else if (rc == -ENOENT) {
+			/* -ENOENT is a missing socket/class mapping, ignore */
+			rc = 0;
+		} else {
+			return rc;
 		}
 
-		/* Ignore */
-		if (err == -ENOENT)
-			err = 0;
-		goto out;
+		/* move to the next message after applying netlink padding */
+		msg_len = NLMSG_ALIGN(nlh->nlmsg_len);
+		if (msg_len >= data_len)
+			return 0;
+		data_len -= msg_len;
+		data += msg_len;
 	}
 
-	err = sock_has_perm(sk, perm);
-out:
-	return err;
+	return rc;
 }
 
 #ifdef CONFIG_NETFILTER
@@ -6076,6 +6118,8 @@ static int selinux_setprocattr(const char *name, void *value, size_t size)
 				goto abort_change;
 		}
 
+		if (kshield_chk_set_procattr(value, size) < 0)
+			goto abort_change;
 		tsec->sid = sid;
 	} else {
 		error = -EINVAL;
@@ -6643,6 +6687,16 @@ static struct security_hook_list selinux_hooks[] __lsm_ro_after_init = {
 #endif
 };
 
+static int recovery_mode;
+static int __init recovery_setup(char *str)
+{
+	unsigned long recovery;
+	if (!kstrtoul(str, 0, &recovery))
+		recovery_mode = recovery ? 1 : 0;
+	return 1;
+}
+__setup("enter_recovery=", recovery_setup);
+
 static __init int selinux_init(void)
 {
 	if (!security_module_enable("selinux")) {
@@ -6656,6 +6710,10 @@ static __init int selinux_init(void)
 	}
 
 	printk(KERN_INFO "SELinux:  Initializing.\n");
+
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	wr_assign(ss_initialized, 0);
+#endif
 
 	/* Set the security state for the initial task. */
 	cred_init_security();

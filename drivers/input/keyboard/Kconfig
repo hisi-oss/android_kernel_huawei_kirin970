@@ -756,4 +756,44 @@ config KEYBOARD_BCM
 	  To compile this driver as a module, choose M here: the
 	  module will be called bcm-keypad.
 
+config KEYBOARD_HISI_GPIO_KEY
+	tristate "HISI gpio key support"
+	help
+	  Say Y here to enable the power key support for HISI platform.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called hisi_gpio_key.
+
+config KEYBOARD_HISI_GPIO_VOLUME_KEY
+	bool "HISI gpio key support volume-up and volume-down"
+	depends on KEYBOARD_HISI_GPIO_KEY
+	help
+	  Say Y here to enable the power key support for volume key.
+
+config KEYBOARD_HISI_PMIC_GPIO_KEY
+	tristate "HISI pmic gpio key support,use to realize volume-up and volume-down"
+	depends on HISI_SPMI && HISI_PMIC_PMU_SPMI
+	help
+	  Say Y here to enable the volume key support for HISI platform.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called hisi_pmic_gpio_key.
+
+config KEYBOARD_HISI_GPIO_FUNC_KEY
+	bool "Func key support, depends on HISI gpio key support"
+	depends on KEYBOARD_HISI_GPIO_KEY
+	help
+	  Say Y here to enable the power key support for func key.
+
+config KEY_MASK
+	bool "key mask support, depends on HISI gpio core key support"
+	depends on KEYBOARD_HISI_GPIO_KEY || KEYBOARD_HISI_PMIC_GPIO_KEY
+	help
+	  Say Y here to enable the volume keymask.
+
+config HISI_VOLUMEKEY_COMBINATION
+	bool "volume combination support, depends on HISI gpio key support"
+	depends on KEYBOARD_HISI_GPIO_KEY || KEYBOARD_HISI_PMIC_GPIO_KEY
+	help
+	  Say Y here to enable the volume key combination function.
 endif

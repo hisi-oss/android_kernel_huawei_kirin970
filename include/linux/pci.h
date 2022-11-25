@@ -350,6 +350,8 @@ struct pci_dev {
 	unsigned int	hotplug_user_indicators:1; /* SlotCtl indicators
 						      controlled exclusively by
 						      user sysfs */
+	unsigned int	clear_retrain_link:1;	/* Need to clear Retrain Link
+						   bit manually */
 	unsigned int	d3_delay;	/* D3->D0 transition time in ms */
 	unsigned int	d3cold_delay;	/* D3cold->D0 transition time in ms */
 
@@ -2303,5 +2305,13 @@ static inline bool pci_is_thunderbolt_attached(struct pci_dev *pdev)
 #define pci_notice(pdev, fmt, arg...)	dev_notice(&(pdev)->dev, fmt, ##arg)
 #define pci_info(pdev, fmt, arg...)	dev_info(&(pdev)->dev, fmt, ##arg)
 #define pci_dbg(pdev, fmt, arg...)	dev_dbg(&(pdev)->dev, fmt, ##arg)
+
+#ifdef CONFIG_PCIE_KPORT
+bool kport_pcie_bypass_pm(struct pci_dev *dev);
+bool kport_pcie_bypass_s4(struct pci_dev *dev);
+#else
+static inline bool kport_pcie_bypass_pm(struct pci_dev * dev) {return false;}
+static inline bool kport_pcie_bypass_s4(struct pci_dev * dev) {return false;}
+#endif
 
 #endif /* LINUX_PCI_H */

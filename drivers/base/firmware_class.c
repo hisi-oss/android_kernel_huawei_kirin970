@@ -104,7 +104,7 @@ static int loading_timeout = 60;	/* In seconds */
 
 static inline long firmware_loading_timeout(void)
 {
-	return loading_timeout > 0 ? loading_timeout * HZ : MAX_JIFFY_OFFSET;
+	return loading_timeout > 0 ? loading_timeout * HZ : MAX_JIFFY_OFFSET; /*lint !e647*/
 }
 
 /*
@@ -339,7 +339,7 @@ static void __fw_free_buf(struct kref *ref)
 		 (unsigned int)buf->size);
 
 	list_del(&buf->list);
-	spin_unlock(&fwc->lock);
+	spin_unlock(&fwc->lock); /*lint !e455*/
 
 #ifdef CONFIG_FW_LOADER_USER_HELPER
 	if (buf->is_paged_buf) {
@@ -356,6 +356,7 @@ static void __fw_free_buf(struct kref *ref)
 	kfree(buf);
 }
 
+/*lint -save -e454 -e456 */
 static void fw_free_buf(struct firmware_buf *buf)
 {
 	struct firmware_cache *fwc = buf->fwc;
@@ -363,6 +364,7 @@ static void fw_free_buf(struct firmware_buf *buf)
 	if (!kref_put(&buf->ref, __fw_free_buf))
 		spin_unlock(&fwc->lock);
 }
+/*lint -restore */
 
 /* direct firmware loading support */
 static char fw_path_para[256];
@@ -371,7 +373,11 @@ static const char * const fw_path[] = {
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
-	"/lib/firmware"
+	"/lib/firmware",
+	"/pretvs/oversea/nuance/firmware",
+	"/odm/etc/firmware",
+	"/system/vendor/firmware",
+	"/system/vendor/firmware/ivp"
 };
 
 /*
@@ -402,7 +408,7 @@ fw_get_filesystem_firmware(struct device *device, struct firmware_buf *buf)
 	if (!path)
 		return -ENOMEM;
 
-	for (i = 0; i < ARRAY_SIZE(fw_path); i++) {
+	for (i = 0; i < ARRAY_SIZE(fw_path); i++) { /*lint !e574*/
 		/* skip the unset customized path */
 		if (!fw_path[i][0])
 			continue;
@@ -426,6 +432,7 @@ fw_get_filesystem_firmware(struct device *device, struct firmware_buf *buf)
 					 path, rc);
 			continue;
 		}
+		dev_dbg(device, "code_img loading %s ok\n", path);
 		dev_dbg(device, "direct-loading %s\n", buf->fw_id);
 		buf->size = size;
 		fw_state_done(&buf->fw_st);
@@ -616,7 +623,7 @@ static void kill_pending_fw_fallback_reqs(bool only_kill_custom)
 static ssize_t timeout_show(struct class *class, struct class_attribute *attr,
 			    char *buf)
 {
-	return sprintf(buf, "%d\n", loading_timeout);
+	return sprintf(buf, "%d\n", loading_timeout); /*lint !e421*/
 }
 
 /**
@@ -698,7 +705,7 @@ static ssize_t firmware_loading_show(struct device *dev,
 		loading = fw_state_is_loading(&fw_priv->buf->fw_st);
 	mutex_unlock(&fw_lock);
 
-	return sprintf(buf, "%d\n", loading);
+	return sprintf(buf, "%d\n", loading); /*lint !e421*/
 }
 
 /* Some architectures don't have PAGE_KERNEL_RO */
@@ -854,7 +861,7 @@ static ssize_t firmware_data_read(struct file *filp, struct kobject *kobj,
 		ret_count = -ENODEV;
 		goto out;
 	}
-	if (offset > buf->size) {
+	if (offset > buf->size) { /*lint !e574*/
 		ret_count = 0;
 		goto out;
 	}
@@ -1089,7 +1096,7 @@ static int fw_load_from_user_helper(struct firmware *firmware,
 		}
 	} else {
 		ret = usermodehelper_read_trylock();
-		if (WARN_ON(ret)) {
+		if (WARN_ON(ret)) { /*lint !e665 !e146*/
 			dev_err(device, "firmware: %s will not be loaded\n",
 				name);
 			return ret;
@@ -1426,7 +1433,7 @@ request_firmware_nowait(
 	get_device(fw_work->device);
 	INIT_WORK(&fw_work->work, request_firmware_work_func);
 	schedule_work(&fw_work->work);
-	return 0;
+	return 0; /*lint !e429*/
 }
 EXPORT_SYMBOL(request_firmware_nowait);
 

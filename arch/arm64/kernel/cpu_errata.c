@@ -63,8 +63,7 @@ has_mismatched_cache_type(const struct arm64_cpu_capabilities *entry,
 
 static int cpu_enable_trap_ctr_access(void *__unused)
 {
-	/* Clear SCTLR_EL1.UCT */
-	config_sctlr_el1(SCTLR_EL1_UCT, 0);
+	sysreg_clear_set(sctlr_el1, SCTLR_EL1_UCT, 0);
 	return 0;
 }
 
@@ -79,8 +78,6 @@ extern char __qcom_hyp_sanitize_link_stack_start[];
 extern char __qcom_hyp_sanitize_link_stack_end[];
 extern char __smccc_workaround_1_smc_start[];
 extern char __smccc_workaround_1_smc_end[];
-extern char __smccc_workaround_1_hvc_start[];
-extern char __smccc_workaround_1_hvc_end[];
 
 static void __copy_hyp_vect_bpi(int slot, const char *hyp_vecs_start,
 				const char *hyp_vecs_end)
@@ -127,8 +124,6 @@ static void __install_bp_hardening_cb(bp_hardening_cb_t fn,
 #define __qcom_hyp_sanitize_link_stack_end	NULL
 #define __smccc_workaround_1_smc_start		NULL
 #define __smccc_workaround_1_smc_end		NULL
-#define __smccc_workaround_1_hvc_start		NULL
-#define __smccc_workaround_1_hvc_end		NULL
 
 static void __install_bp_hardening_cb(bp_hardening_cb_t fn,
 				      const char *hyp_vecs_start,
@@ -179,18 +174,23 @@ static int enable_smccc_arch_workaround_1(void *data)
 	if (!entry->matches(entry, SCOPE_LOCAL_CPU))
 		return 0;
 
+#ifndef CONFIG_ARCH_HISI
 	if (psci_ops.smccc_version == SMCCC_VERSION_1_0)
 		return 0;
 
 	switch (psci_ops.conduit) {
+#else
+	switch (PSCI_CONDUIT_SMC) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		arm_smccc_1_1_hvc(ARM_SMCCC_ARCH_FEATURES_FUNC_ID,
 				  ARM_SMCCC_ARCH_WORKAROUND_1, &res);
 		if ((int)res.a0 < 0)
 			return 0;
 		cb = call_hvc_arch_workaround_1;
-		smccc_start = __smccc_workaround_1_hvc_start;
-		smccc_end = __smccc_workaround_1_hvc_end;
+		/* This is a guest, no need to patch KVM vectors */
+		smccc_start = NULL;
+		smccc_end = NULL;
 		break;
 
 	case PSCI_CONDUIT_SMC:
@@ -279,7 +279,11 @@ void __init arm64_update_smccc_conduit(struct alt_instr *alt,
 
 	BUG_ON(nr_inst != 1);
 
+#ifdef CONFIG_ARCH_HISI
+	switch (PSCI_CONDUIT_SMC) {
+#else
 	switch (psci_ops.conduit) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		insn = aarch64_insn_get_hvc_value();
 		break;
@@ -289,7 +293,6 @@ void __init arm64_update_smccc_conduit(struct alt_instr *alt,
 	default:
 		return;
 	}
-
 	*updptr = cpu_to_le32(insn);
 }
 
@@ -309,7 +312,21 @@ void __init arm64_enable_wa2_handling(struct alt_instr *alt,
 
 void arm64_set_ssbd_mitigation(bool state)
 {
+#ifndef CONFIG_HISI_BYPASS_SSBS
+	if (this_cpu_has_cap(ARM64_SSBS)) {
+		if (state)
+			asm volatile(SET_PSTATE_SSBS(0));
+		else
+			asm volatile(SET_PSTATE_SSBS(1));
+		return;
+	}
+#endif
+
+#ifdef CONFIG_ARCH_HISI
+	switch (PSCI_CONDUIT_SMC) {
+#else
 	switch (psci_ops.conduit) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		arm_smccc_1_1_hvc(ARM_SMCCC_ARCH_WORKAROUND_2, state, NULL);
 		break;
@@ -333,12 +350,23 @@ static bool has_ssbd_mitigation(const struct arm64_cpu_capabilities *entry,
 
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
 
+#ifndef CONFIG_HISI_BYPASS_SSBS
+	if (this_cpu_has_cap(ARM64_SSBS)) {
+		required = false;
+		goto out_printmsg;
+	}
+#endif
+
+#ifndef CONFIG_ARCH_HISI
 	if (psci_ops.smccc_version == SMCCC_VERSION_1_0) {
 		ssbd_state = ARM64_SSBD_UNKNOWN;
 		return false;
 	}
 
 	switch (psci_ops.conduit) {
+#else
+	switch (PSCI_CONDUIT_SMC) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		arm_smccc_1_1_hvc(ARM_SMCCC_ARCH_FEATURES_FUNC_ID,
 				  ARM_SMCCC_ARCH_WORKAROUND_2, &res);
@@ -381,7 +409,6 @@ static bool has_ssbd_mitigation(const struct arm64_cpu_capabilities *entry,
 
 	switch (ssbd_state) {
 	case ARM64_SSBD_FORCE_DISABLE:
-		pr_info_once("%s disabled from command-line\n", entry->desc);
 		arm64_set_ssbd_mitigation(false);
 		required = false;
 		break;
@@ -394,13 +421,25 @@ static bool has_ssbd_mitigation(const struct arm64_cpu_capabilities *entry,
 		break;
 
 	case ARM64_SSBD_FORCE_ENABLE:
-		pr_info_once("%s forced from command-line\n", entry->desc);
 		arm64_set_ssbd_mitigation(true);
 		required = true;
 		break;
 
 	default:
 		WARN_ON(1);
+		break;
+	}
+
+#ifndef CONFIG_HISI_BYPASS_SSBS
+out_printmsg:
+#endif
+	switch (ssbd_state) {
+	case ARM64_SSBD_FORCE_DISABLE:
+		pr_info_once("%s disabled from command-line\n", entry->desc);
+		break;
+
+	case ARM64_SSBD_FORCE_ENABLE:
+		pr_info_once("%s forced from command-line\n", entry->desc);
 		break;
 	}
 
@@ -612,6 +651,13 @@ const struct arm64_cpu_capabilities arm64_errata[] = {
 		MIDR_ALL_VERSIONS(MIDR_CAVIUM_THUNDERX2),
 		.enable = enable_smccc_arch_workaround_1,
 	},
+#ifdef CONFIG_ARCH_HISI
+	{
+		.capability = ARM64_HARDEN_BRANCH_PREDICTOR,
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_ENYO),
+		.enable = enable_smccc_arch_workaround_1,
+	},
+#endif
 #endif
 #ifdef CONFIG_ARM64_SSBD
 	{

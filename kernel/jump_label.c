@@ -79,6 +79,28 @@ int static_key_count(struct static_key *key)
 }
 EXPORT_SYMBOL_GPL(static_key_count);
 
+void static_key_enable(struct static_key *key)
+{
+	int count = static_key_count(key);
+
+	WARN_ON_ONCE(count < 0 || count > 1);
+
+	if (!count)
+		static_key_slow_inc(key);
+}
+EXPORT_SYMBOL_GPL(static_key_enable);
+
+void static_key_disable(struct static_key *key)
+{
+	int count = static_key_count(key);
+
+	WARN_ON_ONCE(count < 0 || count > 1);
+
+	if (count)
+		static_key_slow_dec(key);
+}
+EXPORT_SYMBOL_GPL(static_key_disable);
+
 void static_key_slow_inc_cpuslocked(struct static_key *key)
 {
 	int v, v1;
@@ -681,6 +703,11 @@ static struct notifier_block jump_label_module_nb = {
 	.notifier_call = jump_label_module_notify,
 	.priority = 1, /* higher than tracepoints */
 };
+
+int jump_label_register(struct module *mod)
+{
+	return jump_label_module_notify(&jump_label_module_nb, MODULE_STATE_COMING, mod);
+}
 
 static __init int jump_label_init_module(void)
 {

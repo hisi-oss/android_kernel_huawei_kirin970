@@ -13,60 +13,50 @@
 
 #include <linux/mm.h>
 #include <linux/slab.h>
-
+#include <linux/fscrypt_common.h>
 /*
  * fscrypt superblock flags
  */
 #define FS_CFLG_OWN_PAGES (1U << 1)
 
-/*
- * crypto operations for filesystems
- */
-struct fscrypt_operations {
-	unsigned int flags;
-	const char *key_prefix;
-	int (*get_context)(struct inode *, void *, size_t);
-	int (*set_context)(struct inode *, const void *, size_t, void *);
-	bool (*dummy_context)(struct inode *);
-	bool (*empty_dir)(struct inode *);
-	unsigned int max_namelen;
-};
 
-struct fscrypt_ctx {
-	union {
-		struct {
-			struct page *bounce_page;	/* Ciphertext page */
-			struct page *control_page;	/* Original page  */
-		} w;
-		struct {
-			struct bio *bio;
-			struct work_struct work;
-		} r;
-		struct list_head free_list;	/* Free list */
-	};
-	u8 flags;				/* Flags */
-};
 
 static inline bool fscrypt_has_encryption_key(const struct inode *inode)
 {
-	return (inode->i_crypt_info != NULL);
+        return (inode->i_crypt_info != NULL);
 }
 
 static inline bool fscrypt_dummy_context_enabled(struct inode *inode)
 {
-	return inode->i_sb->s_cop->dummy_context &&
-		inode->i_sb->s_cop->dummy_context(inode);
+        return inode->i_sb->s_cop->dummy_context &&
+                inode->i_sb->s_cop->dummy_context(inode);
 }
 
+
 /* crypto.c */
+extern struct kmem_cache *fscrypt_info_cachep;
 extern void fscrypt_enqueue_decrypt_work(struct work_struct *);
 extern struct fscrypt_ctx *fscrypt_get_ctx(const struct inode *, gfp_t);
 extern void fscrypt_release_ctx(struct fscrypt_ctx *);
 extern struct page *fscrypt_encrypt_page(const struct inode *, struct page *,
 						unsigned int, unsigned int,
 						u64, gfp_t);
+extern struct page *fscrypt_encrypt_dio_page(struct inode *, struct page *,
+                                                unsigned int, unsigned int,
+                                                u64, gfp_t);
 extern int fscrypt_decrypt_page(const struct inode *, struct page *, unsigned int,
 				unsigned int, u64);
+extern int fscrypt_decrypt_dio_page(struct inode *, struct page *,
+                                        unsigned int, unsigned int, u64);
+extern void fscrypt_decrypt_bio_pages(struct fscrypt_ctx *, struct bio *);
+extern void fscrypt_decrypt_dio_bio_pages(struct fscrypt_ctx *, struct bio *,
+                                         work_func_t func);
+static inline void fscrypt_set_encrypted_dentry(struct dentry *dentry)
+{
+	spin_lock(&dentry->d_lock);
+	dentry->d_flags |= DCACHE_ENCRYPTED_WITH_KEY;
+	spin_unlock(&dentry->d_lock);
+}
 
 static inline struct page *fscrypt_control_page(struct page *page)
 {
@@ -81,9 +71,18 @@ extern int fscrypt_ioctl_get_policy(struct file *, void __user *);
 extern int fscrypt_has_permitted_context(struct inode *, struct inode *);
 extern int fscrypt_inherit_context(struct inode *, struct inode *,
 					void *, bool);
+
 /* keyinfo.c */
+extern int fscrypt_set_gcm_key(struct crypto_aead *, const u8 *);
+extern int fscrypt_derive_gcm_key(struct crypto_aead *,
+				const u8 *, u8 *, u8 *, int);
+extern struct key *fscrypt_request_key(const u8 *, const u8 *, int);
 extern int fscrypt_get_encryption_info(struct inode *);
 extern void fscrypt_put_encryption_info(struct inode *);
+#ifdef CONFIG_HWDPS
+extern int hwdps_update_context(struct inode *, uid_t);
+extern int hwdps_get_context(struct inode *);
+#endif
 
 /* fname.c */
 extern int fscrypt_setup_filename(struct inode *, const struct qstr *,

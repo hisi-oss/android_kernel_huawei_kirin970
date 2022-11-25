@@ -25,6 +25,8 @@ config ARM64
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select ARCH_SUPPORTS_MEMORY_FAILURE
 	select ARCH_SUPPORTS_LTO_CLANG
+	select ARCH_SUPPORTS_SHADOW_CALL_STACK
+	select ARCH_SUPPORTS_THINLTO
 	select ARCH_SUPPORTS_ATOMIC_RMW
 	select ARCH_SUPPORTS_NUMA_BALANCING
 	select ARCH_WANT_COMPAT_IPC_PARSE_VERSION
@@ -38,7 +40,7 @@ config ARM64
 	select ARM_GIC_V3
 	select ARM_GIC_V3_ITS if PCI
 	select ARM_PSCI_FW
-	select BUILDTIME_EXTABLE_SORT
+	select BUILDTIME_EXTABLE_SORT if !ARM64_HKRR
 	select CLONE_BACKWARDS
 	select COMMON_CLK
 	select CPU_PM if (SUSPEND || CPU_IDLE)
@@ -92,11 +94,12 @@ config ARM64
 	select HAVE_EFFICIENT_UNALIGNED_ACCESS
 	select HAVE_FTRACE_MCOUNT_RECORD
 	select HAVE_FUNCTION_TRACER
-	select HAVE_FUNCTION_GRAPH_TRACER
+	select HAVE_FUNCTION_GRAPH_TRACER if !SHADOW_CALL_STACK
 	select HAVE_GCC_PLUGINS
 	select HAVE_GENERIC_DMA_COHERENT
 	select HAVE_HW_BREAKPOINT if PERF_EVENTS
 	select HAVE_IRQ_TIME_ACCOUNTING
+	select HAVE_HW_BREAKPOINT_ADDR_MASK
 	select HAVE_MEMBLOCK
 	select HAVE_MEMBLOCK_NODE_MAP if NUMA
 	select HAVE_NMI if ACPI_APEI_SEA
@@ -109,7 +112,6 @@ config ARM64
 	select HAVE_SYSCALL_TRACEPOINTS
 	select HAVE_KPROBES
 	select HAVE_KRETPROBES
-	select IOMMU_DMA if IOMMU_SUPPORT
 	select IRQ_DOMAIN
 	select IRQ_FORCED_THREADING
 	select MODULES_USE_ELF_RELA
@@ -434,13 +436,26 @@ config ARM64_ERRATUM_845719
 
 config ARM64_ERRATUM_843419
 	bool "Cortex-A53: 843419: A load or store might access an incorrect address"
-	default y if !LTO_CLANG
 	select ARM64_MODULE_CMODEL_LARGE if MODULES
 	help
 	  This option links the kernel with '--fix-cortex-a53-843419' and
 	  builds modules using the large memory model in order to avoid the use
 	  of the ADRP instruction, which can cause a subsequent memory access
 	  to use an incorrect address on Cortex-A53 parts up to r0p4.
+
+	  If unsure, say Y.
+
+config ARM64_ERRATUM_1392324
+	bool "Cortex-Enyo: 1392324: set SCTLR_EL1.IESB==0 to prevent interrupts unresponse"
+	default y
+	help
+	  This option adds work around for Arm Cortex-Enyo Erratum 1392324.
+
+	  When the Instruction Abort exception vector address for EL1 is unmapped
+	  in the translation tables, or VBAR_EL1 contains a corrupted vector address,
+	  the occurrence of any Instruction Abort targeting EL1 results in recursive
+	  Instruction Aborts. If SCTLR_EL1.IESB is set, then these recursive
+	  Instruction Aborts might prevent the core from recognizing any interrupts.
 
 	  If unsure, say Y.
 
@@ -559,6 +574,22 @@ config QCOM_FALKOR_ERRATUM_E1041
 
 endmenu
 
+config ARM64_ERRATUM_858921
+	bool "Cortex-A73 858921: Possible wrong read value for CNTVCT or CNTPCT value"
+	default y
+	depends on ARM_ARCH_TIMER && ARM64
+	help
+	  This option enables a workaround for Cortex-A73 Category B
+	  858921 ("Possible wrong read value for CNTVCT or CNTPCT
+	  value").
+
+	  CNTVCT and CNTPCT are updated according to the counter value given by
+	  CNTVALUEB input bus. If CNTVCT and CNTPCT are read while they are updated
+	  with the lower 32 bits rolled-over, it is possible to read a wrong transient
+	  value CNTVCT or CNTPCT respectively.
+
+	  The workaround is to read the CNTVCT or CNTPCT twice. If the bit 32 of the 2
+	  values is not same, use the first value otherwise use the second one.
 
 choice
 	prompt "Page size"
@@ -659,6 +690,13 @@ config HOTPLUG_CPU
 	  Say Y here to experiment with turning CPUs off and on.  CPUs
 	  can be controlled through /sys/devices/system/cpu.
 
+config ARCH_ENABLE_MEMORY_HOTPLUG
+	bool "Support for Memory Hotplugable"
+	depends on !NUMA
+
+config ARCH_ENABLE_MEMORY_HOTREMOVE
+	bool "Support for Memory Removable"
+
 # Common NUMA Features
 config NUMA
 	bool "Numa Memory Allocation and Scheduler Support"
@@ -721,6 +759,11 @@ config HW_PERF_EVENTS
 	def_bool y
 	depends on ARM_PMU
 
+config HISI_HW_PERF_EVENTS
+	bool "HISI perf PMU event debug"
+	depends on HW_PERF_EVENTS
+	default n
+
 config SYS_SUPPORTS_HUGETLBFS
 	def_bool y
 
@@ -731,6 +774,10 @@ config ARCH_HAS_CACHE_LINE_SIZE
 	def_bool y
 
 source "mm/Kconfig"
+
+config ARCH_MEMORY_PROBE
+	def_bool y
+	depends on MEMORY_HOTPLUG
 
 config SECCOMP
 	bool "Enable seccomp to safely compute untrusted bytecode"
@@ -849,6 +896,20 @@ config HARDEN_BRANCH_PREDICTOR
 
 	  If unsure, say Y.
 
+config HISI_WORKAROUND_MONITOR
+	bool "Hisilicon workaround monitor" if EXPERT
+	default n
+	help
+	  Hisilicon optimizations for cpu workaround
+
+config HISI_HARDEN_BRANCH_PREDICTOR
+	bool "Hisilicon Harden the branch predictor solution" if EXPERT
+	default n
+	depends on HARDEN_BRANCH_PREDICTOR
+	depends on HISI_WORKAROUND_MONITOR
+	help
+	  Hisilicon optimizations for harden branch predictor schema.
+
 config ARM64_SSBD
 	bool "Speculative Store Bypass Disable" if EXPERT
 	default y
@@ -857,6 +918,15 @@ config ARM64_SSBD
 	  by speculative loads.
 
 	  If unsure, say Y.
+
+config HISI_BYPASS_SSBS
+	bool "Hisilicon bypass SSBS solution" if EXPERT
+	default n
+	depends on ARM64_SSBD
+	help
+	  This bypass SSBS solution on platform which has SSBS feature, make
+	  it get back to SSBD solution, notice that DSSBS bit should be set
+	  for sctlr of all el level in arm trust firmware.
 
 menuconfig ARMV8_DEPRECATED
 	bool "Emulate deprecated/obsolete ARMv8 instructions"
@@ -991,6 +1061,17 @@ config ARM64_VHE
 	  at runtime, and does not affect processors that do not
 	  implement this feature.
 
+config ARM64_STRICT_BREAK_BEFORE_MAKE
+	bool "ARMV8 break before make func for TLB flush "
+	default n
+	help
+	  For ARMv8 TLB flush, when set_pte, we must set the pte
+	  break before make.
+
+	  Selecting this option allows the feature to be detected
+	  at runtime, and does not affect processors that do not
+	  implement this feature.
+
 endmenu
 
 menu "ARMv8.2 architectural features"
@@ -1082,6 +1163,34 @@ config RANDOMIZE_MODULE_REGION_FULL
 	  When this option is not set, the module region will be randomized over
 	  a limited range that contains the [_stext, _etext] interval of the
 	  core kernel, so branch relocations are always in range.
+
+config ARM64_LZ4
+	bool "Kernel compression with lz4"
+	default n
+	help
+	  Kernel compression with lz4.
+
+config ARM64_HKRR
+	bool "Kernel self randomization"
+	default n
+	help
+	  Kernel Self Randomization.
+
+	  If unsure, say N.
+
+config ARM64_HKRR_EXTRA_TEXT_SIZE
+	int "Kernel Self Randomization extra text size (KBs)"
+	depends on ARM64_HKRR
+	default 64
+	help
+	  Kernel Self Randomization extra text size.
+
+config ARM64_HKRR_EXTRA_OBJ_SIZE
+	int "Kernel Self Randomization result obj size (KBs)"
+	depends on ARM64_HKRR
+	default 64
+	help
+	  Kernel Self Randomization result obj size.
 
 endmenu
 
@@ -1196,6 +1305,16 @@ config BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES
 	  Space separated list of names of dtbs to append when
 	  building a concatenated Image.gz-dtb.
 
+config HISI_PMU_WORKAROUND
+	bool "Workaround for PMU IRQ burst"
+	default n
+	depends on ARM_PMU
+	help
+	  Disable Performance Monitor overflow interrupts
+	  when handling an monitor IRQ, to avoid simultaneous
+	  overflow interrupts from multiple monitors.
+
+	  Enable this flag for effect SoCs.
 endmenu
 
 menu "Userspace binary formats"

@@ -63,6 +63,10 @@
 /* generic data direction definitions */
 #define READ			0
 #define WRITE			1
+#ifdef CONFIG_BLK_DEV_THROTTLING
+#define READ_FG			2
+#define WRITE_FG		3
+#endif
 
 /**
  * ARRAY_SIZE - get the number of elements in array @arr
@@ -72,8 +76,8 @@
 
 #define u64_to_user_ptr(x) (		\
 {					\
-	typecheck(u64, x);		\
-	(void __user *)(uintptr_t)x;	\
+	typecheck(u64, (x));		\
+	(void __user *)(uintptr_t)(x);	\
 }					\
 )
 
@@ -101,7 +105,8 @@
 #define DIV_ROUND_DOWN_ULL(ll, d) \
 	({ unsigned long long _tmp = (ll); do_div(_tmp, d); _tmp; })
 
-#define DIV_ROUND_UP_ULL(ll, d)		DIV_ROUND_DOWN_ULL((ll) + (d) - 1, (d))
+#define DIV_ROUND_UP_ULL(ll, d) \
+	DIV_ROUND_DOWN_ULL((unsigned long long)(ll) + (d) - 1, (d))
 
 #if BITS_PER_LONG == 32
 # define DIV_ROUND_UP_SECTOR_T(ll,d) DIV_ROUND_UP_ULL(ll, d)
@@ -441,6 +446,10 @@ extern long long simple_strtoll(const char *,char **,unsigned int);
 
 extern int num_to_str(char *buf, int size, unsigned long long num);
 
+#define strict_strtoul      kstrtoul
+#define strict_strtol       kstrtol
+#define strict_strtoull     kstrtoull
+#define strict_strtoll      kstrtoll
 /* lib/printf utilities */
 
 extern __printf(2, 3) int sprintf(char *buf, const char * fmt, ...);

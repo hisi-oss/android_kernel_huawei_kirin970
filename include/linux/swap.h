@@ -18,6 +18,10 @@ struct notifier_block;
 
 struct bio;
 
+#ifdef CONFIG_FREE_SWAPCACHE_AGGRESSIVELY
+extern int free_swapcache_aggressively;
+#endif
+
 #define SWAP_FLAG_PREFER	0x8000	/* set if swap priority specified */
 #define SWAP_FLAG_PRIO_MASK	0x7fff
 #define SWAP_FLAG_PRIO_SHIFT	0
@@ -231,6 +235,7 @@ struct swap_info_struct {
 	unsigned long	flags;		/* SWP_USED etc: see above */
 	signed short	prio;		/* swap priority of this type */
 	struct plist_node list;		/* entry in swap_active_head */
+	struct plist_node avail_lists[MAX_NUMNODES];/* entry in swap_avail_heads */
 	signed char	type;		/* strange name for an index */
 	unsigned int	max;		/* extent of the swap_map */
 	unsigned char *swap_map;	/* vmalloc'ed array of usage counts */
@@ -271,16 +276,6 @@ struct swap_info_struct {
 					 */
 	struct work_struct discard_work; /* discard worker */
 	struct swap_cluster_list discard_clusters; /* discard clusters list */
-	struct plist_node avail_lists[0]; /*
-					   * entries in swap_avail_heads, one
-					   * entry per node.
-					   * Must be last as the number of the
-					   * array is nr_node_ids, which is not
-					   * a fixed value so have to allocate
-					   * dynamically.
-					   * And it has to be an array so that
-					   * plist_for_each_* can work.
-					   */
 };
 
 #ifdef CONFIG_64BIT
@@ -302,10 +297,25 @@ struct vma_swap_readahead {
 #endif
 };
 
+#ifdef CONFIG_HYPERHOLD_FILE_LRU
+static inline struct lruvec *hp_lruvec(struct lruvec *lruvec,
+				       struct page *page,
+				       struct pglist_data *pgdat)
+{
+	if (!is_prot_page(page))
+		return node_lruvec(pgdat);
+	return lruvec;
+}
+#endif
 /* linux/mm/workingset.c */
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 void *workingset_eviction(struct address_space *mapping, struct page *page);
-void workingset_refault(struct page *page, void *shadow);
+#else
+void workingset_age_nonresident(struct lruvec *lruvec, unsigned long nr_pages);
+void *workingset_eviction(struct page *page, struct mem_cgroup *target_memcg);
+#endif
 void workingset_activation(struct page *page);
+void workingset_refault(struct page *page, void *shadow);
 void workingset_update_node(struct radix_tree_node *node, void *private);
 
 /* linux/mm/page_alloc.c */
@@ -319,6 +329,11 @@ extern unsigned long nr_free_pagecache_pages(void);
 
 
 /* linux/mm/swap.c */
+#ifdef CONFIG_REFAULT_IO_VMSCAN
+extern void lru_note_cost(struct lruvec *lruvec, bool file,
+			  unsigned int nr_pages);
+extern void lru_note_cost_page(struct page *);
+#endif
 extern void lru_cache_add(struct page *);
 extern void lru_cache_add_anon(struct page *page);
 extern void lru_cache_add_file(struct page *page);
@@ -337,8 +352,19 @@ extern void swap_setup(void);
 
 extern void add_page_to_unevictable_list(struct page *page);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern void __lru_cache_add_active_or_unevictable(struct page *page,
+						unsigned long vma_flags);
+
+static inline void lru_cache_add_active_or_unevictable(struct page *page,
+						struct vm_area_struct *vma)
+{
+	return __lru_cache_add_active_or_unevictable(page, vma->vm_flags);
+}
+#else
 extern void lru_cache_add_active_or_unevictable(struct page *page,
 						struct vm_area_struct *vma);
+#endif
 
 /* linux/mm/vmscan.c */
 extern unsigned long zone_reclaimable_pages(struct zone *zone);
@@ -355,22 +381,30 @@ extern unsigned long mem_cgroup_shrink_node(struct mem_cgroup *mem,
 						pg_data_t *pgdat,
 						unsigned long *nr_scanned);
 extern unsigned long shrink_all_memory(unsigned long nr_pages);
+#ifdef CONFIG_ION_HISI_CPA
+extern unsigned long cpa_shrink_all_memory(unsigned long nr_pages);
+#endif
 extern int vm_swappiness;
 extern int remove_mapping(struct address_space *mapping, struct page *page);
 extern unsigned long vm_total_pages;
+#ifdef CONFIG_HUAWEI_RCC
+#define RCC_MODE_ANON   1
+#define RCC_MODE_FILE   2
+extern int try_to_free_pages_ex(int nr_pages, int mode);
+#endif
+
+#ifdef CONFIG_SHRINK_MEMORY
+extern int sysctl_shrink_memory;
+extern int sysctl_shrinkmem_handler(struct ctl_table *table, int write,
+					void __user *buffer, size_t *length , loff_t *ppos);
+#endif
 
 #ifdef CONFIG_NUMA
 extern int node_reclaim_mode;
 extern int sysctl_min_unmapped_ratio;
 extern int sysctl_min_slab_ratio;
-extern int node_reclaim(struct pglist_data *, gfp_t, unsigned int);
 #else
 #define node_reclaim_mode 0
-static inline int node_reclaim(struct pglist_data *pgdat, gfp_t mask,
-				unsigned int order)
-{
-	return 0;
-}
 #endif
 
 extern int page_evictable(struct page *page);
@@ -408,9 +442,17 @@ extern bool swap_vma_readahead;
 extern unsigned long total_swapcache_pages(void);
 extern void show_swap_cache_info(void);
 extern int add_to_swap(struct page *page);
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 extern int add_to_swap_cache(struct page *, swp_entry_t, gfp_t);
 extern int __add_to_swap_cache(struct page *page, swp_entry_t entry);
 extern void __delete_from_swap_cache(struct page *);
+#else
+extern int add_to_swap_cache(struct page *, swp_entry_t, gfp_t, void **shadowp);
+extern int __add_to_swap_cache(struct page *page, swp_entry_t entry, void ** shadowp);
+extern void __delete_from_swap_cache(struct page *, void *shadow);
+extern void clear_shadow_from_swap_cache(int type, unsigned long begin,
+				unsigned long end);
+#endif
 extern void delete_from_swap_cache(struct page *);
 extern void free_page_and_swap_cache(struct page *);
 extern void free_pages_and_swap_cache(struct page **, int);
@@ -437,6 +479,9 @@ extern atomic_long_t nr_swap_pages;
 extern long total_swap_pages;
 extern atomic_t nr_rotate_swap;
 extern bool has_usable_swap(void);
+#ifdef CONFIG_HYPERHOLD_ZSWAPD
+extern bool free_swap_is_low(void);
+#endif
 
 static inline bool swap_use_vma_readahead(void)
 {
@@ -567,6 +612,7 @@ static inline int add_to_swap(struct page *page)
 	return 0;
 }
 
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 static inline int add_to_swap_cache(struct page *page, swp_entry_t entry,
 							gfp_t gfp_mask)
 {
@@ -576,6 +622,23 @@ static inline int add_to_swap_cache(struct page *page, swp_entry_t entry,
 static inline void __delete_from_swap_cache(struct page *page)
 {
 }
+#else
+static inline int add_to_swap_cache(struct page *page, swp_entry_t entry,
+							gfp_t gfp_mask, void **shadowp)
+{
+	return -1;
+}
+
+static inline void __delete_from_swap_cache(struct page *page, void *shadow)
+{
+}
+
+static inline void clear_shadow_from_swap_cache(int type, unsigned long begin,
+				unsigned long end)
+{
+}
+
+#endif
 
 static inline void delete_from_swap_cache(struct page *page)
 {
@@ -672,8 +735,16 @@ static inline long mem_cgroup_get_nr_swap_pages(struct mem_cgroup *memcg)
 
 static inline bool mem_cgroup_swap_full(struct page *page)
 {
+#ifdef CONFIG_FREE_SWAPCACHE_AGGRESSIVELY
+	return free_swapcache_aggressively ? true : vm_swap_full();
+#else
 	return vm_swap_full();
+#endif
 }
+#endif
+
+#ifdef CONFIG_HISI_LOWMEM
+extern atomic_t swap_no_space;
 #endif
 
 #endif /* __KERNEL__*/

@@ -61,6 +61,8 @@
 
 #include "usb.h"
 
+#include "hisi-usb-core.h"
+
 /* Define ALLOW_SERIAL_NUMBER if you want to see the serial number of devices */
 #define ALLOW_SERIAL_NUMBER
 
@@ -614,13 +616,26 @@ static ssize_t usb_device_read(struct file *file, char __user *buf,
 	if (!access_ok(VERIFY_WRITE, buf, nbytes))
 		return -EFAULT;
 
+#ifndef CONFIG_USB_DEVICE_READ_USE_TRYLOCK
 	mutex_lock(&usb_bus_idr_lock);
+#else
+	if (usb_device_read_mutex_trylock())
+		return -EFAULT;
+#endif
 	/* print devices for all busses */
 	idr_for_each_entry(&usb_bus_idr, bus, id) {
 		/* recurse through all children of the root hub */
 		if (!bus_to_hcd(bus)->rh_registered)
 			continue;
+
+#ifndef CONFIG_USB_DEVICE_READ_USE_TRYLOCK
 		usb_lock_device(bus->root_hub);
+#else
+		if (usb_device_read_usb_trylock_device(bus->root_hub)) {
+			mutex_unlock(&usb_bus_idr_lock);
+			return -EFAULT;
+		}
+#endif
 		ret = usb_device_dump(&buf, &nbytes, &skip_bytes, ppos,
 				      bus->root_hub, bus, 0, 0, 0);
 		usb_unlock_device(bus->root_hub);

@@ -215,11 +215,17 @@ int smpboot_create_threads(unsigned int cpu)
 	int ret = 0;
 
 	mutex_lock(&smpboot_threads_lock);
+#ifdef CONFIG_ARCH_HISI
+	set_smpboot_creating_threads(true);
+#endif
 	list_for_each_entry(cur, &hotplug_threads, list) {
 		ret = __smpboot_create_thread(cur, cpu);
 		if (ret)
 			break;
 	}
+#ifdef CONFIG_ARCH_HISI
+	set_smpboot_creating_threads(false);
+#endif
 	mutex_unlock(&smpboot_threads_lock);
 	return ret;
 }

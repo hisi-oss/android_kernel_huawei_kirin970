@@ -107,6 +107,38 @@ config INPUT_BMA150
 	  To compile this driver as a module, choose M here: the
 	  module will be called bma150.
 
+config HISI_POWERKEY_SSI
+	tristate "Hisilicon PMIC SSI ONKEY support"
+	help
+	  Say Y to enable support for PMIC ONKEY.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called hisi_powerkey.
+
+config HISI_POWERKEY_SPMI
+	tristate "Hisilicon PMIC SPMI ONKEY support"
+	depends on HISI_SPMI && HISI_PMIC_PMU_SPMI
+	help
+	  Say Y to enable support for PMIC ONKEY.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called hisi_powerkey.
+
+config HISI_POWERKEY_DEBUG
+	bool "HiSilicon powerkey driver debug"
+	depends on DEBUG_FS
+	default n
+
+config SUPPORT_SIM1_HPD_KEY_RESTART
+	bool "Hisilicon SIM1_HPD support"
+	depends on HISI_POWERKEY_SPMI
+	default n
+	help
+	  Say Y to enable support for SIM1_HPD key.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called hisi_powerkey.
+
 config INPUT_E3X0_BUTTON
 	tristate "NI Ettus Research USRP E3xx Button support."
 	default n
@@ -366,6 +398,17 @@ config INPUT_ATI_REMOTE2
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called ati_remote2.
+
+config INPUT_KEYCHORD
+	tristate "Key chord input driver support"
+	help
+	  Say Y here if you want to enable the key chord driver
+	  accessible at /dev/keychord.  This driver can be used
+	  for receiving notifications when client specified key
+	  combinations are pressed.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called keychord.
 
 config INPUT_KEYSPAN_REMOTE
 	tristate "Keyspan DMR USB remote control"
@@ -850,6 +893,31 @@ config INPUT_DRV2667_HAPTICS
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called drv2667-haptics.
+
+config HISI_VIBRATOR
+	bool "Led classdev vibrator hisi driver"
+	depends on LEDS_TRIGGERS && LEDS_TRIGGER_TRANSIENT
+	default n
+	help
+	  Say Y to enable support for the Hisilicon  vibrator driver.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called hisi vibrator driver.
+
+config HISI_PMIC_VIBRATOR
+	bool "Led classdev pmic_vibrator hisi driver"
+	depends on LEDS_TRIGGERS && LEDS_TRIGGER_TRANSIENT
+	default n
+	help
+	  Say Y to enable support for the Hisilicon PMIC vibrator driver.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called hisi vibrator driver.
+
+config HISI_PMIC_VIBRATOR_DEBUG
+	bool "Led classdev pmic_vibrator driver debug"
+	depends on HISI_PMIC_VIBRATOR
+	default n
 
 config INPUT_HISI_POWERKEY
 	tristate "Hisilicon PMIC ONKEY support"

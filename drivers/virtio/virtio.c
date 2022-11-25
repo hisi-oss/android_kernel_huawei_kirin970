@@ -12,7 +12,7 @@ static ssize_t device_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
 	struct virtio_device *dev = dev_to_virtio(_d);
-	return sprintf(buf, "0x%04x\n", dev->id.device);
+	return sprintf(buf, "0x%04x\n", dev->id.device); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(device);
 
@@ -20,7 +20,7 @@ static ssize_t vendor_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
 	struct virtio_device *dev = dev_to_virtio(_d);
-	return sprintf(buf, "0x%04x\n", dev->id.vendor);
+	return sprintf(buf, "0x%04x\n", dev->id.vendor); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(vendor);
 
@@ -28,7 +28,7 @@ static ssize_t status_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
 {
 	struct virtio_device *dev = dev_to_virtio(_d);
-	return sprintf(buf, "0x%08x\n", dev->config->get_status(dev));
+	return sprintf(buf, "0x%08x\n", dev->config->get_status(dev)); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(status);
 
@@ -37,7 +37,7 @@ static ssize_t modalias_show(struct device *_d,
 {
 	struct virtio_device *dev = dev_to_virtio(_d);
 	return sprintf(buf, "virtio:d%08Xv%08X\n",
-		       dev->id.device, dev->id.vendor);
+		       dev->id.device, dev->id.vendor); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(modalias);
 
@@ -52,8 +52,8 @@ static ssize_t features_show(struct device *_d,
 	 * arbitrary length in future. */
 	for (i = 0; i < sizeof(dev->features)*8; i++)
 		len += sprintf(buf+len, "%c",
-			       __virtio_test_bit(dev, i) ? '1' : '0');
-	len += sprintf(buf+len, "\n");
+			       __virtio_test_bit(dev, i) ? '1' : '0'); /*lint !e421*/
+	len += sprintf(buf+len, "\n"); /*lint !e421*/
 	return len;
 }
 static DEVICE_ATTR_RO(features);
@@ -116,7 +116,7 @@ void virtio_check_driver_offered_feature(const struct virtio_device *vdev,
 				return;
 	}
 
-	BUG();
+	BUG(); /*lint !e146*/
 }
 EXPORT_SYMBOL_GPL(virtio_check_driver_offered_feature);
 
@@ -204,7 +204,7 @@ static int virtio_dev_probe(struct device *_d)
 
 	/* Figure out what features the driver supports. */
 	driver_features = 0;
-	for (i = 0; i < drv->feature_table_size; i++) {
+	for (i = 0; i < drv->feature_table_size; i++) { /*lint !e574*/
 		unsigned int f = drv->feature_table[i];
 		BUG_ON(f >= 64);
 		driver_features |= (1ULL << f);
@@ -213,7 +213,7 @@ static int virtio_dev_probe(struct device *_d)
 	/* Some drivers have a separate feature table for virtio v1.0 */
 	if (drv->feature_table_legacy) {
 		driver_features_legacy = 0;
-		for (i = 0; i < drv->feature_table_size_legacy; i++) {
+		for (i = 0; i < drv->feature_table_size_legacy; i++) {  /*lint !e574*/
 			unsigned int f = drv->feature_table_legacy[i];
 			BUG_ON(f >= 64);
 			driver_features_legacy |= (1ULL << f);
@@ -270,7 +270,6 @@ static int virtio_dev_remove(struct device *_d)
 	virtio_config_disable(dev);
 
 	drv->remove(dev);
-
 	/* Driver should have reset device. */
 	WARN_ON_ONCE(dev->config->get_status(dev));
 

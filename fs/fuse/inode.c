@@ -22,6 +22,7 @@
 #include <linux/exportfs.h>
 #include <linux/posix_acl.h>
 #include <linux/pid_namespace.h>
+#include <securec.h>
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Filesystem in Userspace");
@@ -624,6 +625,10 @@ void fuse_conn_init(struct fuse_conn *fc)
 	fc->attr_version = 1;
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 	fc->pid_ns = get_pid_ns(task_active_pid_ns(current));
+
+	spin_lock_init(&fc->passthrough_files_lock);
+	INIT_LIST_HEAD(&fc->passthrough_files);
+	fc->pass_through = false;
 }
 EXPORT_SYMBOL_GPL(fuse_conn_init);
 
@@ -921,14 +926,24 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->posix_acl = 1;
 				fc->sb->s_xattr = fuse_acl_xattr_handlers;
 			}
+			if (arg->flags & FUSE_MAX_PAGES) {
+				fc->max_pages =
+					min_t(unsigned int, FUSE_MAX_MAX_PAGES,
+					max_t(unsigned int, arg->max_pages, 1));
+			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
 			fc->no_flock = 1;
 		}
 
-		fc->sb->s_bdi->ra_pages =
-				min(fc->sb->s_bdi->ra_pages, ra_pages);
+		/* It indicats the userspace filesystem set the ra_pages */
+		if ((fc->sb->s_bdi->ra_pages != ra_pages) &&
+		    (ra_pages != UINT_MAX / PAGE_SIZE) &&
+		    (ra_pages >= (VM_MIN_READAHEAD * 1024) / PAGE_SIZE) &&
+		    (ra_pages <= 256))
+			fc->sb->s_bdi->ra_pages = ra_pages;
+
 		fc->minor = arg->minor;
 		fc->max_write = arg->minor < 5 ? 4096 : arg->max_write;
 		fc->max_write = max_t(unsigned, 4096, fc->max_write);
@@ -951,7 +966,8 @@ static void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 		FUSE_FLOCK_LOCKS | FUSE_HAS_IOCTL_DIR | FUSE_AUTO_INVAL_DATA |
 		FUSE_DO_READDIRPLUS | FUSE_READDIRPLUS_AUTO | FUSE_ASYNC_DIO |
 		FUSE_WRITEBACK_CACHE | FUSE_NO_OPEN_SUPPORT |
-		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL;
+		FUSE_PARALLEL_DIROPS | FUSE_HANDLE_KILLPRIV | FUSE_POSIX_ACL |
+		FUSE_MAX_PAGES;
 	req->in.h.opcode = FUSE_INIT;
 	req->in.numargs = 1;
 	req->in.args[0].size = sizeof(*arg);
@@ -993,6 +1009,7 @@ static int fuse_bdi_init(struct fuse_conn *fc, struct super_block *sb)
 		return err;
 
 	sb->s_bdi->ra_pages = (VM_MAX_READAHEAD * 1024) / PAGE_SIZE;
+
 	/* fuse does it's own writeback accounting */
 	sb->s_bdi->capabilities = BDI_CAP_NO_ACCT_WB | BDI_CAP_STRICTLIMIT;
 
@@ -1121,6 +1138,7 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	fc->user_id = d.user_id;
 	fc->group_id = d.group_id;
 	fc->max_read = max_t(unsigned, 4096, d.max_read);
+	fc->max_pages = FUSE_DEFAULT_MAX_PAGES_PER_REQ;
 
 	/* Used by get_root_inode() */
 	sb->s_fs_info = fc;
@@ -1190,7 +1208,15 @@ static struct dentry *fuse_mount(struct file_system_type *fs_type,
 		       int flags, const char *dev_name,
 		       void *raw_data)
 {
-	return mount_nodev(fs_type, flags, raw_data, fuse_fill_super);
+	struct dentry *root = mount_nodev(fs_type, flags,
+		raw_data, fuse_fill_super);
+
+	if (!IS_ERR(root)) {
+		struct fuse_conn *fc = root->d_sb->s_fs_info;
+		fc->pass_through = fuse_pass_through_enabled(dev_name);
+	}
+
+	return root;
 }
 
 static void fuse_sb_destroy(struct super_block *sb)
@@ -1317,34 +1343,127 @@ static void fuse_fs_cleanup(void)
 	kmem_cache_destroy(fuse_inode_cachep);
 }
 
-static struct kobject *fuse_kobj;
+static char fuse_pass_through_filter[64] = {0};
+
+/*
+ * This function will be invoked when you mount the fuse file system.
+ * The *name* means the dev_name.
+ * For example, you may mount 2 fuse systems,
+ * mdfs1 and mdfs2, but you only want to enable the pass_through mode on
+ * mdfs1, before mounting you have to set the
+ * /sys/fs/fuse/pass_through_filter like this:
+ * echo "mdfs1:-mdfs2" > /sys/fs/fuse/pass_through_filter
+ * "-" means to disable the mode.
+ */
+bool fuse_pass_through_enabled(const char *name)
+{
+	const char *s = fuse_pass_through_filter;
+	size_t len;
+	size_t i;
+	bool enable = false;
+	const char *check = NULL;
+
+	if (!name)
+		return false;
+
+	len = strlen(name);
+	if (len == 0)
+		return false;
+
+	/* name1:-name2:name3 */
+	for (i = 0; s[i] != '\0'; i++) {
+		if (i > 0 && s[i - 1] != ':')
+			continue;
+
+		enable = s[i] != '-';
+		check = enable ? (s + i) : (s + i + 1);
+		if (strncmp(check, name, len) != 0)
+			continue;
+
+		if (check[len] == '\0' || check[len] == ':')
+			return enable;
+	}
+	return false;
+}
+
+static ssize_t pass_through_filter_store(struct kobject *kobj,
+	struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	const char *filter = strim((char *)buf);
+	size_t len = strlen(buf);
+	int ret = 0;
+
+	if (len >= sizeof(fuse_pass_through_filter))
+		return -EINVAL;
+
+	ret = strncpy_s(fuse_pass_through_filter,
+		sizeof(fuse_pass_through_filter), filter, len);
+	if (ret)
+		return -EINVAL;
+
+	fuse_pass_through_filter[len] = '\0';
+
+	return count;
+}
+
+static ssize_t pass_through_filter_show(struct kobject *kobj,
+			    struct kobj_attribute *attr, char *buf)
+{
+	ssize_t buf_size = PAGE_SIZE - 1;
+	ssize_t ret = snprintf_s(buf, buf_size,
+		buf_size, "%s\n", fuse_pass_through_filter);
+	struct fuse_conn *fc = NULL;
+
+	mutex_lock(&fuse_mutex);
+	list_for_each_entry(fc, &fuse_conn_list, entry) {
+		if (ret < buf_size)
+			ret += snprintf_s(buf + ret, buf_size - ret,
+					buf_size - ret, "%s: %d\n",
+					fc->sb->s_id, fc->pass_through);
+	}
+	mutex_unlock(&fuse_mutex);
+	return ret;
+}
+
+static struct kobj_attribute pass_through_filter_attr =
+	__ATTR_RW(pass_through_filter);
+
+static struct attribute *fuse_attrs[] = {
+	&pass_through_filter_attr.attr,
+	NULL,
+};
+
+static struct kobj_type fuse_ktype = {
+	.default_attrs	= fuse_attrs,
+	.sysfs_ops	= &kobj_sysfs_ops,
+};
+
+static struct kobject fuse_kobj;
 
 static int fuse_sysfs_init(void)
 {
 	int err;
 
-	fuse_kobj = kobject_create_and_add("fuse", fs_kobj);
-	if (!fuse_kobj) {
-		err = -ENOMEM;
+	err = kobject_init_and_add(&fuse_kobj, &fuse_ktype, fs_kobj, "fuse");
+	if (err)
 		goto out_err;
-	}
 
-	err = sysfs_create_mount_point(fuse_kobj, "connections");
+	err = sysfs_create_mount_point(&fuse_kobj, "connections");
 	if (err)
 		goto out_fuse_unregister;
 
 	return 0;
 
  out_fuse_unregister:
-	kobject_put(fuse_kobj);
+	kobject_put(&fuse_kobj);
  out_err:
 	return err;
 }
 
 static void fuse_sysfs_cleanup(void)
 {
-	sysfs_remove_mount_point(fuse_kobj, "connections");
-	kobject_put(fuse_kobj);
+	sysfs_remove_mount_point(&fuse_kobj, "connections");
+	kobject_put(&fuse_kobj);
 }
 
 static int __init fuse_init(void)

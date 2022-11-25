@@ -348,6 +348,9 @@ static ssize_t dual_role_store_property(struct device *dev,
 	bool result = false;
 
 	dup_buf = kstrdupcase(buf, GFP_KERNEL, false);
+	if (!dup_buf)
+		return -ENOMEM;
+
 	switch (off) {
 	case DUAL_ROLE_PROP_MODE:
 		total = DUAL_ROLE_PROP_MODE_TOTAL;

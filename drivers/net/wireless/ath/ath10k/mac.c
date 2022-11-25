@@ -3074,13 +3074,6 @@ static int ath10k_update_channel_list(struct ath10k *ar)
 			passive = channel->flags & IEEE80211_CHAN_NO_IR;
 			ch->passive = passive;
 
-			/* the firmware is ignoring the "radar" flag of the
-			 * channel and is scanning actively using Probe Requests
-			 * on "Radar detection"/DFS channels which are not
-			 * marked as "available"
-			 */
-			ch->passive |= ch->chan_radar;
-
 			ch->freq = channel->center_freq;
 			ch->band_center_freq1 = channel->center_freq;
 			ch->min_power = 0;
@@ -4015,7 +4008,6 @@ void ath10k_mac_tx_push_pending(struct ath10k *ar)
 	rcu_read_unlock();
 	spin_unlock_bh(&ar->txqs_lock);
 }
-EXPORT_SYMBOL(ath10k_mac_tx_push_pending);
 
 /************/
 /* Scanning */

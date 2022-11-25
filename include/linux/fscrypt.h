@@ -21,26 +21,14 @@
 struct fscrypt_ctx;
 struct fscrypt_info;
 
-struct fscrypt_str {
-	unsigned char *name;
-	u32 len;
-};
-
-struct fscrypt_name {
-	const struct qstr *usr_fname;
-	struct fscrypt_str disk_name;
-	u32 hash;
-	u32 minor_hash;
-	struct fscrypt_str crypto_buf;
-};
-
 #define FSTR_INIT(n, l)		{ .name = n, .len = l }
 #define FSTR_TO_QSTR(f)		QSTR_INIT((f)->name, (f)->len)
 #define fname_name(p)		((p)->disk_name.name)
 #define fname_len(p)		((p)->disk_name.len)
 
 /* Maximum value for the third parameter of fscrypt_operations.set_context(). */
-#define FSCRYPT_SET_CONTEXT_MAX_SIZE	28
+#define FSCRYPT_SET_CONTEXT_MAX_SIZE	108
+#define F2FS_XATTR_SDP_SECE_ENABLE_FLAG	(0x04)
 
 #if __FS_HAS_ENCRYPTION
 #include <linux/fscrypt_supp.h>
@@ -182,8 +170,16 @@ static inline int fscrypt_prepare_lookup(struct inode *dir,
 static inline int fscrypt_prepare_setattr(struct dentry *dentry,
 					  struct iattr *attr)
 {
-	if (attr->ia_valid & ATTR_SIZE)
+	if (attr->ia_valid & ATTR_SIZE) {
+		struct inode *inode = d_inode(dentry);
+		if (IS_ENCRYPTED(inode)) {
+			if (inode->i_crypt_info &&
+				(inode->i_crypt_info->ci_hw_enc_flag & F2FS_XATTR_SDP_SECE_ENABLE_FLAG)) {
+				return 0; // the sece file will success when i_crypt_info is exist for ftruncate
+			}
+		}
 		return fscrypt_require_key(d_inode(dentry));
+	}
 	return 0;
 }
 

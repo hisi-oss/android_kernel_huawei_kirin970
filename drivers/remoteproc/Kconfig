@@ -12,6 +12,11 @@ config REMOTEPROC
 
 if REMOTEPROC
 
+config HISP_REMOTEPROC
+	tristate "Histar remoteproc support"
+	depends on ARCH_HISI
+	select RPMSG_VIRTIO
+
 config IMX_REMOTEPROC
 	tristate "IMX6/7 remoteproc support"
 	depends on SOC_IMX6SX || SOC_IMX7D

@@ -13,7 +13,7 @@
  *	minor cleanups.
  *	September 30, 2002 Mike Anderson (andmike@us.ibm.com)
  */
-
+#include <uapi/linux/sched/types.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/gfp.h>
@@ -67,7 +67,7 @@ void scsi_eh_wakeup(struct Scsi_Host *shost)
 	if (atomic_read(&shost->host_busy) == shost->host_failed) {
 		trace_scsi_eh_wakeup(shost);
 		wake_up_process(shost->ehandler);
-		SCSI_LOG_ERROR_RECOVERY(5, shost_printk(KERN_INFO, shost,
+		SCSI_LOG_ERROR_RECOVERY(3, shost_printk(KERN_INFO, shost,
 			"Waking error handler thread\n"));
 	}
 }
@@ -288,7 +288,8 @@ enum blk_eh_timer_return scsi_times_out(struct request *req)
 		rtn = host->hostt->eh_timed_out(scmd);
 
 	if (rtn == BLK_EH_NOT_HANDLED) {
-		if (scsi_abort_command(scmd) != SUCCESS) {
+		if (blk_queue_query_unistore_enable(req->q) ||
+			(scsi_abort_command(scmd) != SUCCESS)) {
 			set_host_byte(scmd, DID_TIME_OUT);
 			scsi_eh_scmd_add(scmd);
 		}
@@ -441,6 +442,22 @@ static void scsi_report_sense(struct scsi_device *sdev,
 	}
 }
 
+/*enable samsung UFS ffu link lost recovery solution on kirin*/
+#define FEATURE_SAMSUNG_FFU_LINK_LOST_RECOVERY
+
+/* define sense data value of samsung UFS link lost status after ffu */
+#ifdef FEATURE_SAMSUNG_FFU_LINK_LOST_RECOVERY
+
+#define UFS_VENDOR_STRING_SAMSUNG "SAMSUNG"
+#define SAMSUNG_FFU_LINK_LOST_ASC_VALUE     0x80
+#define SAMSUNG_FFU_LINK_LOST_ASCQ_VALUE    0x09
+
+#ifndef UFSHCD
+#define UFSHCD "ufshcd"
+#endif
+
+#endif
+
 /**
  * scsi_check_sense - Examine scsi cmd sense
  * @scmd:	Cmd to have sense checked.
@@ -585,9 +602,17 @@ int scsi_check_sense(struct scsi_cmnd *scmd)
 		return NEEDS_RETRY;
 
 	case HARDWARE_ERROR:
-		if (scmd->device->retry_hwerror)
+		if (sshdr.asc == 0x1 &&
+			sshdr.ascq == 0x0) {/*for hi1861 internel error*/
+			pr_err("%s: hi1861 hwerror\n", __func__);
+			return FAILED;
+		}
+		if (scmd->device->retry_hwerror) {
 			return ADD_TO_MLQUEUE;
-		else
+		} else if(scmd->device->reset_hwerror) {
+			pr_err("%s: reset hwerror\n", __func__);
+			return FAILED;
+		} else
 			set_host_byte(scmd, DID_TARGET_FAILURE);
 		/* FALLTHROUGH */
 
@@ -599,6 +624,23 @@ int scsi_check_sense(struct scsi_cmnd *scmd)
 		    sshdr.asc == 0x27) { /* Write protected */
 			set_host_byte(scmd, DID_TARGET_FAILURE);
 		}
+
+#ifdef FEATURE_SAMSUNG_FFU_LINK_LOST_RECOVERY
+		if( (sdev->type == TYPE_DISK)
+			&& (sshdr.asc == SAMSUNG_FFU_LINK_LOST_ASC_VALUE)
+			&& (sshdr.ascq == SAMSUNG_FFU_LINK_LOST_ASCQ_VALUE)
+			&& (NULL != sdev->vendor)
+			&& !strncmp(sdev->vendor,UFS_VENDOR_STRING_SAMSUNG,strlen(UFS_VENDOR_STRING_SAMSUNG))
+			&& (NULL != sdev->host)
+			&& (NULL != sdev->host->hostt)
+			&& (NULL != sdev->host->hostt->name)
+			&& !strncmp(sdev->host->hostt->name,UFSHCD,strlen(UFSHCD)) )
+		{
+			SCSI_LOG_ERROR_RECOVERY(3,sdev_printk(KERN_INFO, sdev,"%s: UFS FFU LINK LOST SAMSUNG return FAILED and scsi retry.\n",current->comm));
+			return FAILED;
+		}
+#endif
+
 		return SUCCESS;
 
 	default:
@@ -935,6 +977,7 @@ void scsi_eh_prep_cmnd(struct scsi_cmnd *scmd, struct scsi_eh_save *ses,
 	ses->sdb = scmd->sdb;
 	ses->next_rq = scmd->request->next_rq;
 	ses->result = scmd->result;
+	ses->resid_len = scmd->req.resid_len;
 	ses->underflow = scmd->underflow;
 	ses->prot_op = scmd->prot_op;
 	ses->eh_eflags = scmd->eh_eflags;
@@ -946,6 +989,7 @@ void scsi_eh_prep_cmnd(struct scsi_cmnd *scmd, struct scsi_eh_save *ses,
 	memset(&scmd->sdb, 0, sizeof(scmd->sdb));
 	scmd->request->next_rq = NULL;
 	scmd->result = 0;
+	scmd->req.resid_len = 0;
 
 	if (sense_bytes) {
 		scmd->sdb.length = min_t(unsigned, SCSI_SENSE_BUFFERSIZE,
@@ -999,6 +1043,7 @@ void scsi_eh_restore_cmnd(struct scsi_cmnd* scmd, struct scsi_eh_save *ses)
 	scmd->sdb = ses->sdb;
 	scmd->request->next_rq = ses->next_rq;
 	scmd->result = ses->result;
+	scmd->req.resid_len = ses->resid_len;
 	scmd->underflow = ses->underflow;
 	scmd->prot_op = ses->prot_op;
 	scmd->eh_eflags = ses->eh_eflags;
@@ -1034,6 +1079,7 @@ retry:
 	scsi_eh_prep_cmnd(scmd, &ses, cmnd, cmnd_size, sense_bytes);
 	shost->eh_action = &done;
 
+	scsi_print_command(scmd);
 	scsi_log_send(scmd);
 	scmd->scsi_done = scsi_eh_done;
 	rtn = shost->hostt->queuecommand(shost, scmd);
@@ -1056,7 +1102,7 @@ retry:
 
 	scsi_log_completion(scmd, rtn);
 
-	SCSI_LOG_ERROR_RECOVERY(3, scmd_printk(KERN_INFO, scmd,
+	SCSI_LOG_ERROR_RECOVERY(2, scmd_printk(KERN_INFO, scmd,
 			"%s timeleft: %ld\n",
 			__func__, timeleft));
 
@@ -1171,7 +1217,12 @@ int scsi_eh_get_sense(struct list_head *work_q,
 	 */
 	list_for_each_entry_safe(scmd, next, work_q, eh_entry) {
 		if ((scmd->eh_eflags & SCSI_EH_ABORT_SCHEDULED) ||
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+		    SCSI_SENSE_VALID(scmd) || (scsi_is_order_cmd(scmd) &&
+		    		scsi_order_enable(scmd)))
+#else
 		    SCSI_SENSE_VALID(scmd))
+#endif
 			continue;
 
 		shost = scmd->device->host;
@@ -1297,6 +1348,10 @@ static int scsi_eh_test_devices(struct list_head *cmd_list,
 			 !scsi_eh_tur(scmd)) ||
 			!scsi_eh_tur(scmd);
 
+		SCSI_LOG_ERROR_RECOVERY(3,
+			sdev_printk(KERN_INFO, sdev, "%s: , finish_cmds: %d\n",
+				current->comm, finish_cmds));
+
 		list_for_each_entry_safe(scmd, next, cmd_list, eh_entry)
 			if (scmd->device == sdev) {
 				if (finish_cmds &&
@@ -1331,6 +1386,8 @@ static int scsi_eh_try_stu(struct scsi_cmnd *scmd)
 			return 0;
 	}
 
+	SCSI_LOG_ERROR_RECOVERY(3,
+		scmd_printk(KERN_INFO, scmd, "%s return: 1\n", current->comm));
 	return 1;
 }
 
@@ -1360,12 +1417,17 @@ static int scsi_eh_stu(struct Scsi_Host *shost,
 			break;
 		}
 		stu_scmd = NULL;
-		list_for_each_entry(scmd, work_q, eh_entry)
+		list_for_each_entry(scmd, work_q, eh_entry) {
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+			if (scsi_is_order_cmd(scmd) && scsi_order_enable(scmd))
+				continue;
+#endif
 			if (scmd->device == sdev && SCSI_SENSE_VALID(scmd) &&
 			    scsi_check_sense(scmd) == FAILED ) {
 				stu_scmd = scmd;
 				break;
 			}
+		}
 
 		if (!stu_scmd)
 			continue;
@@ -1426,11 +1488,17 @@ static int scsi_eh_bus_device_reset(struct Scsi_Host *shost,
 			break;
 		}
 		bdr_scmd = NULL;
-		list_for_each_entry(scmd, work_q, eh_entry)
+		list_for_each_entry(scmd, work_q, eh_entry) {
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+			if (scsi_is_order_cmd(scmd) &&
+					scsi_order_enable(scmd))
+				continue;
+#endif
 			if (scmd->device == sdev) {
 				bdr_scmd = scmd;
 				break;
 			}
+		}
 
 		if (!bdr_scmd)
 			continue;
@@ -1509,6 +1577,10 @@ static int scsi_eh_target_reset(struct Scsi_Host *shost,
 					     "%s: Target reset failed"
 					     " target: %d\n",
 					     current->comm, id));
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+		if (scsi_is_order_cmd(scmd) && scsi_order_enable(scmd))
+			rtn = FAILED;
+#endif
 		list_for_each_entry_safe(scmd, next, &tmp_list, eh_entry) {
 			if (scmd_id(scmd) != id)
 				continue;
@@ -1577,6 +1649,10 @@ static int scsi_eh_bus_reset(struct Scsi_Host *shost,
 				     "%s: Sending BRST chan: %d\n",
 				     current->comm, channel));
 		rtn = scsi_try_bus_reset(chan_scmd);
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+		if (scsi_is_order_cmd(scmd) && scsi_order_enable(scmd))
+			rtn = FAILED;
+#endif
 		if (rtn == SUCCESS || rtn == FAST_IO_FAIL) {
 			list_for_each_entry_safe(scmd, next, work_q, eh_entry) {
 				if (channel == scmd_channel(scmd)) {
@@ -2061,7 +2137,13 @@ void scsi_eh_flush_done_q(struct list_head *done_q)
 				scmd_printk(KERN_INFO, scmd,
 					     "%s: flush finish cmd\n",
 					     current->comm));
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+			scmd->eh_eflags |= SCSI_EH_IN_FLUSH_DONE_Q;
 			scsi_finish_command(scmd);
+			scmd->eh_eflags &= (~SCSI_EH_IN_FLUSH_DONE_Q);
+#else
+			scsi_finish_command(scmd);
+#endif
 		}
 	}
 }
@@ -2112,6 +2194,24 @@ static void scsi_unjam_host(struct Scsi_Host *shost)
 	scsi_eh_flush_done_q(&eh_done_q);
 }
 
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+static int scsi_eh_send_request_sense(struct scsi_device *sdev)
+{
+	int ret;
+	struct Scsi_Host *shost = sdev->host;
+	unsigned int timeout_ms = 1500;
+
+	if (!shost->hostt->send_request_sense_directly)
+		return FAILED;
+
+	ret = shost->hostt->send_request_sense_directly(sdev, timeout_ms, false);
+	if (ret)
+		pr_err("%s, queuecommand fail, ret=%d \n", __func__, ret);
+
+	return ret;
+}
+#endif
+
 /**
  * scsi_error_handler - SCSI error handler thread
  * @data:	Host for which we are running.
@@ -2123,6 +2223,12 @@ static void scsi_unjam_host(struct Scsi_Host *shost)
 int scsi_error_handler(void *data)
 {
 	struct Scsi_Host *shost = data;
+	struct sched_param param = {.sched_priority = 1};
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+	struct scsi_device *sdev = NULL;
+#endif
+
+	sched_setscheduler(current, SCHED_FIFO, &param);
 
 	/*
 	 * We use TASK_INTERRUPTIBLE so that the thread is not
@@ -2179,7 +2285,11 @@ int scsi_error_handler(void *data)
 
 		/* All scmds have been handled */
 		shost->host_failed = 0;
-
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+		shost_for_each_device(sdev, shost) {
+			scsi_eh_send_request_sense(sdev);
+		}
+#endif
 		/*
 		 * Note - if the above fails completely, the action is to take
 		 * individual devices offline and flush the queue of any
@@ -2286,8 +2396,10 @@ scsi_ioctl_reset(struct scsi_device *dev, int __user *arg)
 	unsigned long flags;
 	int error = 0, rtn, val;
 
+#ifndef BYPASS_AUTHORITY_VERIFY
 	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SYS_RAWIO))
 		return -EACCES;
+#endif
 
 	error = get_user(val, arg);
 	if (error)

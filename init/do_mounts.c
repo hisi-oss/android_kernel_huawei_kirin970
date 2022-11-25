@@ -44,6 +44,7 @@ static int root_wait;
 
 dev_t ROOT_DEV;
 
+
 static int __init load_ramdisk(char *str)
 {
 	rd_doload = simple_strtol(str,NULL,0) & 3;
@@ -548,13 +549,13 @@ void __init mount_root(void)
 void __init prepare_namespace(void)
 {
 	int is_floppy;
-
+#ifndef CONFIG_HYBRID_FEATURE
 	if (root_delay) {
 		printk(KERN_INFO "Waiting %d sec before mounting root device...\n",
 		       root_delay);
 		ssleep(root_delay);
 	}
-
+#endif
 	/*
 	 * wait for the known devices to complete their probing
 	 *
@@ -565,6 +566,7 @@ void __init prepare_namespace(void)
 	wait_for_device_probe();
 
 	md_run_setup();
+	dm_run_setup();
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;

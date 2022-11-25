@@ -45,11 +45,21 @@ extern void touch_softlockup_watchdog(void);
 extern void touch_softlockup_watchdog_sync(void);
 extern void touch_all_softlockup_watchdogs(void);
 extern unsigned int  softlockup_panic;
+#ifdef CONFIG_CPU_ISOLATION_OPT
+extern void watchdog_enable(unsigned int cpu);
+extern void watchdog_disable(unsigned int cpu);
+extern bool watchdog_configured(unsigned int cpu);
+#endif
 #else
 static inline void touch_softlockup_watchdog_sched(void) { }
 static inline void touch_softlockup_watchdog(void) { }
 static inline void touch_softlockup_watchdog_sync(void) { }
 static inline void touch_all_softlockup_watchdogs(void) { }
+#ifdef CONFIG_CPU_ISOLATION_OPT
+static inline void watchdog_enable(unsigned int cpu) { }
+static inline void watchdog_disable(unsigned int cpu) { }
+static inline bool watchdog_configured(unsigned int cpu) { return true; }
+#endif
 #endif
 
 #ifdef CONFIG_DETECT_HUNG_TASK

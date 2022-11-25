@@ -14,6 +14,14 @@
 
 asmlinkage void __aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_encrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_encrypt ___aes_arm64_encrypt
+#endif
+
 static inline int aes_ctr_encrypt_fallback(struct crypto_aes_ctx *ctx,
 					   struct skcipher_request *req)
 {

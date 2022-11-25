@@ -609,7 +609,9 @@ static inline struct sk_buff *tap_alloc_skb(struct sock *sk, size_t prepad,
 				   err, 0);
 	if (!skb)
 		return NULL;
-
+#ifdef CONFIG_HISI_PAGE_TRACE
+	alloc_skb_with_frags_stats_inc(TAP_ALLOC_SKB_COUNT);
+#endif
 	skb_reserve(skb, prepad);
 	skb_put(skb, linear);
 	skb->data_len = len - linear;

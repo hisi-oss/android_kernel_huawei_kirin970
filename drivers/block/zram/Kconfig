@@ -39,3 +39,19 @@ config ZRAM_MEMORY_TRACKING
 	  /sys/kernel/debug/zram/zramX/block_state.
 
 	  See Documentation/blockdev/zram.txt for more information.
+
+config ZRAM_DEDUP
+	bool "Memory deduplication"
+	depends on ZRAM
+	help
+	  With this feature, zram could deduplicate the objects with the same
+	  context. Admin could see the information via
+	  /sys/block/zramX/mm_stat.
+config ZRAM_NON_COMPRESS
+	bool "zram non compress"
+	depends on ZRAM
+	help
+	  With this feature, zram will not compress page that with NonCompress
+	  flag.
+
+source "drivers/block/zram/hp/Kconfig"

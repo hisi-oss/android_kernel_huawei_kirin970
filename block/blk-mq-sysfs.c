@@ -143,22 +143,35 @@ static ssize_t blk_mq_hw_sysfs_nr_reserved_tags_show(struct blk_mq_hw_ctx *hctx,
 	return sprintf(page, "%u\n", hctx->tags->nr_reserved_tags);
 }
 
+#ifdef CONFIG_MAS_BLK
+static ssize_t blk_mq_hw_sysfs_nr_high_prio_tags_show(struct blk_mq_hw_ctx *hctx,
+						     char *page)
+{
+	return sprintf(page, "%u\n", hctx->tags->nr_high_prio_tags);
+}
+#endif
+
 static ssize_t blk_mq_hw_sysfs_cpus_show(struct blk_mq_hw_ctx *hctx, char *page)
 {
+	const size_t size = PAGE_SIZE - 1;
 	unsigned int i, first = 1;
-	ssize_t ret = 0;
+	int ret = 0, pos = 0;
 
 	for_each_cpu(i, hctx->cpumask) {
 		if (first)
-			ret += sprintf(ret + page, "%u", i);
+			ret = snprintf(pos + page, size - pos, "%u", i);
 		else
-			ret += sprintf(ret + page, ", %u", i);
+			ret = snprintf(pos + page, size - pos, ", %u", i);
+
+		if (ret >= size - pos)
+			break;
 
 		first = 0;
+		pos += ret;
 	}
 
-	ret += sprintf(ret + page, "\n");
-	return ret;
+	ret = snprintf(pos + page, size + 1 - pos, "\n");
+	return pos + ret;
 }
 
 static struct attribute *default_ctx_attrs[] = {
@@ -173,6 +186,13 @@ static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_nr_reserved_tags = {
 	.attr = {.name = "nr_reserved_tags", .mode = S_IRUGO },
 	.show = blk_mq_hw_sysfs_nr_reserved_tags_show,
 };
+#ifdef CONFIG_MAS_BLK
+static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_nr_high_prio_tags = {
+	.attr = {.name = "nr_high_prio_tags", .mode = S_IRUGO },
+	.show = blk_mq_hw_sysfs_nr_high_prio_tags_show,
+};
+
+#endif
 static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_cpus = {
 	.attr = {.name = "cpu_list", .mode = S_IRUGO },
 	.show = blk_mq_hw_sysfs_cpus_show,
@@ -181,6 +201,9 @@ static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_cpus = {
 static struct attribute *default_hw_ctx_attrs[] = {
 	&blk_mq_hw_sysfs_nr_tags.attr,
 	&blk_mq_hw_sysfs_nr_reserved_tags.attr,
+#ifdef CONFIG_MAS_BLK
+	&blk_mq_hw_sysfs_nr_high_prio_tags.attr,
+#endif
 	&blk_mq_hw_sysfs_cpus.attr,
 	NULL,
 };

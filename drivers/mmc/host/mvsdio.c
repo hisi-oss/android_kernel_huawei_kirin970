@@ -642,7 +642,7 @@ static void mvsd_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	 * and revisit this issue if problems for not enabling this bit
 	 * are ever reported.
 	 */
-#if 0
+#ifndef CONFIG_ZODIAC_MMC
 	if (ios->timing == MMC_TIMING_MMC_HS ||
 	    ios->timing == MMC_TIMING_SD_HS)
 		ctrl_reg |= MVSD_HOST_CTRL_HI_SPEED_EN;

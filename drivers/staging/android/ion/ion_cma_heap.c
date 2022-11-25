@@ -22,15 +22,12 @@
 #include <linux/cma.h>
 #include <linux/scatterlist.h>
 #include <linux/highmem.h>
+#include <linux/hisi/hisi_ion.h>
 
 #include "ion.h"
+#include "ion_mm_cma_heap.h"
 
-struct ion_cma_heap {
-	struct ion_heap heap;
-	struct cma *cma;
-};
-
-#define to_cma_heap(x) container_of(x, struct ion_cma_heap, heap)
+static bool install;
 
 /* ION CMA heap operations functions */
 static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
@@ -48,7 +45,12 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 	if (align > CONFIG_CMA_ALIGNMENT)
 		align = CONFIG_CMA_ALIGNMENT;
 
-	pages = cma_alloc(cma_heap->cma, nr_pages, align, GFP_KERNEL);
+#ifdef CONFIG_ION_HISI_CMA_HEAP
+	if (heap->id == ION_DMA_HEAP_ID)
+		align = 0;
+#endif
+
+	pages = cma_alloc(cma_heap->cma, nr_pages, align, false);
 	if (!pages)
 		return -ENOMEM;
 
@@ -60,7 +62,7 @@ static int ion_cma_allocate(struct ion_heap *heap, struct ion_buffer *buffer,
 			void *vaddr = kmap_atomic(page);
 
 			memset(vaddr, 0, PAGE_SIZE);
-			kunmap_atomic(vaddr);
+			kunmap_atomic(vaddr);/*lint !e514*/
 			page++;
 			nr_clear_pages--;
 		}
@@ -110,6 +112,13 @@ static struct ion_heap_ops ion_cma_ops = {
 	.unmap_kernel = ion_heap_unmap_kernel,
 };
 
+#ifdef CONFIG_ION_HISI_CMA_HEAP
+void ion_mm_cma_heap_ops(struct ion_cma_heap *cma_heap)
+{
+	cma_heap->heap.ops = &ion_cma_ops;
+}
+#endif
+
 static struct ion_heap *__ion_cma_heap_create(struct cma *cma)
 {
 	struct ion_cma_heap *cma_heap;
@@ -140,11 +149,29 @@ static int __ion_add_cma_heaps(struct cma *cma, void *data)
 	heap->name = cma_get_name(cma);
 
 	ion_device_add_heap(heap);
+	heap->id = ION_DMA_HEAP_ID;
 	return 0;
 }
 
+static int __init ion_cm_heap_cfg(char *param)
+{
+	pr_err("%s: param is =%s\n", __func__, param);
+	if (strcmp(param, "y") == 0)
+		install = true;
+	else
+		install = false;
+	return 0;
+}
+
+early_param("cmaheap", ion_cm_heap_cfg);
+
 static int ion_add_cma_heaps(void)
 {
+	if (!install) {
+		pr_err("%s: skip ion cma heap create.\n", __func__);
+		return 0;
+	}
+
 	cma_for_each_area(__ion_add_cma_heaps, NULL);
 	return 0;
 }

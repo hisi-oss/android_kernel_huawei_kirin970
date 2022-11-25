@@ -27,6 +27,9 @@
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/sysctl.h>
+#ifdef CONFIG_HW_FUTEX_PI
+#include <chipset_common/linux/hw_pi.h>
+#endif
 
 #ifdef CONFIG_HAVE_ARCH_SECCOMP_FILTER
 #include <asm/syscall.h>
@@ -667,7 +670,10 @@ static int __seccomp_filter(int this_syscall, const struct seccomp_data *sd,
 	 * been seen after TIF_SECCOMP was seen.
 	 */
 	rmb();
-
+#ifdef CONFIG_HW_FUTEX_PI
+	if (can_skip_filter(this_syscall))
+		return 0;
+#endif
 	filter_ret = seccomp_run_filters(sd, &match);
 	data = filter_ret & SECCOMP_RET_DATA;
 	action = filter_ret & SECCOMP_RET_ACTION_FULL;

@@ -27,6 +27,10 @@
 #endif
 
 #include <linux/uaccess.h>
+#ifdef CONFIG_HISI_BLK_DEV_RAM_EMU
+#include <linux/of.h>
+#include <linux/of_reserved_mem.h>
+#endif
 
 #define SECTOR_SHIFT		9
 #define PAGE_SECTORS_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
@@ -55,6 +59,10 @@ struct brd_device {
 	 */
 	spinlock_t		brd_lock;
 	struct radix_tree_root	brd_pages;
+#ifdef CONFIG_HISI_BLK_DEV_RAM_EMU
+	char *brd_rambase;
+	bool is_emulator;
+#endif
 };
 
 /*
@@ -262,6 +270,31 @@ static void copy_from_brd(void *dst, struct brd_device *brd,
 	}
 }
 
+
+#ifdef CONFIG_HISI_BLK_DEV_RAM_EMU
+static int brd_emu_do_bvec(struct brd_device *brd, struct page *page,
+			   unsigned int len, unsigned int off, bool is_write,
+			   sector_t sector)
+{
+	void *mem = NULL;
+	char *sector_addr = NULL;
+
+	sector_addr = (sector << SECTOR_SHIFT) + brd->brd_rambase;
+	mem = kmap_atomic(page);
+
+	if (is_write == READ) {
+		memcpy(mem + off, sector_addr, len);
+		flush_dcache_page(page);
+	} else {
+		flush_dcache_page(page);
+		memcpy(sector_addr, mem + off, len);
+	}
+	kunmap_atomic(mem);
+
+	return 0;
+}
+#endif
+
 /*
  * Process a single bvec of a bio.
  */
@@ -271,6 +304,11 @@ static int brd_do_bvec(struct brd_device *brd, struct page *page,
 {
 	void *mem;
 	int err = 0;
+
+#ifdef CONFIG_HISI_BLK_DEV_RAM_EMU
+	if (brd->is_emulator)
+		return brd_emu_do_bvec(brd, page, len, off, is_write, sector);
+#endif
 
 	if (is_write) {
 		err = copy_to_brd_setup(brd, sector, len);
@@ -529,6 +567,128 @@ static struct kobject *brd_probe(dev_t dev, int *part, void *data)
 	return kobj;
 }
 
+#if defined(CONFIG_HUAWEI_DYNAMIC_BRD) || defined(CONFIG_HISI_BLK_DEV_RAM_EMU)
+static int brd_get_avail_id(void)
+{
+	struct brd_device *brd = NULL;
+	int minor_limit = 1UL << MINORBITS;
+	unsigned int occupied;
+	int i;
+
+	for (i = 0; i < minor_limit; ++i) {
+		occupied = 0;
+
+		list_for_each_entry(brd, &brd_devices, brd_list) {
+			if (i == brd->brd_number) {
+				occupied = 1;
+				break;
+			}
+		}
+
+		if (occupied == 0)
+			return i;
+	}
+
+	return -1;
+}
+#endif
+
+#ifdef CONFIG_HUAWEI_DYNAMIC_BRD
+int brd_create(unsigned int size)
+{
+	struct brd_device *brd = NULL;
+	int id;
+
+	mutex_lock(&brd_devices_mutex);
+
+	id = brd_get_avail_id();
+	if (id == (1UL << MINORBITS)) {
+		mutex_unlock(&brd_devices_mutex);
+		return -1;
+	}
+
+	brd = brd_alloc(id);
+	if (!brd) {
+		mutex_unlock(&brd_devices_mutex);
+		return -1;
+	}
+
+	set_capacity(brd->brd_disk, size * 2);
+
+	list_add_tail(&brd->brd_list, &brd_devices);
+	add_disk(brd->brd_disk);
+
+	mutex_unlock(&brd_devices_mutex);
+
+	return brd->brd_number;
+}
+
+int brd_delete(int nr)
+{
+	struct brd_device *brd = NULL;
+	struct brd_device *next = NULL;
+
+	if (nr < rd_nr)
+		return -1;
+
+	mutex_lock(&brd_devices_mutex);
+
+	list_for_each_entry_safe(brd, next, &brd_devices, brd_list) {
+		if (nr == brd->brd_number) {
+			brd_del_one(brd);
+			mutex_unlock(&brd_devices_mutex);
+			return 0;
+		}
+	}
+
+	mutex_unlock(&brd_devices_mutex);
+
+	return -EINVAL;
+}
+#endif
+
+#ifdef CONFIG_HISI_BLK_DEV_RAM_EMU
+static phys_addr_t g_emu_tool_addr;
+static phys_addr_t g_emu_tool_size;
+static int hisi_emu_tool_mem(struct reserved_mem *rmem)
+{
+	if (rmem != NULL) {
+		g_emu_tool_addr = rmem->base;
+		g_emu_tool_size = rmem->size;
+	}
+
+	return 0;
+}
+RESERVEDMEM_OF_DECLARE(emu_tool, "emulator-tool", hisi_emu_tool_mem);
+
+static void brd_emu_create(void)
+{
+	struct brd_device *brd = NULL;
+	int id;
+
+	if (!g_emu_tool_addr || !g_emu_tool_size) {
+		pr_info("%s: not support\n", __func__);
+		return;
+	}
+
+	id = brd_get_avail_id();
+	if (id == (1UL << MINORBITS))
+		return;
+	brd = brd_alloc(id);
+	if (!brd) {
+		pr_err("%s brd emu alloc fail\n", __func__);
+		return;
+	}
+
+	sprintf(brd->brd_disk->disk_name, "ram-emu");
+	set_capacity(brd->brd_disk, g_emu_tool_size >> SECTOR_SHIFT);
+	list_add_tail(&brd->brd_list, &brd_devices);
+
+	brd->brd_rambase = phys_to_virt(g_emu_tool_addr);
+	brd->is_emulator = true;
+}
+#endif
+
 static int __init brd_init(void)
 {
 	struct brd_device *brd, *next;
@@ -562,6 +722,9 @@ static int __init brd_init(void)
 		list_add_tail(&brd->brd_list, &brd_devices);
 	}
 
+#ifdef CONFIG_HISI_BLK_DEV_RAM_EMU
+	brd_emu_create();
+#endif
 	/* point of no return */
 
 	list_for_each_entry(brd, &brd_devices, brd_list)

@@ -176,8 +176,6 @@ struct atmel_uart_port {
 	unsigned int		pending_status;
 	spinlock_t		lock_suspended;
 
-	bool			hd_start_rx;	/* can start RX during half-duplex operation */
-
 #ifdef CONFIG_PM
 	struct {
 		u32		cr;
@@ -238,12 +236,6 @@ static inline u8 atmel_uart_read_char(struct uart_port *port)
 static inline void atmel_uart_write_char(struct uart_port *port, u8 value)
 {
 	__raw_writeb(value, port->membase + ATMEL_US_THR);
-}
-
-static inline int atmel_uart_is_half_duplex(struct uart_port *port)
-{
-	return (port->rs485.flags & SER_RS485_ENABLED) &&
-		!(port->rs485.flags & SER_RS485_RX_DURING_TX);
 }
 
 #ifdef CONFIG_SERIAL_ATMEL_PDC
@@ -497,9 +489,9 @@ static void atmel_stop_tx(struct uart_port *port)
 	/* Disable interrupts */
 	atmel_uart_writel(port, ATMEL_US_IDR, atmel_port->tx_done_mask);
 
-	if (atmel_uart_is_half_duplex(port))
+	if ((port->rs485.flags & SER_RS485_ENABLED) &&
+	    !(port->rs485.flags & SER_RS485_RX_DURING_TX))
 		atmel_start_rx(port);
-
 }
 
 /*
@@ -516,7 +508,8 @@ static void atmel_start_tx(struct uart_port *port)
 		return;
 
 	if (atmel_use_pdc_tx(port) || atmel_use_dma_tx(port))
-		if (atmel_uart_is_half_duplex(port))
+		if ((port->rs485.flags & SER_RS485_ENABLED) &&
+		    !(port->rs485.flags & SER_RS485_RX_DURING_TX))
 			atmel_stop_rx(port);
 
 	if (atmel_use_pdc_tx(port))
@@ -813,14 +806,10 @@ static void atmel_complete_tx_dma(void *arg)
 	 */
 	if (!uart_circ_empty(xmit))
 		atmel_tasklet_schedule(atmel_port, &atmel_port->tasklet_tx);
-	else if (atmel_uart_is_half_duplex(port)) {
-		/*
-		 * DMA done, re-enable TXEMPTY and signal that we can stop
-		 * TX and start RX for RS485
-		 */
-		atmel_port->hd_start_rx = true;
-		atmel_uart_writel(port, ATMEL_US_IER,
-				  atmel_port->tx_done_mask);
+	else if ((port->rs485.flags & SER_RS485_ENABLED) &&
+		 !(port->rs485.flags & SER_RS485_RX_DURING_TX)) {
+		/* DMA done, stop TX, start RX for RS485 */
+		atmel_start_rx(port);
 	}
 
 	spin_unlock_irqrestore(&port->lock, flags);
@@ -1174,10 +1163,6 @@ static int atmel_prepare_rx_dma(struct uart_port *port)
 					 sg_dma_len(&atmel_port->sg_rx)/2,
 					 DMA_DEV_TO_MEM,
 					 DMA_PREP_INTERRUPT);
-	if (!desc) {
-		dev_err(port->dev, "Preparing DMA cyclic failed\n");
-		goto chan_err;
-	}
 	desc->callback = atmel_complete_rx_dma;
 	desc->callback_param = port;
 	atmel_port->desc_rx = desc;
@@ -1265,20 +1250,9 @@ atmel_handle_transmit(struct uart_port *port, unsigned int pending)
 	struct atmel_uart_port *atmel_port = to_atmel_uart_port(port);
 
 	if (pending & atmel_port->tx_done_mask) {
+		/* Either PDC or interrupt transmission */
 		atmel_uart_writel(port, ATMEL_US_IDR,
 				  atmel_port->tx_done_mask);
-
-		/* Start RX if flag was set and FIFO is empty */
-		if (atmel_port->hd_start_rx) {
-			if (!(atmel_uart_readl(port, ATMEL_US_CSR)
-					& ATMEL_US_TXEMPTY))
-				dev_warn(port->dev, "Should start RX, but TX fifo is not empty\n");
-
-			atmel_port->hd_start_rx = false;
-			atmel_start_rx(port);
-			return;
-		}
-
 		atmel_tasklet_schedule(atmel_port, &atmel_port->tasklet_tx);
 	}
 }
@@ -1405,7 +1379,8 @@ static void atmel_tx_pdc(struct uart_port *port)
 		atmel_uart_writel(port, ATMEL_US_IER,
 				  atmel_port->tx_done_mask);
 	} else {
-		if (atmel_uart_is_half_duplex(port)) {
+		if ((port->rs485.flags & SER_RS485_ENABLED) &&
+		    !(port->rs485.flags & SER_RS485_RX_DURING_TX)) {
 			/* DMA done, stop TX, start RX for RS485 */
 			atmel_start_rx(port);
 		}

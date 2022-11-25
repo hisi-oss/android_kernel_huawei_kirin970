@@ -128,6 +128,5 @@ static struct platform_driver hi65xx_powerkey_driver = {
 };
 module_platform_driver(hi65xx_powerkey_driver);
 
-MODULE_AUTHOR("Zhiliang Xue <xuezhiliang@huawei.com");
 MODULE_DESCRIPTION("Hisi PMIC Power key driver");
 MODULE_LICENSE("GPL v2");

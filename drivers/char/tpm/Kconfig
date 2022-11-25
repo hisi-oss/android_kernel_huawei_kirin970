@@ -153,6 +153,18 @@ config TCG_VTPM_PROXY
 	  /dev/vtpmX and a server-side file descriptor on which the vTPM
 	  can receive commands.
 
+config TCG_TEE
+	tristate "TPM TA"
+	---help---
+	Software TPM implementation utilizing TrustedCore Trusted Execution
+	Environment.
+
+config HUAWEI_ARMPC_TPM
+	tristate "Huawei Armpc Tpm"
+	depends on TCG_TPM
+	---help---
+	  This is Huawei's tpm module, if there is no ACPI, you need to
+	  open the configuration.
 
 source "drivers/char/tpm/st33zp24/Kconfig"
 endif # TCG_TPM

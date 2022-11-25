@@ -57,6 +57,7 @@
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <linux/utsname.h>
+#include <linux/hisi/usb/chip_usb_log.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -241,9 +242,20 @@ EXPORT_SYMBOL_GPL(usb_stor_reset_resume);
 int usb_stor_pre_reset(struct usb_interface *iface)
 {
 	struct us_data *us = usb_get_intfdata(iface);
+	struct Scsi_Host *host = us_to_host(us);
+
+	hiusb_dev_info(&us->pusb_dev->dev, "++\n");
+	if (us->udev_quirks & US_UDEV_QUIRK_STOP_TRANS_PRE_RESET) {
+		hiusb_dev_info(&us->pusb_dev->dev, "do transfer stop\n");
+		scsi_lock(host);
+		usb_stor_stop_transport(us);
+		scsi_unlock(host);
+		hiusb_dev_info(&us->pusb_dev->dev, "transfer stopped\n");
+	}
 
 	/* Make sure no command runs during the reset */
 	mutex_lock(&us->dev_mutex);
+	hiusb_dev_info(&us->pusb_dev->dev, "--\n");
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_stor_pre_reset);
@@ -252,6 +264,7 @@ int usb_stor_post_reset(struct usb_interface *iface)
 {
 	struct us_data *us = usb_get_intfdata(iface);
 
+	hiusb_dev_info(&us->pusb_dev->dev, "++\n");
 	/* Report the reset to the SCSI core */
 	usb_stor_report_bus_reset(us);
 
@@ -261,6 +274,7 @@ int usb_stor_post_reset(struct usb_interface *iface)
 	 */
 
 	mutex_unlock(&us->dev_mutex);
+	hiusb_dev_info(&us->pusb_dev->dev, "--\n");
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_stor_post_reset);
@@ -452,6 +466,45 @@ SkipForAbort:
  * Device probing and disconnecting
  ***********************************************************************/
 
+#ifdef CONFIG_HISI_USB_STORAGE_QUIRK
+static const struct usb_device_id usb_quirk_list[] = {
+	/* aigo U350 */
+	{ USB_DEVICE(0x090c, 0x3267), .driver_info = US_UDEV_QUIRK_STOP_TRANS_PRE_RESET },
+	/* aigo U350/U351 */
+	{ USB_DEVICE(0x058f, 0x6387), .driver_info = US_UDEV_QUIRK_STOP_TRANS_PRE_RESET },
+	{ USB_DEVICE(0x090c, 0x1000), .driver_info = US_UDEV_QUIRK_STOP_TRANS_PRE_RESET },
+
+	{ }  /* terminating entry must be last */
+};
+
+static int usb_match_device(struct usb_device *udev, const struct usb_device_id *id)
+{
+	if (id->idVendor != le16_to_cpu(udev->descriptor.idVendor))
+		return 0;
+
+	if (id->idProduct != le16_to_cpu(udev->descriptor.idProduct))
+		return 0;
+
+	return 1;
+}
+
+static void usb_detect_quirks(struct us_data *us)
+{
+	const struct usb_device_id *id = usb_quirk_list;
+
+	for (; id->match_flags; id++) {
+		if (usb_match_device(us->pusb_dev, id)) {
+			hiusb_dev_info(&us->pusb_dev->dev,
+				       "detect quirk device 0x%x:0x%x\n",
+				       id->idVendor, id->idProduct);
+			us->udev_quirks |= id->driver_info;
+		}
+	}
+}
+#else
+#define usb_detect_quirks(x)
+#endif
+
 /* Associate our private data with the USB device */
 static int associate_dev(struct us_data *us, struct usb_interface *intf)
 {
@@ -481,6 +534,8 @@ static int associate_dev(struct us_data *us, struct usb_interface *intf)
 		usb_stor_dbg(us, "I/O buffer allocation failed\n");
 		return -ENOMEM;
 	}
+
+	usb_detect_quirks(us);
 	return 0;
 }
 
@@ -817,6 +872,7 @@ static int usb_stor_acquire_resources(struct us_data *us)
 /* Release all our dynamic resources */
 static void usb_stor_release_resources(struct us_data *us)
 {
+	hiusb_dev_info(&us->pusb_dev->dev, "++\n");
 	/*
 	 * Tell the control thread to exit.  The SCSI host must
 	 * already have been removed and the DISCONNECTING flag set
@@ -836,6 +892,7 @@ static void usb_stor_release_resources(struct us_data *us)
 	/* Free the extra data and the URB */
 	kfree(us->extra);
 	usb_free_urb(us->current_urb);
+	hiusb_dev_info(&us->pusb_dev->dev, "--\n");
 }
 
 /* Dissociate from the USB device */
@@ -857,6 +914,7 @@ static void quiesce_and_remove_host(struct us_data *us)
 {
 	struct Scsi_Host *host = us_to_host(us);
 
+	hiusb_dev_info(&us->pusb_dev->dev, "++\n");
 	/* If the device is really gone, cut short reset delays */
 	if (us->pusb_dev->state == USB_STATE_NOTATTACHED) {
 		set_bit(US_FLIDX_DISCONNECTING, &us->dflags);
@@ -873,6 +931,14 @@ static void quiesce_and_remove_host(struct us_data *us)
 	if (test_bit(US_FLIDX_SCAN_PENDING, &us->dflags))
 		usb_autopm_put_interface_no_suspend(us->pusb_intf);
 
+	scsi_lock(host);
+	if (!test_bit(US_FLIDX_RESETTING, &us->dflags)) {
+		hiusb_dev_info(&us->pusb_dev->dev, "do transfer stop\n");
+		set_bit(US_FLIDX_ABORTING, &us->dflags);
+		usb_stor_stop_transport(us);
+		hiusb_dev_info(&us->pusb_dev->dev, "transfer stopped\n");
+	}
+	scsi_unlock(host);
 	/*
 	 * Removing the host will perform an orderly shutdown: caches
 	 * synchronized, disks spun down, etc.
@@ -887,6 +953,7 @@ static void quiesce_and_remove_host(struct us_data *us)
 	set_bit(US_FLIDX_DISCONNECTING, &us->dflags);
 	scsi_unlock(host);
 	wake_up(&us->delay_wait);
+	hiusb_dev_info(&us->pusb_dev->dev, "--\n");
 }
 
 /* Second stage of disconnect processing: deallocate all resources */
@@ -973,6 +1040,9 @@ int usb_stor_probe1(struct us_data **pus,
 	 */
 	host->max_cmd_len = 16;
 	host->sg_tablesize = usb_stor_sg_tablesize(intf);
+#ifdef CONFIG_MAS_BLK
+	host->queue_quirk_flag |= SHOST_QUIRK(SHOST_QUIRK_IO_LATENCY_WARNING);
+#endif
 	*pus = us = host_to_us(host);
 	mutex_init(&(us->dev_mutex));
 	us_set_lock_class(&us->dev_mutex, intf);

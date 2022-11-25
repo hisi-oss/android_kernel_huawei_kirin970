@@ -18,6 +18,22 @@ EXPORT_SYMBOL(__aes_arm64_encrypt);
 asmlinkage void __aes_arm64_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 EXPORT_SYMBOL(__aes_arm64_decrypt);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_encrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_encrypt ___aes_arm64_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_arm64_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_decrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_decrypt ___aes_arm64_decrypt
+#endif
+
 static void aes_encrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
 {
 	struct crypto_aes_ctx *ctx = crypto_tfm_ctx(tfm);

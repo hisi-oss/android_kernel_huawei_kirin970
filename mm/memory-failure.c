@@ -339,8 +339,7 @@ static void kill_procs(struct list_head *to_kill, int forcekill, int trapno,
 			if (fail || tk->addr_valid == 0) {
 				pr_err("Memory failure: %#lx: forcibly killing %s:%d because of failure to unmap corrupted page\n",
 				       pfn, tk->tsk->comm, tk->tsk->pid);
-				do_send_sig_info(SIGKILL, SEND_SIG_PRIV,
-						 tk->tsk, PIDTYPE_PID);
+				force_sig(SIGKILL, tk->tsk);
 			}
 
 			/*
@@ -996,7 +995,7 @@ static bool hwpoison_user_mappings(struct page *p, unsigned long pfn,
 	if (kill)
 		collect_procs(hpage, &tokill, flags & MF_ACTION_REQUIRED);
 
-	unmap_success = try_to_unmap(hpage, ttu);
+	unmap_success = try_to_unmap(hpage, ttu, NULL);
 	if (!unmap_success)
 		pr_err("Memory failure: %#lx: failed to unmap page (mapcount=%d)\n",
 		       pfn, page_mapcount(hpage));
@@ -1701,17 +1700,19 @@ static int soft_offline_in_use_page(struct page *page, int flags)
 	struct page *hpage = compound_head(page);
 
 	if (!PageHuge(page) && PageTransHuge(hpage)) {
-		lock_page(page);
-		if (!PageAnon(page) || unlikely(split_huge_page(page))) {
-			unlock_page(page);
-			if (!PageAnon(page))
+		lock_page(hpage);
+		if (!PageAnon(hpage) || unlikely(split_huge_page(hpage))) {
+			unlock_page(hpage);
+			if (!PageAnon(hpage))
 				pr_info("soft offline: %#lx: non anonymous thp\n", page_to_pfn(page));
 			else
 				pr_info("soft offline: %#lx: thp split failed\n", page_to_pfn(page));
-			put_hwpoison_page(page);
+			put_hwpoison_page(hpage);
 			return -EBUSY;
 		}
-		unlock_page(page);
+		unlock_page(hpage);
+		get_hwpoison_page(page);
+		put_hwpoison_page(hpage);
 	}
 
 	if (PageHuge(page))

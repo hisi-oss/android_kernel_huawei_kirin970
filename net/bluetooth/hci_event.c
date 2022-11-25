@@ -3825,7 +3825,7 @@ static void hci_extended_inquiry_result_evt(struct hci_dev *hdev,
 
 	BT_DBG("%s num_rsp %d", hdev->name, num_rsp);
 
-	if (!num_rsp)
+	if (!num_rsp || skb->len < num_rsp * sizeof(*info) + 1)
 		return;
 
 	if (hci_dev_test_flag(hdev, HCI_PERIODIC_INQ))
@@ -4350,6 +4350,11 @@ static void hci_phy_link_complete_evt(struct hci_dev *hdev,
 		return;
 	}
 
+	if (!hcon->amp_mgr) {
+		hci_dev_unlock(hdev);
+		return;
+	}
+
 	if (ev->status) {
 		hci_conn_del(hcon);
 		hci_dev_unlock(hdev);
@@ -4394,6 +4399,7 @@ static void hci_loglink_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
 		return;
 
 	hchan->handle = le16_to_cpu(ev->handle);
+	hchan->amp = true;
 
 	BT_DBG("hcon %p mgr %p hchan %p", hcon, hcon->amp_mgr, hchan);
 
@@ -4426,7 +4432,7 @@ static void hci_disconn_loglink_complete_evt(struct hci_dev *hdev,
 	hci_dev_lock(hdev);
 
 	hchan = hci_chan_lookup_handle(hdev, le16_to_cpu(ev->handle));
-	if (!hchan)
+	if (!hchan || !hchan->amp)
 		goto unlock;
 
 	amp_destroy_logical_link(hchan, ev->reason);
@@ -5132,19 +5138,17 @@ static void hci_le_direct_adv_report_evt(struct hci_dev *hdev,
 					 struct sk_buff *skb)
 {
 	u8 num_reports = skb->data[0];
-	void *ptr = &skb->data[1];
+	struct hci_ev_le_direct_adv_info *ev = (void *)&skb->data[1];
+
+	if (!num_reports || skb->len < num_reports * sizeof(*ev) + 1)
+		return;
 
 	hci_dev_lock(hdev);
 
-	while (num_reports--) {
-		struct hci_ev_le_direct_adv_info *ev = ptr;
-
+	for (; num_reports; num_reports--, ev++)
 		process_adv_report(hdev, ev->evt_type, &ev->bdaddr,
 				   ev->bdaddr_type, &ev->direct_addr,
 				   ev->direct_addr_type, ev->rssi, NULL, 0);
-
-		ptr += sizeof(*ev);
-	}
 
 	hci_dev_unlock(hdev);
 }
@@ -5239,6 +5243,23 @@ static bool hci_get_cmd_complete(struct hci_dev *hdev, u16 opcode,
 
 	return true;
 }
+
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+static void hw_hisi_vendor_specific_evt(struct hci_dev *hdev, struct sk_buff *skb)
+{
+	u8 *event = (void *) skb->data;
+	if (event != NULL) {
+		uint8_t sub_evt = event[0];
+		switch (sub_evt) {
+		case HCI_VENDOR_SUB_EVT_RESET:
+			hci_hardware_error_evt(hdev, skb);
+			break;
+		default:
+			break;
+		}
+	}
+}
+#endif
 
 void hci_event_packet(struct hci_dev *hdev, struct sk_buff *skb)
 {
@@ -5444,6 +5465,12 @@ void hci_event_packet(struct hci_dev *hdev, struct sk_buff *skb)
 	case HCI_EV_NUM_COMP_BLOCKS:
 		hci_num_comp_blocks_evt(hdev, skb);
 		break;
+
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+	case HCI_VENDOR_SPECIFIC_EVT:
+		hw_hisi_vendor_specific_evt(hdev, skb);
+		break;
+#endif
 
 	default:
 		BT_DBG("%s event 0x%2.2x", hdev->name, event);

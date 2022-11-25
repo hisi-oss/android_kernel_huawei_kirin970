@@ -16,6 +16,10 @@
 #include <linux/syscalls.h>
 #include <linux/syscore_ops.h>
 #include <linux/uaccess.h>
+#if defined(CONFIG_HISI_SP805_WATCHDOG) || defined(CONFIG_HI_V500_WATCHDOG)
+#include <linux/watchdog.h>
+#define SHUTDOWN_TIMEOUT 30
+#endif
 
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
@@ -314,6 +318,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	mutex_lock(&reboot_mutex);
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART:
+#if defined(CONFIG_HISI_SP805_WATCHDOG) || defined(CONFIG_HI_V500_WATCHDOG)
+		watchdog_shutdown_oneshot(SHUTDOWN_TIMEOUT);
+#endif
 		kernel_restart(NULL);
 		break;
 
@@ -331,6 +338,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		panic("cannot halt");
 
 	case LINUX_REBOOT_CMD_POWER_OFF:
+#if defined(CONFIG_HISI_SP805_WATCHDOG) || defined(CONFIG_HI_V500_WATCHDOG)
+		watchdog_shutdown_oneshot(SHUTDOWN_TIMEOUT);
+#endif
 		kernel_power_off();
 		do_exit(0);
 		break;
@@ -341,6 +351,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 			ret = -EFAULT;
 			break;
 		}
+#if defined(CONFIG_HISI_SP805_WATCHDOG) || defined(CONFIG_HI_V500_WATCHDOG)
+		watchdog_shutdown_oneshot(SHUTDOWN_TIMEOUT);
+#endif
 		buffer[sizeof(buffer) - 1] = '\0';
 
 		kernel_restart(buffer);
@@ -386,7 +399,11 @@ void ctrl_alt_del(void)
 		kill_cad_pid(SIGINT, 1);
 }
 
+#ifdef CONFIG_HKIP_PROTECT_POWEROFF_CMD
+char poweroff_cmd[POWEROFF_CMD_PATH_LEN] __wr = "/sbin/poweroff";
+#else
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
+#endif
 static const char reboot_cmd[] = "/sbin/reboot";
 
 static int run_cmd(const char *cmd)
@@ -512,22 +529,15 @@ static int __init reboot_setup(char *str)
 			break;
 
 		case 's':
-		{
-			int rc;
-
-			if (isdigit(*(str+1))) {
-				rc = kstrtoint(str+1, 0, &reboot_cpu);
-				if (rc)
-					return rc;
-			} else if (str[1] == 'm' && str[2] == 'p' &&
-				   isdigit(*(str+3))) {
-				rc = kstrtoint(str+3, 0, &reboot_cpu);
-				if (rc)
-					return rc;
-			} else
+			if (isdigit(*(str+1)))
+				reboot_cpu = simple_strtoul(str+1, NULL, 0);
+			else if (str[1] == 'm' && str[2] == 'p' &&
+							isdigit(*(str+3)))
+				reboot_cpu = simple_strtoul(str+3, NULL, 0);
+			else
 				reboot_mode = REBOOT_SOFT;
 			break;
-		}
+
 		case 'g':
 			reboot_mode = REBOOT_GPIO;
 			break;

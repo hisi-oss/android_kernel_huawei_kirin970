@@ -135,7 +135,7 @@ static unsigned long klp_get_ftrace_location(unsigned long faddr)
 }
 #endif
 
-static void klp_unpatch_func(struct klp_func *func)
+static int klp_unpatch_func(struct klp_func *func)
 {
 	struct klp_ops *ops;
 

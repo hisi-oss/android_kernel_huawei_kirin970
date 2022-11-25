@@ -1147,26 +1147,23 @@ exit_setup_int:
 
 static void qedi_free_nvm_iscsi_cfg(struct qedi_ctx *qedi)
 {
-	if (qedi->iscsi_image)
+	if (qedi->iscsi_cfg)
 		dma_free_coherent(&qedi->pdev->dev,
-				  sizeof(struct qedi_nvm_iscsi_image),
-				  qedi->iscsi_image, qedi->nvm_buf_dma);
+				  sizeof(struct nvm_iscsi_cfg),
+				  qedi->iscsi_cfg, qedi->nvm_buf_dma);
 }
 
 static int qedi_alloc_nvm_iscsi_cfg(struct qedi_ctx *qedi)
 {
-	struct qedi_nvm_iscsi_image nvm_image;
-
-	qedi->iscsi_image = dma_zalloc_coherent(&qedi->pdev->dev,
-						sizeof(nvm_image),
-						&qedi->nvm_buf_dma,
-						GFP_KERNEL);
-	if (!qedi->iscsi_image) {
+	qedi->iscsi_cfg = dma_zalloc_coherent(&qedi->pdev->dev,
+					     sizeof(struct nvm_iscsi_cfg),
+					     &qedi->nvm_buf_dma, GFP_KERNEL);
+	if (!qedi->iscsi_cfg) {
 		QEDI_ERR(&qedi->dbg_ctx, "Could not allocate NVM BUF.\n");
 		return -ENOMEM;
 	}
 	QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_INFO,
-		  "NVM BUF addr=0x%p dma=0x%llx.\n", qedi->iscsi_image,
+		  "NVM BUF addr=0x%p dma=0x%llx.\n", qedi->iscsi_cfg,
 		  qedi->nvm_buf_dma);
 
 	return 0;
@@ -1719,7 +1716,7 @@ qedi_get_nvram_block(struct qedi_ctx *qedi)
 	struct nvm_iscsi_block *block;
 
 	pf = qedi->dev_info.common.abs_pf_id;
-	block = &qedi->iscsi_image->iscsi_cfg.block[0];
+	block = &qedi->iscsi_cfg->block[0];
 	for (i = 0; i < NUM_OF_ISCSI_PF_SUPPORTED; i++, block++) {
 		flags = ((block->id) & NVM_ISCSI_CFG_BLK_CTRL_FLAG_MASK) >>
 			NVM_ISCSI_CFG_BLK_CTRL_FLAG_OFFSET;
@@ -2011,14 +2008,15 @@ static void qedi_boot_release(void *data)
 static int qedi_get_boot_info(struct qedi_ctx *qedi)
 {
 	int ret = 1;
-	struct qedi_nvm_iscsi_image nvm_image;
+	u16 len;
+
+	len = sizeof(struct nvm_iscsi_cfg);
 
 	QEDI_INFO(&qedi->dbg_ctx, QEDI_LOG_INFO,
 		  "Get NVM iSCSI CFG image\n");
 	ret = qedi_ops->common->nvm_get_image(qedi->cdev,
 					      QED_NVM_IMAGE_ISCSI_CFG,
-					      (char *)qedi->iscsi_image,
-					      sizeof(nvm_image));
+					      (char *)qedi->iscsi_cfg, len);
 	if (ret)
 		QEDI_ERR(&qedi->dbg_ctx,
 			 "Could not get NVM image. ret = %d\n", ret);

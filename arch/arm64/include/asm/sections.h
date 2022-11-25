@@ -28,5 +28,6 @@ extern char __initdata_begin[], __initdata_end[];
 extern char __inittext_begin[], __inittext_end[];
 extern char __irqentry_text_start[], __irqentry_text_end[];
 extern char __mmuoff_data_start[], __mmuoff_data_end[];
+extern char _protect_start[], _protect_text_end[], _protect_end[];
 
 #endif /* __ASM_SECTIONS_H */

@@ -220,28 +220,6 @@ static const u64 shadow_acc_track_saved_bits_mask = PT64_EPT_READABLE_MASK |
 						    PT64_EPT_EXECUTABLE_MASK;
 static const u64 shadow_acc_track_saved_bits_shift = PT64_SECOND_AVAIL_BITS_SHIFT;
 
-/*
- * This mask must be set on all non-zero Non-Present or Reserved SPTEs in order
- * to guard against L1TF attacks.
- */
-static u64 __read_mostly shadow_nonpresent_or_rsvd_mask;
-
-/*
- * The number of high-order 1 bits to use in the mask above.
- */
-static const u64 shadow_nonpresent_or_rsvd_mask_len = 5;
-
-/*
- * In some cases, we need to preserve the GFN of a non-present or reserved
- * SPTE when we usurp the upper five bits of the physical address space to
- * defend against L1TF, e.g. for MMIO SPTEs.  To preserve the GFN, we'll
- * shift bits of the GFN that overlap with shadow_nonpresent_or_rsvd_mask
- * left into the reserved bits, i.e. the GFN in the SPTE will be split into
- * high and low parts.  This mask covers the lower bits of the GFN.
- */
-static u64 __read_mostly shadow_nonpresent_or_rsvd_lower_gfn_mask;
-
-
 static void mmu_spte_set(u64 *sptep, u64 spte);
 static void mmu_free_roots(struct kvm_vcpu *vcpu);
 
@@ -330,13 +308,9 @@ static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
 {
 	unsigned int gen = kvm_current_mmio_generation(vcpu);
 	u64 mask = generation_mmio_spte_mask(gen);
-	u64 gpa = gfn << PAGE_SHIFT;
 
 	access &= ACC_WRITE_MASK | ACC_USER_MASK;
-	mask |= shadow_mmio_value | access;
-	mask |= gpa | shadow_nonpresent_or_rsvd_mask;
-	mask |= (gpa & shadow_nonpresent_or_rsvd_mask)
-		<< shadow_nonpresent_or_rsvd_mask_len;
+	mask |= shadow_mmio_value | access | gfn << PAGE_SHIFT;
 
 	trace_mark_mmio_spte(sptep, gfn, access, gen);
 	mmu_spte_set(sptep, mask);
@@ -349,12 +323,8 @@ static bool is_mmio_spte(u64 spte)
 
 static gfn_t get_mmio_spte_gfn(u64 spte)
 {
-	u64 gpa = spte & shadow_nonpresent_or_rsvd_lower_gfn_mask;
-
-	gpa |= (spte >> shadow_nonpresent_or_rsvd_mask_len)
-	       & shadow_nonpresent_or_rsvd_mask;
-
-	return gpa >> PAGE_SHIFT;
+	u64 mask = generation_mmio_spte_mask(MMIO_GEN_MASK) | shadow_mmio_mask;
+	return (spte & ~mask) >> PAGE_SHIFT;
 }
 
 static unsigned get_mmio_spte_access(u64 spte)
@@ -411,10 +381,8 @@ void kvm_mmu_set_mask_ptes(u64 user_mask, u64 accessed_mask,
 }
 EXPORT_SYMBOL_GPL(kvm_mmu_set_mask_ptes);
 
-static void kvm_mmu_reset_all_pte_masks(void)
+void kvm_mmu_clear_all_pte_masks(void)
 {
-	u8 low_phys_bits;
-
 	shadow_user_mask = 0;
 	shadow_accessed_mask = 0;
 	shadow_dirty_mask = 0;
@@ -423,23 +391,6 @@ static void kvm_mmu_reset_all_pte_masks(void)
 	shadow_mmio_mask = 0;
 	shadow_present_mask = 0;
 	shadow_acc_track_mask = 0;
-
-	/*
-	 * If the CPU has 46 or less physical address bits, then set an
-	 * appropriate mask to guard against L1TF attacks. Otherwise, it is
-	 * assumed that the CPU is not vulnerable to L1TF.
-	 */
-	low_phys_bits = boot_cpu_data.x86_phys_bits;
-	if (boot_cpu_data.x86_phys_bits <
-	    52 - shadow_nonpresent_or_rsvd_mask_len) {
-		shadow_nonpresent_or_rsvd_mask =
-			rsvd_bits(boot_cpu_data.x86_phys_bits -
-				  shadow_nonpresent_or_rsvd_mask_len,
-				  boot_cpu_data.x86_phys_bits - 1);
-		low_phys_bits -= shadow_nonpresent_or_rsvd_mask_len;
-	}
-	shadow_nonpresent_or_rsvd_lower_gfn_mask =
-		GENMASK_ULL(low_phys_bits - 1, PAGE_SHIFT);
 }
 
 static int is_cpuid_PSE36(void)
@@ -1109,12 +1060,12 @@ static bool mmu_gfn_lpage_is_disallowed(struct kvm_vcpu *vcpu, gfn_t gfn,
 	return __mmu_gfn_lpage_is_disallowed(gfn, level, slot);
 }
 
-static int host_mapping_level(struct kvm *kvm, gfn_t gfn)
+static int host_mapping_level(struct kvm_vcpu *vcpu, gfn_t gfn)
 {
 	unsigned long page_size;
 	int i, ret = 0;
 
-	page_size = kvm_host_page_size(kvm, gfn);
+	page_size = kvm_host_page_size(vcpu, gfn);
 
 	for (i = PT_PAGE_TABLE_LEVEL; i <= PT_MAX_HUGEPAGE_LEVEL; ++i) {
 		if (page_size >= KVM_HPAGE_SIZE(i))
@@ -1164,7 +1115,7 @@ static int mapping_level(struct kvm_vcpu *vcpu, gfn_t large_gfn,
 	if (unlikely(*force_pt_level))
 		return PT_PAGE_TABLE_LEVEL;
 
-	host_level = host_mapping_level(vcpu->kvm, large_gfn);
+	host_level = host_mapping_level(vcpu, large_gfn);
 
 	if (host_level == PT_PAGE_TABLE_LEVEL)
 		return host_level;
@@ -4734,9 +4685,9 @@ static bool need_remote_flush(u64 old, u64 new)
 }
 
 static u64 mmu_pte_write_fetch_gpte(struct kvm_vcpu *vcpu, gpa_t *gpa,
-				    int *bytes)
+				    const u8 *new, int *bytes)
 {
-	u64 gentry = 0;
+	u64 gentry;
 	int r;
 
 	/*
@@ -4748,12 +4699,22 @@ static u64 mmu_pte_write_fetch_gpte(struct kvm_vcpu *vcpu, gpa_t *gpa,
 		/* Handle a 32-bit guest writing two halves of a 64-bit gpte */
 		*gpa &= ~(gpa_t)7;
 		*bytes = 8;
-	}
-
-	if (*bytes == 4 || *bytes == 8) {
-		r = kvm_vcpu_read_guest_atomic(vcpu, *gpa, &gentry, *bytes);
+		r = kvm_vcpu_read_guest(vcpu, *gpa, &gentry, 8);
 		if (r)
 			gentry = 0;
+		new = (const u8 *)&gentry;
+	}
+
+	switch (*bytes) {
+	case 4:
+		gentry = *(const u32 *)new;
+		break;
+	case 8:
+		gentry = *(const u64 *)new;
+		break;
+	default:
+		gentry = 0;
+		break;
 	}
 
 	return gentry;
@@ -4866,6 +4827,8 @@ static void kvm_mmu_pte_write(struct kvm_vcpu *vcpu, gpa_t gpa,
 
 	pgprintk("%s: gpa %llx bytes %d\n", __func__, gpa, bytes);
 
+	gentry = mmu_pte_write_fetch_gpte(vcpu, &gpa, new, &bytes);
+
 	/*
 	 * No need to care whether allocation memory is successful
 	 * or not since pte prefetch is skiped if it does not have
@@ -4874,9 +4837,6 @@ static void kvm_mmu_pte_write(struct kvm_vcpu *vcpu, gpa_t gpa,
 	mmu_topup_memory_caches(vcpu);
 
 	spin_lock(&vcpu->kvm->mmu_lock);
-
-	gentry = mmu_pte_write_fetch_gpte(vcpu, &gpa, &bytes);
-
 	++vcpu->kvm->stat.mmu_pte_write;
 	kvm_mmu_audit(vcpu, AUDIT_PRE_PTE_WRITE);
 
@@ -5418,30 +5378,13 @@ static bool kvm_has_zapped_obsolete_pages(struct kvm *kvm)
 	return unlikely(!list_empty_careful(&kvm->arch.zapped_obsolete_pages));
 }
 
-void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, u64 gen)
+void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, struct kvm_memslots *slots)
 {
-	gen &= MMIO_GEN_MASK;
-
 	/*
-	 * Shift to eliminate the "update in-progress" flag, which isn't
-	 * included in the spte's generation number.
-	 */
-	gen >>= 1;
-
-	/*
-	 * Generation numbers are incremented in multiples of the number of
-	 * address spaces in order to provide unique generations across all
-	 * address spaces.  Strip what is effectively the address space
-	 * modifier prior to checking for a wrap of the MMIO generation so
-	 * that a wrap in any address space is detected.
-	 */
-	gen &= ~((u64)KVM_ADDRESS_SPACE_NUM - 1);
-
-	/*
-	 * The very rare case: if the MMIO generation number has wrapped,
+	 * The very rare case: if the generation-number is round,
 	 * zap all shadow pages.
 	 */
-	if (unlikely(gen == 0)) {
+	if (unlikely((slots->generation & MMIO_GEN_MASK) == 0)) {
 		kvm_debug_ratelimited("kvm: zapping shadow pages for mmio generation wraparound\n");
 		kvm_mmu_invalidate_zap_all_pages(kvm);
 	}
@@ -5530,7 +5473,7 @@ static void mmu_destroy_caches(void)
 
 int kvm_mmu_module_init(void)
 {
-	kvm_mmu_reset_all_pte_masks();
+	kvm_mmu_clear_all_pte_masks();
 
 	pte_list_desc_cache = kmem_cache_create("pte_list_desc",
 					    sizeof(struct pte_list_desc),

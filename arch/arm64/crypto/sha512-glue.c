@@ -25,8 +25,19 @@ MODULE_LICENSE("GPL v2");
 MODULE_ALIAS_CRYPTO("sha384");
 MODULE_ALIAS_CRYPTO("sha512");
 
+/*lint -e652*/
 asmlinkage void sha512_block_data_order(u32 *digest, const void *data,
 					unsigned int num_blks);
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __sha512_block_data_order(struct sha512_state *digest, u8 const *data,
+					     int num_blks)
+{
+	return sha512_block_data_order((u32 *)digest, (const void *)data, (unsigned int)num_blks);
+}
+#define sha512_block_data_order __sha512_block_data_order
+#endif
+/*lint +e652*/
 
 static int sha512_update(struct shash_desc *desc, const u8 *data,
 			 unsigned int len)

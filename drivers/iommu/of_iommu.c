@@ -188,9 +188,24 @@ const struct iommu_ops *of_iommu_configure(struct device *dev,
 			.dev = dev,
 			.np = master_np,
 		};
+#ifdef CONFIG_HISI_IOMMU_DMA
+		struct of_phandle_args iommu_spec;
+		int idx = 0;
+#endif
 
 		err = pci_for_each_dma_alias(to_pci_dev(dev),
 					     of_pci_iommu_init, &info);
+#ifdef CONFIG_HISI_IOMMU_DMA
+		while (!of_parse_phandle_with_args(master_np, "iommus",
+						   "#iommu-cells",
+						   idx, &iommu_spec)) {
+			err = of_iommu_xlate(dev, &iommu_spec);
+			of_node_put(iommu_spec.np);
+			idx++;
+			if (err)
+				break;
+		}
+#endif
 	} else {
 		struct of_phandle_args iommu_spec;
 		int idx = 0;

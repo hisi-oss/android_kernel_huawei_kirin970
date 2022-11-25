@@ -75,6 +75,11 @@ static int pcie_port_resume_noirq(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
 
+#ifdef CONFIG_PCIE_KPORT
+	if (kport_pcie_bypass_pm(pdev))
+		return 0;
+#endif
+
 	/*
 	 * Some BIOSes forget to clear Root PME Status bits after system wakeup
 	 * which breaks ACPI-based runtime wakeup on PCI Express, so clear those

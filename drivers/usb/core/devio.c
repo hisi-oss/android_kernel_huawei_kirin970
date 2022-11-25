@@ -56,6 +56,7 @@
 #include <linux/moduleparam.h>
 
 #include "usb.h"
+#include "hisi-usb-core.h"
 
 #define USB_MAXBUS			64
 #define USB_DEVICE_MAX			(USB_MAXBUS * 128)
@@ -755,8 +756,15 @@ static int claimintf(struct usb_dev_state *ps, unsigned int ifnum)
 	intf = usb_ifnum_to_if(dev, ifnum);
 	if (!intf)
 		err = -ENOENT;
-	else
+	else {
+		unsigned int old_suppress;
+
+		/* suppress uevents while claiming interface */
+		old_suppress = dev_get_uevent_suppress(&intf->dev);
+		dev_set_uevent_suppress(&intf->dev, 1);
 		err = usb_driver_claim_interface(&usbfs_driver, intf, ps);
+		dev_set_uevent_suppress(&intf->dev, old_suppress);
+	}
 	if (err == 0)
 		set_bit(ifnum, &ps->ifclaimed);
 	return err;
@@ -776,7 +784,13 @@ static int releaseintf(struct usb_dev_state *ps, unsigned int ifnum)
 	if (!intf)
 		err = -ENOENT;
 	else if (test_and_clear_bit(ifnum, &ps->ifclaimed)) {
+		unsigned int old_suppress;
+
+		/* suppress uevents while releasing interface */
+		old_suppress = dev_get_uevent_suppress(&intf->dev);
+		dev_set_uevent_suppress(&intf->dev, 1);
 		usb_driver_release_interface(&usbfs_driver, intf);
+		dev_set_uevent_suppress(&intf->dev, old_suppress);
 		err = 0;
 	}
 	return err;
@@ -840,7 +854,7 @@ static int check_ctrlrecip(struct usb_dev_state *ps, unsigned int requesttype,
 	 * class specification, which we always want to allow as it is used
 	 * to query things like ink level, etc.
 	 */
-	if (requesttype == 0xa1 && request == 0) {
+	if (requesttype == 0xa1 && request == 0 && ps->dev->actconfig) {
 		alt_setting = usb_find_alt_setting(ps->dev->actconfig,
 						   index >> 8, index & 0xff);
 		if (alt_setting
@@ -1007,7 +1021,14 @@ static int usbdev_open(struct inode *inode, struct file *file)
 	if (!dev)
 		goto out_free_ps;
 
+#ifndef CONFIG_USB_DEVICE_READ_USE_TRYLOCK
 	usb_lock_device(dev);
+#else
+	if (usb_device_read_usb_trylock_device(dev)) {
+		usb_put_dev(dev);
+		goto out_free_ps;
+	}
+#endif
 	if (dev->state == USB_STATE_NOTATTACHED)
 		goto out_unlock_device;
 
@@ -1491,6 +1512,8 @@ static int proc_do_submiturb(struct usb_dev_state *ps, struct usbdevfs_urb *uurb
 	u = 0;
 	switch (uurb->type) {
 	case USBDEVFS_URB_TYPE_CONTROL:
+		if (is_in)
+			allow_short = true;
 		if (!usb_endpoint_xfer_control(&ep->desc))
 			return -EINVAL;
 		/* min 8 byte setup packet */
@@ -1811,8 +1834,6 @@ static int proc_do_submiturb(struct usb_dev_state *ps, struct usbdevfs_urb *uurb
 	return 0;
 
  error:
-	if (as && as->usbm)
-		dec_usb_memory_use_count(as->usbm, &as->usbm->urb_use_count);
 	kfree(isopkt);
 	kfree(dr);
 	if (as)

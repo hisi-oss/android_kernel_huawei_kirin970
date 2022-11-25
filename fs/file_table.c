@@ -183,6 +183,35 @@ struct file *alloc_file(const struct path *path, fmode_t mode,
 }
 EXPORT_SYMBOL(alloc_file);
 
+struct file *alloc_file_pseudo(struct inode *inode, struct vfsmount *mnt,
+				const char *name, int flags,
+				const struct file_operations *fops)
+{
+	static const struct dentry_operations anon_ops = {
+		.d_dname = simple_dname
+	};
+	/*lint -e446*/
+	struct qstr this = QSTR_INIT(name, strlen(name));
+	/*lint +e446*/
+	struct path path;
+	struct file *file;
+
+	path.dentry = d_alloc_pseudo(mnt->mnt_sb, &this);
+	if (!path.dentry)
+		return ERR_PTR(-ENOMEM);
+	if (!mnt->mnt_sb->s_d_op)
+		d_set_d_op(path.dentry, &anon_ops);
+	path.mnt = mntget(mnt);
+	d_instantiate(path.dentry, inode);
+	file = alloc_file(&path, flags, fops);
+	if (IS_ERR(file)) {
+		ihold(inode);
+		path_put(&path);
+	}
+	return file;
+}
+EXPORT_SYMBOL(alloc_file_pseudo);
+
 /* the real guts of fput() - releasing the last reference to file
  */
 static void __fput(struct file *file)
@@ -281,6 +310,45 @@ void fput(struct file *file)
 			schedule_delayed_work(&delayed_fput_work, 1);
 	}
 }
+
+#if defined(CONFIG_MPTCP) || defined(CONFIG_HUAWEI_XENGINE)
+void fput_by_pid(pid_t pid, struct file *file)
+{
+	struct task_struct *task;
+
+	rcu_read_lock();
+
+	task = find_task_by_vpid(pid);
+	if (!task) {
+		rcu_read_unlock();
+		return;
+	}
+
+	get_task_struct(task);
+	rcu_read_unlock();
+
+	if (atomic_long_dec_and_test(&file->f_count)) {
+		if (likely(!in_interrupt() && !(task->flags & PF_KTHREAD))) {
+			init_task_work(&file->f_u.fu_rcuhead, ____fput);
+			if (!task_work_add(task, &file->f_u.fu_rcuhead, true)) {
+				put_task_struct(task);
+				return;
+			}
+			/*
+			 * After this task has run exit_task_work(),
+			 * task_work_add() will fail.  Fall through to delayed
+			 * fput to avoid leaking *file.
+			 */
+		}
+
+		if (llist_add(&file->f_u.fu_llist, &delayed_fput_list))
+			schedule_delayed_work(&delayed_fput_work, 1);
+	}
+
+	put_task_struct(task);
+}
+EXPORT_SYMBOL(fput_by_pid);
+#endif
 
 /*
  * synchronous analog of fput(); for kernel threads that might be needed

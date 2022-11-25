@@ -15,6 +15,9 @@ struct Scsi_Host;
 struct scsi_driver;
 
 #include <scsi/scsi_device.h>
+#ifdef CONFIG_HUAWEI_DSM_IOMT_UFS_HOST
+#include <linux/iomt_host/dsm_iomt_host.h>
+#endif
 
 /*
  * MAX_COMMAND_SIZE is:
@@ -90,7 +93,9 @@ struct scsi_cmnd {
 	 * been outstanding
 	 */
 	unsigned long jiffies_at_alloc;
-
+#ifdef CONFIG_HUAWEI_DSM_IOMT_UFS_HOST
+	struct iomt_timestamp iomt_start_time;
+#endif
 	int retries;
 	int allowed;
 

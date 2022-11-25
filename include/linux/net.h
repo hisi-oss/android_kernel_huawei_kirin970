@@ -119,6 +119,14 @@ struct socket {
 	struct file		*file;
 	struct sock		*sk;
 	const struct proto_ops	*ops;
+#if defined(CONFIG_HUAWEI_KSTATE) || defined(CONFIG_MPTCP)
+	pid_t		pid;
+	pid_t		tpid;
+#endif
+
+#ifdef CONFIG_MPTCP
+	int		fd;
+#endif
 };
 
 struct vm_area_struct;

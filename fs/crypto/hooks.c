@@ -5,6 +5,7 @@
  */
 
 #include <linux/ratelimit.h>
+#include <linux/fscrypt_common.h>
 #include "fscrypt_private.h"
 
 /**

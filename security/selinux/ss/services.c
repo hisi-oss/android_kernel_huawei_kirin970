@@ -50,8 +50,12 @@
 #include <linux/audit.h>
 #include <linux/mutex.h>
 #include <linux/selinux.h>
-#include <linux/flex_array.h>
 #include <linux/vmalloc.h>
+#ifdef CONFIG_HKIP_SELINUX_PROT
+#include <linux/hisi/prmem.h>
+#else
+#include <linux/flex_array.h>
+#endif
 #include <net/netlabel.h>
 
 #include "flask.h"
@@ -91,7 +95,12 @@ static DEFINE_RWLOCK(policy_rwlock);
 
 static struct sidtab sidtab;
 struct policydb policydb;
+
+#ifdef CONFIG_HKIP_SELINUX_PROT
+int ss_initialized __wr;
+#else
 int ss_initialized;
+#endif
 
 /*
  * The largest sequence number that has been used when
@@ -562,15 +571,23 @@ static void type_attribute_bounds_av(struct context *scontext,
 	struct type_datum *target;
 	u32 masked = 0;
 
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	source = policydb.type_val_to_struct[scontext->type - 1];
+#else
 	source = flex_array_get_ptr(policydb.type_val_to_struct_array,
 				    scontext->type - 1);
+#endif
 	BUG_ON(!source);
 
 	if (!source->bounds)
 		return;
 
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	target	= policydb.type_val_to_struct[tcontext->type - 1];
+#else
 	target = flex_array_get_ptr(policydb.type_val_to_struct_array,
 				    tcontext->type - 1);
+#endif
 	BUG_ON(!target);
 
 	memset(&lo_avd, 0, sizeof(lo_avd));
@@ -669,9 +686,15 @@ static void context_struct_compute_av(struct context *scontext,
 	 */
 	avkey.target_class = tclass;
 	avkey.specified = AVTAB_AV | AVTAB_XPERMS;
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	sattr = &policydb.type_attr_map[scontext->type - 1];
+	BUG_ON(!sattr);
+	tattr = &policydb.type_attr_map[tcontext->type - 1];
+#else
 	sattr = flex_array_get(policydb.type_attr_map_array, scontext->type - 1);
 	BUG_ON(!sattr);
 	tattr = flex_array_get(policydb.type_attr_map_array, tcontext->type - 1);
+#endif
 	BUG_ON(!tattr);
 	ebitmap_for_each_positive_bit(sattr, snode, i) {
 		ebitmap_for_each_positive_bit(tattr, tnode, j) {
@@ -895,8 +918,12 @@ int security_bounded_transition(u32 old_sid, u32 new_sid)
 
 	index = new_context->type;
 	while (true) {
+#ifdef CONFIG_HKIP_SELINUX_PROT
+		type = policydb.type_val_to_struct[index - 1];
+#else
 		type = flex_array_get_ptr(policydb.type_val_to_struct_array,
 					  index - 1);
+#endif
 		BUG_ON(!type);
 
 		/* not bounded anymore */
@@ -1053,11 +1080,17 @@ void security_compute_xperms_decision(u32 ssid,
 
 	avkey.target_class = tclass;
 	avkey.specified = AVTAB_XPERMS;
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	sattr = policydb.type_attr_map + scontext->type - 1;
+	BUG_ON(!sattr);
+	tattr = policydb.type_attr_map + tcontext->type - 1;
+#else
 	sattr = flex_array_get(policydb.type_attr_map_array,
 				scontext->type - 1);
 	BUG_ON(!sattr);
 	tattr = flex_array_get(policydb.type_attr_map_array,
 				tcontext->type - 1);
+#endif
 	BUG_ON(!tattr);
 	ebitmap_for_each_positive_bit(sattr, snode, i) {
 		ebitmap_for_each_positive_bit(tattr, tnode, j) {
@@ -2088,7 +2121,11 @@ int security_load_policy(void *data, size_t len)
 		}
 
 		security_load_policycaps();
+#ifdef CONFIG_HKIP_SELINUX_PROT
+		wr_assign(ss_initialized, 1);
+#else
 		ss_initialized = 1;
+#endif
 		seqno = ++latest_granting;
 		selinux_complete_init();
 		avc_ss_reset(seqno);
@@ -2188,6 +2225,9 @@ err:
 
 out:
 	kfree(oldpolicydb);
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	prmem_protect_pool(&selinux_pool);
+#endif
 	return rc;
 }
 
@@ -2736,8 +2776,12 @@ err:
 	if (*names) {
 		for (i = 0; i < *len; i++)
 			kfree((*names)[i]);
+		kfree(*names);
 	}
 	kfree(*values);
+	*len = 0;
+	*names = NULL;
+	*values = NULL;
 	goto out;
 }
 

@@ -1,4 +1,20 @@
 # SPDX-License-Identifier: GPL-2.0
+EXTRA_CFLAGS += -I$(src)/hisi/hs_auto_calib/
+EXTRA_CFLAGS += -Idrivers/hisi/da_combine_dsp/
+EXTRA_CFLAGS += -Idrivers/hisi/slimbus/
+EXTRA_CFLAGS += -Idrivers/hisi/da_separate/
+EXTRA_CFLAGS += -Isound/soc/hisilicon/
+EXTRA_CFLAGS += -Isound/soc/codecs/hisi/adapter/
+
+ifeq ($(CONFIG_AUDIO_DEBUG),y)
+EXTRA_CFLAGS += -I$(src)/hisi/fpga_test/
+obj-y += hisi/fpga_test/
+endif
+
+ifeq ($(TARGET_VERSION_MODE),factory)
+EXTRA_CFLAGS += -DAUDIO_FACTORY_MODE
+endif
+
 snd-soc-88pm860x-objs := 88pm860x-codec.o
 snd-soc-ab8500-codec-objs := ab8500-codec.o
 snd-soc-ac97-objs := ac97.o
@@ -230,12 +246,26 @@ snd-soc-wm9712-objs := wm9712.o
 snd-soc-wm9713-objs := wm9713.o
 snd-soc-wm-hubs-objs := wm_hubs.o
 snd-soc-zx-aud96p22-objs := zx_aud96p22.o
+
+snd-soc-hdmi-audio-objs := hisi/hdmi-audio.o
+snd-soc-dp-audio-objs := hisi/dp_audio.o
+obj-y += hisi/hs_auto_calib/
+
 # Amp
 snd-soc-dio2125-objs := dio2125.o
 snd-soc-max9877-objs := max9877.o
 snd-soc-max98504-objs := max98504.o
 snd-soc-tpa6130a2-objs := tpa6130a2.o
 snd-soc-tas2552-objs := tas2552.o
+ccflags-y  += -Idrivers/devkit/audiokit/
+ifneq ($(TARGET_BUILD_VARIANT),user)
+	EXTRA_CFLAGS += -Idrivers/devkit/audiokit/headset_debug
+	EXTRA_CFLAGS += -DCONFIG_HUAWEI_HEADSET_DEBUG
+endif
+
+ifneq ($(strip $(CONFIG_SWITCH)),)
+ccflags-y += -DCONFIG_HUAWEI_HEADSET_DEBUG_SWITCH
+endif
 
 obj-$(CONFIG_SND_SOC_88PM860X)	+= snd-soc-88pm860x.o
 obj-$(CONFIG_SND_SOC_AB8500_CODEC)	+= snd-soc-ab8500-codec.o
@@ -469,8 +499,26 @@ obj-$(CONFIG_SND_SOC_WM_ADSP)	+= snd-soc-wm-adsp.o
 obj-$(CONFIG_SND_SOC_WM_HUBS)	+= snd-soc-wm-hubs.o
 obj-$(CONFIG_SND_SOC_ZX_AUD96P22) += snd-soc-zx-aud96p22.o
 
+# hissc codec
+#obj-$(CONFIG_SND_SOC_CODEC_HISSC)  += snd-soc-hissc.o
+
 # Amp
 obj-$(CONFIG_SND_SOC_DIO2125)	+= snd-soc-dio2125.o
 obj-$(CONFIG_SND_SOC_MAX9877)	+= snd-soc-max9877.o
 obj-$(CONFIG_SND_SOC_MAX98504)	+= snd-soc-max98504.o
 obj-$(CONFIG_SND_SOC_TPA6130A2)	+= snd-soc-tpa6130a2.o
+obj-$(CONFIG_SND_SOC_DA_COMBINE_V3)    += hisi/da_combine_v3/
+obj-$(CONFIG_SND_SOC_DA_COMBINE_V5)	+= hisi/da_combine_v5/
+obj-$(CONFIG_SND_SOC_CODEC_DA_SEPARATE_V2)	+= hisi/da_separate/da_separate_v2/
+obj-$(CONFIG_HDMI_K3)           += snd-soc-hdmi-audio.o
+ccflags-y  += -Idrivers/devkit/audiokit/
+obj-$(CONFIG_SND_SOC_DP_AUDIO)    += snd-soc-dp-audio.o
+
+obj-$(CONFIG_SND_SOC_AU_PA) += hisi/au_pa/
+
+
+
+obj-y += hisi/adapter/asoc_adapter.o
+obj-$(CONFIG_SND_SOC_HICODEC_DEBUG) += hisi/hicodec_debug.o
+obj-$(CONFIG_SND_SOC_ASP_CODEC) += hisi/asp_codec/
+obj-$(CONFIG_SND_SOC) += hisi/da_separate/

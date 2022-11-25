@@ -107,6 +107,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #endif
+#include <linux/rcupdate.h>
 
 #ifdef CONFIG_IP_MULTICAST
 /* Parameter names and values are taken from igmp-v2-06 draft */
@@ -1202,8 +1203,8 @@ static void igmpv3_del_delrec(struct in_device *in_dev, struct ip_mc_list *im)
 		im->interface = pmc->interface;
 		im->crcount = in_dev->mr_qrv ?: net->ipv4.sysctl_igmp_qrv;
 		if (im->sfmode == MCAST_INCLUDE) {
-			im->tomb = pmc->tomb;
-			im->sources = pmc->sources;
+			swap(im->tomb, pmc->tomb);
+			swap(im->sources, pmc->sources);
 			for (psf = im->sources; psf; psf = psf->sf_next)
 				psf->sf_crcount = im->crcount;
 		}
@@ -1855,7 +1856,7 @@ static int ip_mc_del1_src(struct ip_mc_list *pmc, int sfmode,
 			rv = 1;
 		} else
 #endif
-			kfree(psf);
+			kfree_rcu(psf, rcu_head);
 	}
 	return rv;
 }

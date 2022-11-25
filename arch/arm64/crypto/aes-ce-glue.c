@@ -25,6 +25,22 @@ MODULE_LICENSE("GPL v2");
 asmlinkage void __aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 asmlinkage void __aes_arm64_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_encrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_encrypt ___aes_arm64_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_arm64_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_decrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_decrypt ___aes_arm64_decrypt
+#endif
+
 struct aes_block {
 	u8 b[AES_BLOCK_SIZE];
 };
@@ -35,6 +51,40 @@ asmlinkage void __aes_ce_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 asmlinkage u32 __aes_ce_sub(u32 l);
 asmlinkage void __aes_ce_invert(struct aes_block *out,
 				const struct aes_block *in);
+
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_ce_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_ce_encrypt(rk, out, in, rounds);
+}
+#define __aes_ce_encrypt ___aes_ce_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_ce_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_ce_decrypt(rk, out, in, rounds);
+}
+#define __aes_ce_decrypt ___aes_ce_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline u32 ___aes_ce_sub(u32 l)
+{
+	return __aes_ce_sub(l);
+}
+#define __aes_ce_sub ___aes_ce_sub
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_ce_invert(struct aes_block *out,
+				const struct aes_block *in)
+{
+	__aes_ce_invert(out, in);
+}
+#define __aes_ce_invert ___aes_ce_invert
+#endif
+
 
 static int num_rounds(struct crypto_aes_ctx *ctx)
 {

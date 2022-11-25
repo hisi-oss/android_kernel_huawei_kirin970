@@ -23,7 +23,6 @@
 #include <media/videobuf2-vmalloc.h>
 
 #include "vimc-common.h"
-#include "vimc-streamer.h"
 
 #define VIMC_CAP_DRV_NAME "vimc-capture"
 
@@ -44,7 +43,7 @@ struct vimc_cap_device {
 	spinlock_t qlock;
 	struct mutex lock;
 	u32 sequence;
-	struct vimc_stream stream;
+	struct media_pipeline pipe;
 };
 
 static const struct v4l2_pix_format fmt_default = {
@@ -248,13 +247,14 @@ static int vimc_cap_start_streaming(struct vb2_queue *vq, unsigned int count)
 	vcap->sequence = 0;
 
 	/* Start the media pipeline */
-	ret = media_pipeline_start(entity, &vcap->stream.pipe);
+	ret = media_pipeline_start(entity, &vcap->pipe);
 	if (ret) {
 		vimc_cap_return_all_buffers(vcap, VB2_BUF_STATE_QUEUED);
 		return ret;
 	}
 
-	ret = vimc_streamer_s_stream(&vcap->stream, &vcap->ved, 1);
+	/* Enable streaming from the pipe */
+	ret = vimc_pipeline_s_stream(&vcap->vdev.entity, 1);
 	if (ret) {
 		media_pipeline_stop(entity);
 		vimc_cap_return_all_buffers(vcap, VB2_BUF_STATE_QUEUED);
@@ -272,7 +272,8 @@ static void vimc_cap_stop_streaming(struct vb2_queue *vq)
 {
 	struct vimc_cap_device *vcap = vb2_get_drv_priv(vq);
 
-	vimc_streamer_s_stream(&vcap->stream, &vcap->ved, 0);
+	/* Disable streaming from the pipe */
+	vimc_pipeline_s_stream(&vcap->vdev.entity, 0);
 
 	/* Stop the media pipeline */
 	media_pipeline_stop(&vcap->vdev.entity);
@@ -353,8 +354,8 @@ static void vimc_cap_comp_unbind(struct device *comp, struct device *master,
 	kfree(vcap);
 }
 
-static void *vimc_cap_process_frame(struct vimc_ent_device *ved,
-				    const void *frame)
+static void vimc_cap_process_frame(struct vimc_ent_device *ved,
+				   struct media_pad *sink, const void *frame)
 {
 	struct vimc_cap_device *vcap = container_of(ved, struct vimc_cap_device,
 						    ved);
@@ -368,7 +369,7 @@ static void *vimc_cap_process_frame(struct vimc_ent_device *ved,
 					    typeof(*vimc_buf), list);
 	if (!vimc_buf) {
 		spin_unlock(&vcap->qlock);
-		return ERR_PTR(-EAGAIN);
+		return;
 	}
 
 	/* Remove this entry from the list */
@@ -389,7 +390,6 @@ static void *vimc_cap_process_frame(struct vimc_ent_device *ved,
 	vb2_set_plane_payload(&vimc_buf->vb2.vb2_buf, 0,
 			      vcap->format.sizeimage);
 	vb2_buffer_done(&vimc_buf->vb2.vb2_buf, VB2_BUF_STATE_DONE);
-	return NULL;
 }
 
 static int vimc_cap_comp_bind(struct device *comp, struct device *master,

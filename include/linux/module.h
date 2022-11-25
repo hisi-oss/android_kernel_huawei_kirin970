@@ -46,7 +46,7 @@ struct module_kobject {
 	struct kobject *drivers_dir;
 	struct module_param_attrs *mp;
 	struct completion *kobj_completion;
-} __randomize_layout;
+};
 
 struct module_attribute {
 	struct attribute attr;
@@ -348,7 +348,14 @@ struct module {
 	unsigned int num_syms;
 
 #ifdef CONFIG_CFI_CLANG
+#ifdef CONFIG_HKIP_CFI_HARDEN
+	struct safe_cfi_area {
+		cfi_check_fn cfi_check;
+		struct module *owner;
+	} *safe_cfi_area;
+#else
 	cfi_check_fn cfi_check;
+#endif
 #endif
 
 	/* Kernel parameters. */
@@ -480,7 +487,7 @@ struct module {
 	ctor_fn_t *ctors;
 	unsigned int num_ctors;
 #endif
-} ____cacheline_aligned __randomize_layout;
+} ____cacheline_aligned ;
 #ifndef MODULE_ARCH_INIT
 #define MODULE_ARCH_INIT {}
 #endif
@@ -523,6 +530,7 @@ static inline bool within_module(unsigned long addr, const struct module *mod)
 
 /* Search for module by name: must hold module_mutex. */
 struct module *find_module(const char *name);
+struct module *find_hisi_module(const char *name, size_t len);
 
 struct symsearch {
 	const struct kernel_symbol *start, *stop;
@@ -676,6 +684,23 @@ static inline bool is_module_text_address(unsigned long addr)
 	return false;
 }
 
+static inline bool within_module_core(unsigned long addr,
+				      const struct module *mod)
+{
+	return false;
+}
+
+static inline bool within_module_init(unsigned long addr,
+				      const struct module *mod)
+{
+	return false;
+}
+
+static inline bool within_module(unsigned long addr, const struct module *mod)
+{
+	return false;
+}
+
 /* Get/put a kernel symbol (calls should be symmetric) */
 #define symbol_get(x) ({ extern typeof(x) x __attribute__((weak)); &(x); })
 #define symbol_put(x) do { } while (0)
@@ -799,7 +824,7 @@ static inline void module_bug_finalize(const Elf_Ehdr *hdr,
 static inline void module_bug_cleanup(struct module *mod) {}
 #endif	/* CONFIG_GENERIC_BUG */
 
-#ifdef CONFIG_RETPOLINE
+#ifdef RETPOLINE
 extern bool retpoline_module_ok(bool has_retpoline);
 #else
 static inline bool retpoline_module_ok(bool has_retpoline)

@@ -72,6 +72,10 @@ enum hrtimer_restart {
 #define HRTIMER_STATE_INACTIVE	0x00
 #define HRTIMER_STATE_ENQUEUED	0x01
 
+#ifdef CONFIG_CPU_ISOLATION_OPT
+#define HRTIMER_STATE_PINNED	0x02
+#endif
+
 /**
  * struct hrtimer - the basic hrtimer structure
  * @node:	timerqueue node, which also manages node.expires,
@@ -87,6 +91,10 @@ enum hrtimer_restart {
  * @base:	pointer to the timer base (per cpu and per clock)
  * @state:	state information (See bit values above)
  * @is_rel:	Set if the timer was armed relative
+ * @pid:  timer statistics field to store the pid of the task which
+ *		started the timer
+ * @comm: timer statistics field to store the name of the process which
+ *		started the timer
  *
  * The hrtimer structure must be initialized by hrtimer_init()
  */
@@ -97,6 +105,11 @@ struct hrtimer {
 	struct hrtimer_clock_base	*base;
 	u8				state;
 	u8				is_rel;
+#ifdef CONFIG_HUAWEI_DUBAI
+/* Referenced to timer_stats.c(CONFIG_TIMER_STATS) in linux-4.4/4.9*/
+	int				pid;
+	char				comm[16];
+#endif
 };
 
 /**
@@ -340,6 +353,13 @@ DECLARE_PER_CPU(struct tick_device, tick_cpu_device);
 
 
 /* Exported timer functions: */
+
+#ifdef CONFIG_CPU_ISOLATION_OPT
+/* To be used from cpusets, only */
+extern void hrtimer_quiesce_cpu(void *cpup);
+#else
+static inline void hrtimer_quiesce_cpu(void *cpup) {}
+#endif
 
 /* Initialize timers: */
 extern void hrtimer_init(struct hrtimer *timer, clockid_t which_clock,

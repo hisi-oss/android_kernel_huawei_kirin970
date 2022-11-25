@@ -24,8 +24,6 @@
 #include <linux/cdev.h>
 #include <linux/wait.h>
 
-#include <linux/nospec.h>
-
 MODULE_DESCRIPTION("Microsemi Switchtec(tm) PCIe Management Driver");
 MODULE_VERSION("0.1");
 MODULE_LICENSE("GPL");
@@ -1064,7 +1062,6 @@ static int ioctl_event_ctl(struct switchtec_dev *stdev,
 {
 	int ret;
 	int nr_idxs;
-	unsigned int event_flags;
 	struct switchtec_ioctl_event_ctl ctl;
 
 	if (copy_from_user(&ctl, uctl, sizeof(ctl)))
@@ -1086,9 +1083,7 @@ static int ioctl_event_ctl(struct switchtec_dev *stdev,
 		else
 			return -EINVAL;
 
-		event_flags = ctl.flags;
 		for (ctl.index = 0; ctl.index < nr_idxs; ctl.index++) {
-			ctl.flags = event_flags;
 			ret = event_ctl(stdev, &ctl);
 			if (ret < 0)
 				return ret;
@@ -1178,8 +1173,6 @@ static int ioctl_port_to_pff(struct switchtec_dev *stdev,
 	default:
 		if (p.port > ARRAY_SIZE(pcfg->dsp_pff_inst_id))
 			return -EINVAL;
-		p.port = array_index_nospec(p.port,
-					ARRAY_SIZE(pcfg->dsp_pff_inst_id) + 1);
 		p.pff = ioread32(&pcfg->dsp_pff_inst_id[p.port - 1]);
 		break;
 	}

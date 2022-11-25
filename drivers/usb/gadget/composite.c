@@ -440,12 +440,14 @@ static u8 encode_bMaxPower(enum usb_device_speed speed,
 		val = CONFIG_USB_GADGET_VBUS_DRAW;
 	if (!val)
 		return 0;
-	switch (speed) {
-	case USB_SPEED_SUPER:
-		return DIV_ROUND_UP(val, 8);
-	default:
-		return DIV_ROUND_UP(val, 2);
-	}
+	if (speed < USB_SPEED_SUPER)
+		return min(val, 500U) / 2;
+	else
+		/*
+		 * USB 3.x supports up to 900mA, but since 900 isn't divisible
+		 * by 8 the integral division will effectively cap to 896mA.
+		 */
+		return min(val, 900U) / 8;
 }
 
 static int config_buf(struct usb_configuration *config,
@@ -709,7 +711,7 @@ static int bos_desc(struct usb_composite_dev *cdev)
 		 *   LP  =  1 (SuperSpeedPlus)
 		 *   LSM = 10 (10 Gbps)
 		 */
-		ssp_cap->bmSublinkSpeedAttr[1] =
+		ssp_cap->bmSublinkSpeedAttr[1] = /*[false alarm]:it is a false alarm*/
 			cpu_to_le32((3 << 4) | (1 << 14) |
 				    (0xa << 16) | (1 << 7));
 	}
@@ -843,6 +845,10 @@ static int set_config(struct usb_composite_dev *cdev,
 
 	/* when we return, be sure our power usage is valid */
 	power = c->MaxPower ? c->MaxPower : CONFIG_USB_GADGET_VBUS_DRAW;
+	if (gadget->speed < USB_SPEED_SUPER)
+		power = min(power, 500U);
+	else
+		power = min(power, 900U);
 done:
 	usb_gadget_vbus_draw(gadget, power);
 	if (result >= 0 && cdev->delayed_status)
@@ -970,7 +976,6 @@ static void remove_config(struct usb_composite_dev *cdev,
 
 		usb_remove_function(config, f);
 	}
-	list_del(&config->list);
 	if (config->unbind) {
 		DBG(cdev, "unbind config '%s'/%p\n", config->label, config);
 		config->unbind(config);
@@ -996,6 +1001,9 @@ void usb_remove_config(struct usb_composite_dev *cdev,
 
 	if (cdev->config == config)
 		reset_config(cdev);
+
+	if (!list_empty(&cdev->configs))
+		list_del(&config->list);
 
 	spin_unlock_irqrestore(&cdev->lock, flags);
 
@@ -1380,7 +1388,7 @@ static void composite_setup_complete(struct usb_ep *ep, struct usb_request *req)
 	else if (cdev->os_desc_req == req)
 		cdev->os_desc_pending = false;
 	else
-		WARN(1, "unknown request %p\n", req);
+		WARN(1, "unknown request %pK\n", req);
 }
 
 static int composite_ep0_queue(struct usb_composite_dev *cdev,
@@ -1395,7 +1403,7 @@ static int composite_ep0_queue(struct usb_composite_dev *cdev,
 		else if (cdev->os_desc_req == req)
 			cdev->os_desc_pending = true;
 		else
-			WARN(1, "unknown request %p\n", req);
+			WARN(1, "unknown request %pK\n", req);
 	}
 
 	return ret;
@@ -1822,7 +1830,7 @@ unknown:
 		    ctrl->bRequest == cdev->b_vendor_code) {
 			struct usb_request		*req;
 			struct usb_configuration	*os_desc_cfg;
-			u8				*buf;
+			u8				*buf = NULL;
 			int				interface;
 			int				count = 0;
 
@@ -2004,7 +2012,7 @@ void composite_disconnect(struct usb_gadget *gadget)
 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
 	unsigned long			flags;
 
-	if (cdev == NULL) {
+	if (!cdev) {
 		WARN(1, "%s: Calling disconnect on a Gadget that is \
 			 not connected\n", __func__);
 		return;
@@ -2014,6 +2022,7 @@ void composite_disconnect(struct usb_gadget *gadget)
 	 * disconnect callbacks?
 	 */
 	spin_lock_irqsave(&cdev->lock, flags);
+	cdev->suspended = 0;
 	if (cdev->config)
 		reset_config(cdev);
 	if (cdev->driver->disconnect)
@@ -2050,6 +2059,7 @@ static void __composite_unbind(struct usb_gadget *gadget, bool unbind_driver)
 		struct usb_configuration	*c;
 		c = list_first_entry(&cdev->configs,
 				struct usb_configuration, list);
+		list_del(&c->list);
 		remove_config(cdev, c);
 	}
 	if (cdev->driver->unbind && unbind_driver)
@@ -2192,14 +2202,18 @@ void composite_dev_cleanup(struct usb_composite_dev *cdev)
 			usb_ep_dequeue(cdev->gadget->ep0, cdev->os_desc_req);
 
 		kfree(cdev->os_desc_req->buf);
+		cdev->os_desc_req->buf = NULL;
 		usb_ep_free_request(cdev->gadget->ep0, cdev->os_desc_req);
+		cdev->os_desc_req = NULL;
 	}
 	if (cdev->req) {
 		if (cdev->setup_pending)
 			usb_ep_dequeue(cdev->gadget->ep0, cdev->req);
 
 		kfree(cdev->req->buf);
+		cdev->req->buf = NULL;
 		usb_ep_free_request(cdev->gadget->ep0, cdev->req);
+		cdev->req = NULL;
 	}
 	cdev->next_string_id = 0;
 	device_remove_file(&cdev->gadget->dev, &dev_attr_suspended);
@@ -2283,7 +2297,7 @@ void composite_resume(struct usb_gadget *gadget)
 {
 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
 	struct usb_function		*f;
-	u16				maxpower;
+	unsigned			maxpower;
 
 	/* REVISIT:  should we have config level
 	 * suspend/resume callbacks?
@@ -2297,10 +2311,14 @@ void composite_resume(struct usb_gadget *gadget)
 				f->resume(f);
 		}
 
-		maxpower = cdev->config->MaxPower;
+		maxpower = cdev->config->MaxPower ?
+			cdev->config->MaxPower : CONFIG_USB_GADGET_VBUS_DRAW;
+		if (gadget->speed < USB_SPEED_SUPER)
+			maxpower = min(maxpower, 500U);
+		else
+			maxpower = min(maxpower, 900U);
 
-		usb_gadget_vbus_draw(gadget, maxpower ?
-			maxpower : CONFIG_USB_GADGET_VBUS_DRAW);
+		usb_gadget_vbus_draw(gadget, maxpower);
 	}
 
 	cdev->suspended = 0;

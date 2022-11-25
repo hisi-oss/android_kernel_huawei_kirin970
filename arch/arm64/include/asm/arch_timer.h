@@ -144,6 +144,7 @@ static inline u32 arch_timer_get_cntkctl(void)
 static inline void arch_timer_set_cntkctl(u32 cntkctl)
 {
 	write_sysreg(cntkctl, cntkctl_el1);
+	isb();
 }
 
 static inline u64 arch_counter_get_cntpct(void)
@@ -155,11 +156,32 @@ static inline u64 arch_counter_get_cntpct(void)
 	return 0;
 }
 
+#ifdef CONFIG_ARM64_ERRATUM_858921
+
+static inline u64 arch_counter_get_cntvct(void)
+{
+	u64 cval;
+	u64 cval2;
+
+	isb();
+
+	do {
+		asm volatile("mrs %0, cntvct_el0" : "=r" (cval));
+		asm volatile("mrs %0, cntvct_el0" : "=r" (cval2));
+	} while(cval >> 32 != cval2 >> 32);
+
+	return cval2;
+}
+
+#else
+
 static inline u64 arch_counter_get_cntvct(void)
 {
 	isb();
 	return arch_timer_reg_read_stable(cntvct_el0);
 }
+
+#endif
 
 static inline int arch_timer_arch_init(void)
 {

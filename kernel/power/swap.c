@@ -649,9 +649,23 @@ static int lzo_compress_threadfn(void *data)
 		}
 		atomic_set(&d->ready, 0);
 
+		/*
+		 * make sure the data need to be cropressed
+		 * is flush complete into memory
+		 * before wake up the compress thread.
+		 */
+		mb();
+
 		d->ret = lzo1x_1_compress(d->unc, d->unc_len,
 		                          d->cmp + LZO_HEADER, &d->cmp_len,
 		                          d->wrk);
+
+		/*
+		 * make sure the data need to be wrote into disk
+		 * is flush complete into memory
+		 */
+		mb();
+
 		atomic_set(&d->stop, 1);
 		wake_up(&d->done);
 	}
@@ -793,6 +807,11 @@ static int save_image_lzo(struct swap_map_handle *handle,
 				break;
 
 			data[thr].unc_len = off;
+			/*
+			 * make sure the data need to be compressed
+			 * is flush complete to the compress thread
+			 */
+			mb();
 
 			atomic_set(&data[thr].ready, 1);
 			wake_up(&data[thr].go);
@@ -809,6 +828,11 @@ static int save_image_lzo(struct swap_map_handle *handle,
 			wait_event(data[thr].done,
 			           atomic_read(&data[thr].stop));
 			atomic_set(&data[thr].stop, 0);
+			/*
+			 * make sure the data need to be wrote into disk
+			 * is flush complete from compress thread
+			 */
+			mb();
 
 			ret = data[thr].ret;
 

@@ -163,6 +163,10 @@ static ssize_t max_link_speed_show(struct device *dev,
 	int err;
 	const char *speed;
 
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
+
 	err = pcie_capability_read_dword(pci_dev, PCI_EXP_LNKCAP, &linkcap);
 	if (err)
 		return -EINVAL;
@@ -192,6 +196,9 @@ static ssize_t max_link_width_show(struct device *dev,
 	u32 linkcap;
 	int err;
 
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
 	err = pcie_capability_read_dword(pci_dev, PCI_EXP_LNKCAP, &linkcap);
 	if (err)
 		return -EINVAL;
@@ -207,6 +214,10 @@ static ssize_t current_link_speed_show(struct device *dev,
 	u16 linkstat;
 	int err;
 	const char *speed;
+
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
 
 	err = pcie_capability_read_word(pci_dev, PCI_EXP_LNKSTA, &linkstat);
 	if (err)
@@ -237,6 +248,10 @@ static ssize_t current_link_width_show(struct device *dev,
 	u16 linkstat;
 	int err;
 
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
+
 	err = pcie_capability_read_word(pci_dev, PCI_EXP_LNKSTA, &linkstat);
 	if (err)
 		return -EINVAL;
@@ -254,6 +269,10 @@ static ssize_t secondary_bus_number_show(struct device *dev,
 	u8 sec_bus;
 	int err;
 
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
+
 	err = pci_read_config_byte(pci_dev, PCI_SECONDARY_BUS, &sec_bus);
 	if (err)
 		return -EINVAL;
@@ -269,6 +288,10 @@ static ssize_t subordinate_bus_number_show(struct device *dev,
 	struct pci_dev *pci_dev = to_pci_dev(dev);
 	u8 sub_bus;
 	int err;
+
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
 
 	err = pci_read_config_byte(pci_dev, PCI_SUBORDINATE_BUS, &sub_bus);
 	if (err)
@@ -496,7 +519,7 @@ static ssize_t remove_store(struct device *dev, struct device_attribute *attr,
 		pci_stop_and_remove_bus_device_locked(to_pci_dev(dev));
 	return count;
 }
-static struct device_attribute dev_remove_attr = __ATTR(remove,
+static struct device_attribute dev_remove_attr = __ATTR_IGNORE_LOCKDEP(remove,
 							(S_IWUSR|S_IWGRP),
 							NULL, remove_store);
 
@@ -726,7 +749,7 @@ static ssize_t driver_override_show(struct device *dev,
 	ssize_t len;
 
 	device_lock(dev);
-	len = snprintf(buf, PAGE_SIZE, "%s\n", pdev->driver_override);
+	len = sprintf(buf, "%s\n", pdev->driver_override);
 	device_unlock(dev);
 	return len;
 }
@@ -816,6 +839,9 @@ static ssize_t pci_read_config(struct file *filp, struct kobject *kobj,
 	loff_t init_off = off;
 	u8 *data = (u8 *) buf;
 
+#ifdef CONFIG_PCIE_KPORT_PC
+	int tem = 0;
+#endif
 	/* Several chips lock up trying to read undefined config space */
 	if (file_ns_capable(filp, &init_user_ns, CAP_SYS_ADMIN))
 		size = dev->cfg_size;
@@ -834,25 +860,34 @@ static ssize_t pci_read_config(struct file *filp, struct kobject *kobj,
 	pci_config_pm_runtime_get(dev);
 
 	if ((off & 1) && size) {
+#ifndef CONFIG_PCIE_KPORT_PC
 		u8 val;
 		pci_user_read_config_byte(dev, off, &val);
 		data[off - init_off] = val;
 		off++;
 		size--;
+#endif
 	}
 
 	if ((off & 3) && size > 2) {
+#ifndef CONFIG_PCIE_KPORT_PC
 		u16 val;
 		pci_user_read_config_word(dev, off, &val);
 		data[off - init_off] = val & 0xff;
 		data[off - init_off + 1] = (val >> 8) & 0xff;
 		off += 2;
 		size -= 2;
+#endif
 	}
 
 	while (size > 3) {
 		u32 val;
+#ifdef CONFIG_PCIE_KPORT_PC
+		val = dev->saved_config_space[tem];
+		tem += 1;
+#else
 		pci_user_read_config_dword(dev, off, &val);
+#endif
 		data[off - init_off] = val & 0xff;
 		data[off - init_off + 1] = (val >> 8) & 0xff;
 		data[off - init_off + 2] = (val >> 16) & 0xff;
@@ -862,20 +897,24 @@ static ssize_t pci_read_config(struct file *filp, struct kobject *kobj,
 	}
 
 	if (size >= 2) {
+#ifndef CONFIG_PCIE_KPORT_PC
 		u16 val;
 		pci_user_read_config_word(dev, off, &val);
 		data[off - init_off] = val & 0xff;
 		data[off - init_off + 1] = (val >> 8) & 0xff;
 		off += 2;
 		size -= 2;
+#endif
 	}
 
 	if (size > 0) {
+#ifndef CONFIG_PCIE_KPORT_PC
 		u8 val;
 		pci_user_read_config_byte(dev, off, &val);
 		data[off - init_off] = val;
 		off++;
 		--size;
+#endif
 	}
 
 	pci_config_pm_runtime_put(dev);
@@ -892,6 +931,9 @@ static ssize_t pci_write_config(struct file *filp, struct kobject *kobj,
 	loff_t init_off = off;
 	u8 *data = (u8 *) buf;
 
+#ifdef CONFIG_PCIE_KPORT_PC
+	return 0;
+#endif
 	if (off > dev->cfg_size)
 		return 0;
 	if (off + count > dev->cfg_size) {

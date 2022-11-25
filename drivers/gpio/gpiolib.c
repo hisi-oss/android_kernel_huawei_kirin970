@@ -33,6 +33,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/gpio.h>
 
+#ifdef CONFIG_GPIO_PL061
+#include "hisi_gpio.h"
+#endif
+
 /* Implementation infrastructure for GPIO interfaces.
  *
  * The GPIO programming interface allows for inlining speed-critical
@@ -169,15 +173,18 @@ EXPORT_SYMBOL_GPL(gpiod_to_chip);
 static int gpiochip_find_base(int ngpio)
 {
 	struct gpio_device *gdev;
-	int base = ARCH_NR_GPIOS - ngpio;
+	int base = 0;
 
 	list_for_each_entry_reverse(gdev, &gpio_devices, list) {
 		/* found a free space? */
 		if (gdev->base + gdev->ngpio <= base)
 			break;
-		else
+		else{
 			/* nope, check the space right before the chip */
-			base = gdev->base - ngpio;
+			base = gdev->base + ngpio;
+			if (base > ARCH_NR_GPIOS)
+				return -ENOSPC;
+		}
 	}
 
 	if (gpio_is_valid(base)) {
@@ -205,6 +212,14 @@ int gpiod_get_direction(struct gpio_desc *desc)
 
 	chip = gpiod_to_chip(desc);
 	offset = gpio_chip_hwgpio(desc);
+
+	/*
+	 * Open drain emulation using input mode may incorrectly report
+	 * input here, fix that up.
+	 */
+	if (test_bit(FLAG_OPEN_DRAIN, &desc->flags) &&
+	    test_bit(FLAG_IS_OUT, &desc->flags))
+		return 0;
 
 	if (!chip->get_direction)
 		return status;
@@ -444,10 +459,21 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 	struct linehandle_state *lh;
 	struct file *file;
 	int fd, i, count = 0, ret;
+	u32 lflags;
 
 	if (copy_from_user(&handlereq, ip, sizeof(handlereq)))
 		return -EFAULT;
 	if ((handlereq.lines == 0) || (handlereq.lines > GPIOHANDLES_MAX))
+		return -EINVAL;
+
+	lflags = handlereq.flags;
+
+	/*
+	 * Do not allow both INPUT & OUTPUT flags to be set as they are
+	 * contradictory.
+	 */
+	if ((lflags & GPIOHANDLE_REQUEST_INPUT) &&
+	    (lflags & GPIOHANDLE_REQUEST_OUTPUT))
 		return -EINVAL;
 
 	lh = kzalloc(sizeof(*lh), GFP_KERNEL);
@@ -470,7 +496,6 @@ static int linehandle_create(struct gpio_device *gdev, void __user *ip)
 	/* Request each GPIO */
 	for (i = 0; i < handlereq.lines; i++) {
 		u32 offset = handlereq.lineoffsets[i];
-		u32 lflags = handlereq.flags;
 		struct gpio_desc *desc;
 
 		if (offset >= gdev->ngpio) {
@@ -805,7 +830,9 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 	}
 
 	/* This is just wrong: we don't look for events on output lines */
-	if (lflags & GPIOHANDLE_REQUEST_OUTPUT) {
+	if ((lflags & GPIOHANDLE_REQUEST_OUTPUT) ||
+	    (lflags & GPIOHANDLE_REQUEST_OPEN_DRAIN) ||
+	    (lflags & GPIOHANDLE_REQUEST_OPEN_SOURCE)) {
 		ret = -EINVAL;
 		goto out_free_label;
 	}
@@ -819,10 +846,6 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 
 	if (lflags & GPIOHANDLE_REQUEST_ACTIVE_LOW)
 		set_bit(FLAG_ACTIVE_LOW, &desc->flags);
-	if (lflags & GPIOHANDLE_REQUEST_OPEN_DRAIN)
-		set_bit(FLAG_OPEN_DRAIN, &desc->flags);
-	if (lflags & GPIOHANDLE_REQUEST_OPEN_SOURCE)
-		set_bit(FLAG_OPEN_SOURCE, &desc->flags);
 
 	ret = gpiod_direction_input(desc);
 	if (ret)
@@ -835,9 +858,11 @@ static int lineevent_create(struct gpio_device *gdev, void __user *ip)
 	}
 
 	if (eflags & GPIOEVENT_REQUEST_RISING_EDGE)
-		irqflags |= IRQF_TRIGGER_RISING;
+		irqflags |= test_bit(FLAG_ACTIVE_LOW, &desc->flags) ?
+			IRQF_TRIGGER_FALLING : IRQF_TRIGGER_RISING;
 	if (eflags & GPIOEVENT_REQUEST_FALLING_EDGE)
-		irqflags |= IRQF_TRIGGER_FALLING;
+		irqflags |= test_bit(FLAG_ACTIVE_LOW, &desc->flags) ?
+			IRQF_TRIGGER_RISING : IRQF_TRIGGER_FALLING;
 	irqflags |= IRQF_ONESHOT;
 	irqflags |= IRQF_SHARED;
 
@@ -969,9 +994,11 @@ static long gpio_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (test_bit(FLAG_ACTIVE_LOW, &desc->flags))
 			lineinfo.flags |= GPIOLINE_FLAG_ACTIVE_LOW;
 		if (test_bit(FLAG_OPEN_DRAIN, &desc->flags))
-			lineinfo.flags |= GPIOLINE_FLAG_OPEN_DRAIN;
+			lineinfo.flags |= (GPIOLINE_FLAG_OPEN_DRAIN |
+					   GPIOLINE_FLAG_IS_OUT);
 		if (test_bit(FLAG_OPEN_SOURCE, &desc->flags))
-			lineinfo.flags |= GPIOLINE_FLAG_OPEN_SOURCE;
+			lineinfo.flags |= (GPIOLINE_FLAG_OPEN_SOURCE |
+					   GPIOLINE_FLAG_IS_OUT);
 
 		if (copy_to_user(ip, &lineinfo, sizeof(lineinfo)))
 			return -EFAULT;
@@ -1166,7 +1193,7 @@ int gpiochip_add_data(struct gpio_chip *chip, void *data)
 	gdev->descs = kcalloc(chip->ngpio, sizeof(gdev->descs[0]), GFP_KERNEL);
 	if (!gdev->descs) {
 		status = -ENOMEM;
-		goto err_free_ida;
+		goto err_free_gdev;
 	}
 
 	if (chip->ngpio == 0) {
@@ -1298,9 +1325,8 @@ err_free_label:
 	kfree(gdev->label);
 err_free_descs:
 	kfree(gdev->descs);
-err_free_ida:
-	ida_simple_remove(&gpio_ida, gdev->id);
 err_free_gdev:
+	ida_simple_remove(&gpio_ida, gdev->id);
 	/* failures here can mean systems won't boot... */
 	pr_err("%s: GPIOs %d..%d (%s) failed to register\n", __func__,
 	       gdev->base, gdev->base + gdev->ngpio - 1,
@@ -1857,6 +1883,15 @@ static inline void gpiochip_irqchip_free_valid_mask(struct gpio_chip *gpiochip)
 
 #endif /* CONFIG_GPIOLIB_IRQCHIP */
 
+int gpiochip_hi6502_request(struct gpio_chip *chip, unsigned int offset)
+{
+	return pinctrl_request_gpio(chip->gpiodev->base + offset);
+}
+
+void gpiochip_hi6502_free(struct gpio_chip *chip, unsigned int offset)
+{
+	pinctrl_free_gpio(chip->gpiodev->base + offset);
+}
 /**
  * gpiochip_generic_request() - request the gpio function for a pin
  * @chip: the gpiochip owning the GPIO
@@ -1864,6 +1899,11 @@ static inline void gpiochip_irqchip_free_valid_mask(struct gpio_chip *gpiochip)
  */
 int gpiochip_generic_request(struct gpio_chip *chip, unsigned offset)
 {
+#ifdef CONFIG_GPIO_PL061
+	struct pl061 *gc = container_of(chip, struct pl061, gc);
+	if (pl061_check_security_status(gc))
+		return -EBUSY;
+#endif
 	return pinctrl_request_gpio(chip->gpiodev->base + offset);
 }
 EXPORT_SYMBOL_GPL(gpiochip_generic_request);
@@ -1875,6 +1915,11 @@ EXPORT_SYMBOL_GPL(gpiochip_generic_request);
  */
 void gpiochip_generic_free(struct gpio_chip *chip, unsigned offset)
 {
+#ifdef CONFIG_GPIO_PL061
+	struct pl061 *gc = container_of(chip, struct pl061, gc);
+	if (pl061_check_security_status(gc))
+		return;
+#endif
 	pinctrl_free_gpio(chip->gpiodev->base + offset);
 }
 EXPORT_SYMBOL_GPL(gpiochip_generic_free);
@@ -2296,6 +2341,12 @@ static int gpio_set_drive_single_ended(struct gpio_chip *gc, unsigned offset,
 	return gc->set_config ? gc->set_config(gc, offset, config) : -ENOTSUPP;
 }
 
+int gpio_direction_input(unsigned gpio)
+{
+	return gpiod_direction_input(gpio_to_desc(gpio));
+}
+EXPORT_SYMBOL_GPL(gpio_direction_input);
+
 static int _gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 {
 	struct gpio_chip *gc = desc->gdev->chip;
@@ -2317,8 +2368,10 @@ static int _gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 		if (!ret)
 			goto set_output_value;
 		/* Emulate open drain by not actively driving the line high */
-		if (val)
-			return gpiod_direction_input(desc);
+		if (val) {
+			ret = gpiod_direction_input(desc);
+			goto set_output_flag;
+		}
 	}
 	else if (test_bit(FLAG_OPEN_SOURCE, &desc->flags)) {
 		ret = gpio_set_drive_single_ended(gc, gpio_chip_hwgpio(desc),
@@ -2326,8 +2379,10 @@ static int _gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 		if (!ret)
 			goto set_output_value;
 		/* Emulate open source by not actively driving the line low */
-		if (!val)
-			return gpiod_direction_input(desc);
+		if (!val) {
+			ret = gpiod_direction_input(desc);
+			goto set_output_flag;
+		}
 	} else {
 		gpio_set_drive_single_ended(gc, gpio_chip_hwgpio(desc),
 					    PIN_CONFIG_DRIVE_PUSH_PULL);
@@ -2346,6 +2401,17 @@ set_output_value:
 		set_bit(FLAG_IS_OUT, &desc->flags);
 	trace_gpio_value(desc_to_gpio(desc), 0, val);
 	trace_gpio_direction(desc_to_gpio(desc), 0, ret);
+	return ret;
+
+set_output_flag:
+	/*
+	 * When emulating open-source or open-drain functionalities by not
+	 * actively driving the line (setting mode to input) we still need to
+	 * set the IS_OUT flag or otherwise we won't be able to set the line
+	 * value anymore.
+	 */
+	if (ret == 0)
+		set_bit(FLAG_IS_OUT, &desc->flags);
 	return ret;
 }
 
@@ -2366,6 +2432,11 @@ int gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 	return _gpiod_direction_output_raw(desc, value);
 }
 EXPORT_SYMBOL_GPL(gpiod_direction_output_raw);
+int gpio_direction_output(unsigned gpio, int value)
+{
+	return gpiod_direction_output_raw(gpio_to_desc(gpio), value);
+}
+EXPORT_SYMBOL_GPL(gpio_direction_output);
 
 /**
  * gpiod_direction_output - set the GPIO direction to output
@@ -2480,7 +2551,7 @@ static int _gpiod_get_raw_value(const struct gpio_desc *desc)
 int gpiod_get_raw_value(const struct gpio_desc *desc)
 {
 	VALIDATE_DESC(desc);
-	/* Should be using gpio_get_value_cansleep() */
+	/* Should be using gpiod_get_raw_value_cansleep() */
 	WARN_ON(desc->gdev->chip->can_sleep);
 	return _gpiod_get_raw_value(desc);
 }
@@ -2501,7 +2572,7 @@ int gpiod_get_value(const struct gpio_desc *desc)
 	int value;
 
 	VALIDATE_DESC(desc);
-	/* Should be using gpio_get_value_cansleep() */
+	/* Should be using gpiod_get_value_cansleep() */
 	WARN_ON(desc->gdev->chip->can_sleep);
 
 	value = _gpiod_get_raw_value(desc);
@@ -2528,8 +2599,6 @@ static void _gpio_set_open_drain_value(struct gpio_desc *desc, bool value)
 
 	if (value) {
 		err = chip->direction_input(chip, offset);
-		if (!err)
-			clear_bit(FLAG_IS_OUT, &desc->flags);
 	} else {
 		err = chip->direction_output(chip, offset, 0);
 		if (!err)
@@ -2559,8 +2628,6 @@ static void _gpio_set_open_source_value(struct gpio_desc *desc, bool value)
 			set_bit(FLAG_IS_OUT, &desc->flags);
 	} else {
 		err = chip->direction_input(chip, offset);
-		if (!err)
-			clear_bit(FLAG_IS_OUT, &desc->flags);
 	}
 	trace_gpio_direction(desc_to_gpio(desc), !value, err);
 	if (err < 0)
@@ -2670,7 +2737,7 @@ void gpiod_set_array_value_complex(bool raw, bool can_sleep,
 void gpiod_set_raw_value(struct gpio_desc *desc, int value)
 {
 	VALIDATE_DESC_VOID(desc);
-	/* Should be using gpiod_set_value_cansleep() */
+	/* Should be using gpiod_set_raw_value_cansleep() */
 	WARN_ON(desc->gdev->chip->can_sleep);
 	_gpiod_set_raw_value(desc, value);
 }

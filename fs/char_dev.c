@@ -159,6 +159,12 @@ __register_chrdev_region(unsigned int major, unsigned int baseminor,
 			ret = -EBUSY;
 			goto out;
 		}
+
+		if (new_min < old_min && new_max > old_max) {
+			ret = -EBUSY;
+			goto out;
+		}
+
 	}
 
 	cd->next = *cp;
@@ -355,7 +361,7 @@ static struct kobject *cdev_get(struct cdev *p)
 
 	if (owner && !try_module_get(owner))
 		return NULL;
-	kobj = kobject_get(&p->kobj);
+	kobj = kobject_get_unless_zero(&p->kobj);
 	if (!kobj)
 		module_put(owner);
 	return kobj;
@@ -368,6 +374,18 @@ void cdev_put(struct cdev *p)
 		kobject_put(&p->kobj);
 		module_put(owner);
 	}
+}
+
+static bool cdev_tryget(struct cdev *cdev)
+{
+	if (!kobject_get_unless_zero(&cdev->kobj))
+		return false;
+
+	if (try_module_get(cdev->owner))
+		return true;
+
+	kobject_put(&cdev->kobj);
+	return false;
 }
 
 /*
@@ -398,9 +416,9 @@ static int chrdev_open(struct inode *inode, struct file *filp)
 			inode->i_cdev = p = new;
 			list_add(&inode->i_devices, &p->list);
 			new = NULL;
-		} else if (!cdev_get(p))
+		} else if (!cdev_tryget(p))
 			ret = -ENXIO;
-	} else if (!cdev_get(p))
+	} else if (!cdev_tryget(p))
 		ret = -ENXIO;
 	spin_unlock(&cdev_lock);
 	cdev_put(new);

@@ -29,11 +29,31 @@ MODULE_ALIAS_CRYPTO("sha256");
 
 asmlinkage void sha256_block_data_order(u32 *digest, const void *data,
 					unsigned int num_blks);
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __sha256_block_data_order(struct sha256_state *digest,
+					     const u8 *data, int num_blks)
+{
+	sha256_block_data_order((u32 *)digest, (const void *)data,
+		(unsigned int)num_blks);
+}
+#define sha256_block_data_order __sha256_block_data_order
+#endif
 EXPORT_SYMBOL(sha256_block_data_order);
+
 
 asmlinkage void sha256_block_neon(u32 *digest, const void *data,
 				  unsigned int num_blks);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __sha256_block_neon(struct sha256_state *digest,
+				       const u8 *data, int num_blks)
+{
+	sha256_block_neon((u32 *)digest, (const void *)data,
+		(unsigned int)num_blks);
+}
+#define sha256_block_neon  __sha256_block_neon
+#endif
 static int sha256_update(struct shash_desc *desc, const u8 *data,
 			 unsigned int len)
 {

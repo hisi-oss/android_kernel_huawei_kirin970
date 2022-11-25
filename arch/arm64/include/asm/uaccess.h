@@ -34,14 +34,21 @@
 #include <asm/memory.h>
 #include <asm/compiler.h>
 #include <asm/extable.h>
-
+#include <linux/hisi/hkip.h>
 #define get_ds()	(KERNEL_DS)
+
+#ifndef CONFIG_HKIP_ADDR_LIMIT_PROTECTION
 #define get_fs()	(current_thread_info()->addr_limit)
+#else
+#define get_fs()	(mm_segment_t)hkip_get_fs()
+#endif
 
 static inline void set_fs(mm_segment_t fs)
 {
 	current_thread_info()->addr_limit = fs;
-
+#ifdef CONFIG_HKIP_ADDR_LIMIT_PROTECTION
+	hkip_set_fs(fs);
+#endif
 	/*
 	 * Prevent a mispredicted conditional call to set_fs from forwarding
 	 * the wrong address limit to access_ok under speculation.
@@ -74,7 +81,7 @@ static inline void set_fs(mm_segment_t fs)
  */
 static inline unsigned long __range_ok(unsigned long addr, unsigned long size)
 {
-	unsigned long limit = current_thread_info()->addr_limit;
+	unsigned long limit = get_fs();
 
 	__chk_user_ptr(addr);
 	asm volatile(
@@ -96,13 +103,6 @@ static inline unsigned long __range_ok(unsigned long addr, unsigned long size)
 
 	return addr;
 }
-
-/*
- * When dealing with data aborts, watchpoints, or instruction traps we may end
- * up with a tagged userland pointer. Clear the tag to get a sane pointer to
- * pass on to access_ok(), for instance.
- */
-#define untagged_addr(addr)		sign_extend64(addr, 55)
 
 #define access_ok(type, addr, size)	__range_ok((unsigned long)(addr), size)
 #define user_addr_max			get_fs
@@ -235,7 +235,7 @@ static inline void __user *__uaccess_mask_ptr(const void __user *ptr)
 	"	bics	xzr, %1, %2\n"
 	"	csel	%0, %1, xzr, eq\n"
 	: "=&r" (safe_ptr)
-	: "r" (ptr), "r" (current_thread_info()->addr_limit)
+	: "r" (ptr), "r" (get_fs())
 	: "cc");
 
 	csdb();
@@ -294,32 +294,27 @@ do {									\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;			\
 } while (0)
 
-#define __get_user_check(x, ptr, err)					\
+#define __get_user(x, ptr)						\
 ({									\
-	__typeof__(*(ptr)) __user *__p = (ptr);				\
-	might_fault();							\
-	if (access_ok(VERIFY_READ, __p, sizeof(*__p))) {		\
-		__p = uaccess_mask_ptr(__p);				\
-		__get_user_err((x), __p, (err));			\
-	} else {							\
-		(x) = 0; (err) = -EFAULT;				\
-	}								\
+	int __gu_err = 0;						\
+	__get_user_err((x), (ptr), __gu_err);				\
+	__gu_err;							\
 })
 
 #define __get_user_error(x, ptr, err)					\
 ({									\
-	__get_user_check((x), (ptr), (err));				\
+	__get_user_err((x), (ptr), (err));				\
 	(void)0;							\
 })
 
-#define __get_user(x, ptr)						\
+#define get_user(x, ptr)						\
 ({									\
-	int __gu_err = 0;						\
-	__get_user_check((x), (ptr), __gu_err);				\
-	__gu_err;							\
+	__typeof__(*(ptr)) __user *__p = (ptr);				\
+	might_fault();							\
+	access_ok(VERIFY_READ, __p, sizeof(*__p)) ?			\
+		__p = uaccess_mask_ptr(__p), __get_user((x), __p) :	\
+		((x) = 0, -EFAULT);					\
 })
-
-#define get_user	__get_user
 
 #define __put_user_asm(instr, alt_instr, reg, x, addr, err, feature)	\
 	asm volatile(							\
@@ -363,32 +358,28 @@ do {									\
 	uaccess_disable_not_uao();					\
 } while (0)
 
-#define __put_user_check(x, ptr, err)					\
+#define __put_user(x, ptr)						\
 ({									\
-	__typeof__(*(ptr)) __user *__p = (ptr);				\
-	might_fault();							\
-	if (access_ok(VERIFY_WRITE, __p, sizeof(*__p))) {		\
-		__p = uaccess_mask_ptr(__p);				\
-		__put_user_err((x), __p, (err));			\
-	} else	{							\
-		(err) = -EFAULT;					\
-	}								\
+	int __pu_err = 0;						\
+	__put_user_err((x), (ptr), __pu_err);				\
+	__pu_err;							\
 })
 
 #define __put_user_error(x, ptr, err)					\
 ({									\
-	__put_user_check((x), (ptr), (err));				\
+	__put_user_err((x), (ptr), (err));				\
 	(void)0;							\
 })
 
-#define __put_user(x, ptr)						\
-({									\
-	int __pu_err = 0;						\
-	__put_user_check((x), (ptr), __pu_err);				\
-	__pu_err;							\
-})
 
-#define put_user	__put_user
+#define put_user(x, ptr)						\
+({									\
+	__typeof__(*(ptr)) __user *__p = (ptr);				\
+	might_fault();							\
+	access_ok(VERIFY_WRITE, __p, sizeof(*__p)) ?			\
+		__p = uaccess_mask_ptr(__p), __put_user((x), __p) :	\
+		-EFAULT;						\
+})
 
 extern unsigned long __must_check __arch_copy_from_user(void *to, const void __user *from, unsigned long n);
 #define raw_copy_from_user(to, from, n)					\

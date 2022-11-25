@@ -5,6 +5,7 @@
 #include <linux/idr.h>
 #include <linux/blk-mq.h>
 #include "blk-mq.h"
+#include "blk-mq-sched.h"
 
 /* Amount of time in which a process may batch requests */
 #define BLK_BATCH_TIME	(HZ/50UL)
@@ -149,16 +150,53 @@ static inline void blk_clear_rq_complete(struct request *rq)
 
 void blk_insert_flush(struct request *rq);
 
+/*
+ * get_req_from_fg_bg_list - get request from fg list or bg list
+ * @q: the request queue which getting request from
+ *
+ * First get request from the fg list. If there are too many fg requests
+ * in the hardware queue (not less than max_depth - 2), or there's no
+ * request in the fg list, fall through to get request from the bg list.
+ * Besides, make sure there's not too many bg requests in the queue.
+ */
+static inline struct request *get_req_from_fg_bg_list(struct request_queue *q)
+{
+	struct request *rq = NULL;
+
+	if ((q->in_flight[BLK_RW_FG] + BLK_MIN_BG_DEPTH) < q->queue_tags->max_depth ||
+	     list_empty(&q->bg_head))
+		if (!list_empty(&q->fg_head))
+			rq = list_entry(q->fg_head.next,
+					struct request, fg_bg_list);
+
+	if (!rq && q->in_flight[BLK_RW_BG] < q->queue_tags->max_bg_depth)
+		rq = list_entry(q->bg_head.next,
+				struct request, fg_bg_list);
+
+	return rq;
+}
+
 static inline struct request *__elv_next_request(struct request_queue *q)
 {
-	struct request *rq;
+	struct request *rq = NULL;
 	struct blk_flush_queue *fq = blk_get_flush_queue(q, NULL);
 
 	WARN_ON_ONCE(q->mq_ops);
 
 	while (1) {
 		if (!list_empty(&q->queue_head)) {
-			rq = list_entry_rq(q->queue_head.next);
+#ifdef CONFIG_BLK_DEV_HI_PRIO_FOR_FG
+			struct blk_queue_tag *bqt = NULL;
+
+			if (blk_queue_tagged(q))
+				bqt = q->queue_tags;
+
+			if (bqt && bqt->max_bg_depth > 0 &&
+			    bqt->max_depth >= BLK_MIN_DEPTH_ON)
+				rq = get_req_from_fg_bg_list(q);
+			else
+#endif
+				rq = list_entry_rq(q->queue_head.next);
 			return rq;
 		}
 
@@ -202,6 +240,15 @@ static inline void elv_deactivate_rq(struct request_queue *q, struct request *rq
 
 	if (e->type->ops.sq.elevator_deactivate_req_fn)
 		e->type->ops.sq.elevator_deactivate_req_fn(q, rq);
+}
+
+void __elevator_exit(struct request_queue *, struct elevator_queue *);
+
+static inline void elevator_exit(struct request_queue *q,
+		struct elevator_queue *e)
+{
+	blk_mq_sched_free_requests(q);
+	elevator_exit(q, e);
 }
 
 struct hd_struct *__disk_get_part(struct gendisk *disk, int partno);
@@ -254,7 +301,7 @@ static inline int queue_congestion_off_threshold(struct request_queue *q)
 	return q->nr_congestion_off;
 }
 
-extern int blk_update_nr_requests(struct request_queue *, unsigned int);
+int blk_update_nr_requests(struct request_queue *, unsigned int);
 
 /*
  * Contribute to IO statistics IFF:
@@ -328,10 +375,10 @@ static inline struct io_context *create_io_context(gfp_t gfp_mask, int node)
  * Internal throttling interface
  */
 #ifdef CONFIG_BLK_DEV_THROTTLING
-extern void blk_throtl_drain(struct request_queue *q);
-extern int blk_throtl_init(struct request_queue *q);
-extern void blk_throtl_exit(struct request_queue *q);
-extern void blk_throtl_register_queue(struct request_queue *q);
+void blk_throtl_drain(struct request_queue *q);
+int blk_throtl_init(struct request_queue *q);
+void blk_throtl_exit(struct request_queue *q);
+void blk_throtl_register_queue(struct request_queue *q);
 #else /* CONFIG_BLK_DEV_THROTTLING */
 static inline void blk_throtl_drain(struct request_queue *q) { }
 static inline int blk_throtl_init(struct request_queue *q) { return 0; }
@@ -339,19 +386,19 @@ static inline void blk_throtl_exit(struct request_queue *q) { }
 static inline void blk_throtl_register_queue(struct request_queue *q) { }
 #endif /* CONFIG_BLK_DEV_THROTTLING */
 #ifdef CONFIG_BLK_DEV_THROTTLING_LOW
-extern ssize_t blk_throtl_sample_time_show(struct request_queue *q, char *page);
-extern ssize_t blk_throtl_sample_time_store(struct request_queue *q,
+ssize_t blk_throtl_sample_time_show(struct request_queue *q, char *page);
+ssize_t blk_throtl_sample_time_store(struct request_queue *q,
 	const char *page, size_t count);
-extern void blk_throtl_bio_endio(struct bio *bio);
-extern void blk_throtl_stat_add(struct request *rq, u64 time);
+void blk_throtl_bio_endio(struct bio *bio);
+void blk_throtl_stat_add(struct request *rq, u64 time);
 #else
 static inline void blk_throtl_bio_endio(struct bio *bio) { }
 static inline void blk_throtl_stat_add(struct request *rq, u64 time) { }
 #endif
 
 #ifdef CONFIG_BOUNCE
-extern int init_emergency_isa_pool(void);
-extern void blk_queue_bounce(struct request_queue *q, struct bio **bio);
+int init_emergency_isa_pool(void);
+void blk_queue_bounce(struct request_queue *q, struct bio **bio);
 #else
 static inline int init_emergency_isa_pool(void)
 {
@@ -362,6 +409,6 @@ static inline void blk_queue_bounce(struct request_queue *q, struct bio **bio)
 }
 #endif /* CONFIG_BOUNCE */
 
-extern void blk_drain_queue(struct request_queue *q);
+void blk_drain_queue(struct request_queue *q);
 
 #endif /* BLK_INTERNAL_H */

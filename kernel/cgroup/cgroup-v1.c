@@ -501,6 +501,7 @@ static void *cgroup_pidlist_next(struct seq_file *s, void *v, loff_t *pos)
 	 */
 	p++;
 	if (p >= end) {
+		(*pos)++;
 		return NULL;
 	} else {
 		*pos = *p;
@@ -824,7 +825,7 @@ void cgroup1_release_agent(struct work_struct *work)
 
 	pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
 	agentbuf = kstrdup(cgrp->root->release_agent_path, GFP_KERNEL);
-	if (!pathbuf || !agentbuf)
+	if (!pathbuf || !agentbuf || !strlen(agentbuf))
 		goto out;
 
 	spin_lock_irq(&css_set_lock);
@@ -898,6 +899,8 @@ static int cgroup1_show_options(struct seq_file *seq, struct kernfs_root *kf_roo
 			seq_show_option(seq, ss->legacy_name, NULL);
 	if (root->flags & CGRP_ROOT_NOPREFIX)
 		seq_puts(seq, ",noprefix");
+	if (root->flags & CGRP_ROOT_CPUSET_NOPREFIX)
+		seq_puts(seq, ",cpuset_noprefix");
 	if (root->flags & CGRP_ROOT_XATTR)
 		seq_puts(seq, ",xattr");
 	if (root->flags & CGRP_ROOT_CPUSET_V2_MODE)
@@ -950,6 +953,10 @@ static int parse_cgroupfs_options(char *data, struct cgroup_sb_opts *opts)
 		}
 		if (!strcmp(token, "noprefix")) {
 			opts->flags |= CGRP_ROOT_NOPREFIX;
+			continue;
+		}
+		if (!strcmp(token, "cpuset_noprefix")) {
+			opts->flags |= CGRP_ROOT_CPUSET_NOPREFIX;
 			continue;
 		}
 		if (!strcmp(token, "clone_children")) {

@@ -20,11 +20,19 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
+#ifdef CONFIG_HKIP_SELINUX_PROT
+#include <linux/hisi/prmem.h>
+#include "selinux_harden.h"
+#endif
 #include "avtab.h"
 #include "policydb.h"
 
+#ifdef CONFIG_HKIP_SELINUX_PROT
+extern struct prmem_pool selinux_pool;
+#else
 static struct kmem_cache *avtab_node_cachep;
 static struct kmem_cache *avtab_xperms_cachep;
+#endif
 
 /* Based on MurmurHash3, written by Austin Appleby and placed in the
  * public domain.
@@ -65,6 +73,7 @@ static inline int avtab_hash(struct avtab_key *keyp, u32 mask)
 	return hash & mask;
 }
 
+#ifndef CONFIG_HKIP_SELINUX_PROT
 static struct avtab_node*
 avtab_insert_node(struct avtab *h, int hvalue,
 		  struct avtab_node *prev, struct avtab_node *cur,
@@ -104,18 +113,26 @@ avtab_insert_node(struct avtab *h, int hvalue,
 	h->nel++;
 	return newnode;
 }
+#endif
 
 static int avtab_insert(struct avtab *h, struct avtab_key *key, struct avtab_datum *datum)
 {
 	int hvalue;
 	struct avtab_node *prev, *cur, *newnode;
+	struct avtab_node *prot;
 	u16 specified = key->specified & ~(AVTAB_ENABLED|AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return -EINVAL;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = flex_array_get_ptr(h->htable, hvalue);
+
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	prot = h->htable[hvalue];
+#else
+	prot = flex_array_get_ptr(h->htable, hvalue);
+#endif
+	for (prev = NULL, cur = prot;
 	     cur;
 	     prev = cur, cur = cur->next) {
 		if (key->source_type == cur->key.source_type &&
@@ -154,12 +171,19 @@ avtab_insert_nonunique(struct avtab *h, struct avtab_key *key, struct avtab_datu
 {
 	int hvalue;
 	struct avtab_node *prev, *cur;
+	struct avtab_node *prot;
 	u16 specified = key->specified & ~(AVTAB_ENABLED|AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return NULL;
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = flex_array_get_ptr(h->htable, hvalue);
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	prot = h->htable[hvalue];
+#else
+	prot = flex_array_get_ptr(h->htable, hvalue);
+#endif
+
+	for (prev = NULL, cur = prot;
 	     cur;
 	     prev = cur, cur = cur->next) {
 		if (key->source_type == cur->key.source_type &&
@@ -184,14 +208,20 @@ struct avtab_datum *avtab_search(struct avtab *h, struct avtab_key *key)
 {
 	int hvalue;
 	struct avtab_node *cur;
+	struct avtab_node *prot;
 	u16 specified = key->specified & ~(AVTAB_ENABLED|AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return NULL;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (cur = flex_array_get_ptr(h->htable, hvalue); cur;
-	     cur = cur->next) {
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	prot = h->htable[hvalue];
+#else
+	prot = flex_array_get_ptr(h->htable, hvalue);
+#endif
+
+	for (cur = prot; cur; cur = cur->next) {
 		if (key->source_type == cur->key.source_type &&
 		    key->target_type == cur->key.target_type &&
 		    key->target_class == cur->key.target_class &&
@@ -220,14 +250,19 @@ avtab_search_node(struct avtab *h, struct avtab_key *key)
 {
 	int hvalue;
 	struct avtab_node *cur;
+	struct avtab_node *prot;
 	u16 specified = key->specified & ~(AVTAB_ENABLED|AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return NULL;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (cur = flex_array_get_ptr(h->htable, hvalue); cur;
-	     cur = cur->next) {
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	prot = h->htable[hvalue];
+#else
+	prot = flex_array_get_ptr(h->htable, hvalue);
+#endif
+	for (cur = prot; cur; cur = cur->next) {
 		if (key->source_type == cur->key.source_type &&
 		    key->target_type == cur->key.target_type &&
 		    key->target_class == cur->key.target_class &&
@@ -276,6 +311,7 @@ avtab_search_node_next(struct avtab_node *node, int specified)
 	return NULL;
 }
 
+#ifndef CONFIG_HKIP_SELINUX_PROT
 void avtab_destroy(struct avtab *h)
 {
 	int i;
@@ -300,6 +336,7 @@ void avtab_destroy(struct avtab *h)
 	h->nslot = 0;
 	h->mask = 0;
 }
+#endif
 
 int avtab_init(struct avtab *h)
 {
@@ -329,8 +366,13 @@ int avtab_alloc(struct avtab *h, u32 nrules)
 		nslot = MAX_AVTAB_HASH_BUCKETS;
 	mask = nslot - 1;
 
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	h->htable = pcalloc(&selinux_pool, nslot, sizeof(*(h->htable)),
+			    PRMEM_NO_FLAGS);
+#else
 	h->htable = flex_array_alloc(sizeof(struct avtab_node *), nslot,
 				     GFP_KERNEL | __GFP_ZERO);
+#endif
 	if (!h->htable)
 		return -ENOMEM;
 
@@ -353,7 +395,11 @@ void avtab_hash_eval(struct avtab *h, char *tag)
 	max_chain_len = 0;
 	chain2_len_sum = 0;
 	for (i = 0; i < h->nslot; i++) {
+#ifdef CONFIG_HKIP_SELINUX_PROT
+		cur = h->htable[i];
+#else
 		cur = flex_array_get_ptr(h->htable, i);
+#endif
 		if (cur) {
 			slots_used++;
 			chain_len = 0;
@@ -593,6 +639,7 @@ out:
 	return rc;
 
 bad:
+	pr_warning("SELinux avtab avtab_read error");
 	avtab_destroy(a);
 	goto out;
 }
@@ -645,8 +692,12 @@ int avtab_write(struct policydb *p, struct avtab *a, void *fp)
 		return rc;
 
 	for (i = 0; i < a->nslot; i++) {
+#ifdef CONFIG_HKIP_SELINUX_PROT
+		for (cur = a->htable[i]; cur; cur = cur->next) {
+#else
 		for (cur = flex_array_get_ptr(a->htable, i); cur;
 		     cur = cur->next) {
+#endif
 			rc = avtab_write_item(p, cur, fp);
 			if (rc)
 				return rc;
@@ -655,6 +706,8 @@ int avtab_write(struct policydb *p, struct avtab *a, void *fp)
 
 	return rc;
 }
+
+#ifndef CONFIG_HKIP_SELINUX_PROT
 void avtab_cache_init(void)
 {
 	avtab_node_cachep = kmem_cache_create("avtab_node",
@@ -670,3 +723,12 @@ void avtab_cache_destroy(void)
 	kmem_cache_destroy(avtab_node_cachep);
 	kmem_cache_destroy(avtab_xperms_cachep);
 }
+#else
+void avtab_cache_init(void)
+{
+}
+
+void avtab_cache_destroy(void)
+{
+}
+#endif

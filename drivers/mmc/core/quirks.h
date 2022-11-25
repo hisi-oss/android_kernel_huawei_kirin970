@@ -13,7 +13,7 @@
 #include <linux/mmc/sdio_ids.h>
 
 #include "card.h"
-
+/*lint -e501*/
 static const struct mmc_fixup mmc_blk_fixups[] = {
 #define INAND_CMD38_ARG_EXT_CSD  113
 #define INAND_CMD38_ARG_ERASE    0x00
@@ -98,10 +98,25 @@ static const struct mmc_fixup mmc_blk_fixups[] = {
 		  MMC_QUIRK_TRIM_BROKEN),
 	MMC_FIXUP("V10016", CID_MANFID_KINGSTON, CID_OEMID_ANY, add_quirk_mmc,
 		  MMC_QUIRK_TRIM_BROKEN),
-
+#ifdef CONFIG_HISI_MMC_FLUSH_REDUCE_WHITE_LIST
+        MMC_FIXUP("Q3J97V", CID_MANFID_MICRON, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+        MMC_FIXUP("HAG4a2", CID_MANFID_HYNIX, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+        MMC_FIXUP("HDG8a4", CID_MANFID_HYNIX, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+        MMC_FIXUP("HCG4a2", CID_MANFID_HYNIX, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+        MMC_FIXUP("DF4064", CID_MANFID_SANDISK_V2, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+        MMC_FIXUP("064G30", CID_MANFID_TOSHIBA, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+        MMC_FIXUP("128G32", CID_MANFID_TOSHIBA, CID_OEMID_ANY, en_emmc_flush_reduce,
+                  0),
+#endif
 	END_FIXUP
 };
-
+/*lint +e501*/
 static const struct mmc_fixup mmc_ext_csd_fixups[] = {
 	/*
 	 * Certain Hynix eMMC 4.41 cards might get broken when HPI feature

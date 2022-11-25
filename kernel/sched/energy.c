@@ -67,6 +67,35 @@ void check_max_cap_vs_cpu_scale(int cpu, struct sched_group_energy *sge)
 		max_cap, cpu_scale);
 }
 
+#ifdef CONFIG_HISI_EAS_SCHED
+static void dump_energy_model(void)
+{
+	int cpu, sd_level, idx;
+	struct sched_group_energy *sge;
+
+	for_each_possible_cpu(cpu) {
+		for_each_possible_sd_level(sd_level) {
+			sge = sge_array[cpu][sd_level];
+			if (!sge)
+				continue;
+
+			pr_info("EAS: cpu %d sd_level = %d\n", cpu, sd_level);
+
+			for (idx = 0; idx < sge->nr_cap_states; idx++) {
+				pr_info("Busy state [%d] = c %lu p %lu i %lu\n", idx,
+					sge->cap_states[idx].cap,
+					sge->cap_states[idx].power,
+					sge->cap_states[idx].idle_power);
+			}
+
+			for (idx = 0; idx < sge->nr_idle_states; idx++)
+				pr_info("Idle state [%d] = p %lu\n", idx,
+					sge->idle_states[idx].power);
+		}
+	}
+}
+#endif
+
 void init_sched_energy_costs(void)
 {
 	struct device_node *cn, *cp;
@@ -130,6 +159,22 @@ void init_sched_energy_costs(void)
 			sge->nr_cap_states = nstates;
 			sge->cap_states = cap_states;
 
+#ifdef CONFIG_HISI_EAS_SCHED
+			prop = of_find_property(cp, "static-cost-data", NULL);
+			if (!prop || !prop->value)
+				goto skip_static_cost_data;
+
+			nstates = (prop->length / sizeof(u32));
+			if (nstates != sge->nr_cap_states) {
+				pr_warn("The static-cost-data's length doesn't match, skip it\n");
+				goto skip_static_cost_data;
+			}
+
+			for (i = 0, val = prop->value; i < nstates; i++)
+				cap_states[i].idle_power = be32_to_cpup(val++);
+skip_static_cost_data:
+#endif
+
 			prop = of_find_property(cp, "idle-cost-data", NULL);
 			if (!prop || !prop->value) {
 				pr_warn("No idle-cost data, skipping sched_energy init\n");
@@ -153,6 +198,9 @@ void init_sched_energy_costs(void)
 			check_max_cap_vs_cpu_scale(cpu, sge_array[cpu][SD_LEVEL0]);
 	}
 	sge_ready = true;
+#ifdef CONFIG_HISI_EAS_SCHED
+	dump_energy_model();
+#endif
 	pr_info("Sched-energy-costs installed from DT\n");
 	return;
 
@@ -207,6 +255,7 @@ static int sched_energy_probe(struct platform_device *pdev)
 				ret = PTR_ERR(opp);
 			goto exit;
 		}
+		dev_pm_opp_put(opp);
 
 		/* Convert HZ to KHZ */
 		max_frequencies[cpu] /= 1000;

@@ -70,6 +70,9 @@
 #define MMC_CLR_WRITE_PROT       29   /* ac   [31:0] data addr   R1b */
 #define MMC_SEND_WRITE_PROT      30   /* adtc [31:0] wpdata addr R1  */
 
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+#define MMC_SEND_WRITE_PROT_TYPE 31   /*  adtc [31:0] wpdata addr R1  */
+#endif
   /* class 5 */
 #define MMC_ERASE_GROUP_START    35   /* ac   [31:0] data addr   R1  */
 #define MMC_ERASE_GROUP_END      36   /* ac   [31:0] data addr   R1  */
@@ -92,6 +95,10 @@
 #define MMC_EXECUTE_READ_TASK    46   /* adtc [20:16] task id    R1  */
 #define MMC_EXECUTE_WRITE_TASK   47   /* adtc [20:16] task id    R1  */
 #define MMC_CMDQ_TASK_MGMT       48   /* ac   [20:16] task id    R1b */
+#define DISCARD_QUEUE           0x1
+#define DISCARD_TASK            0x2
+/* Flushing a large amount of cached data may take a long time. */
+#define MMC_FLUSH_REQ_TIMEOUT_MS 90000 /* msec */
 
 static inline bool mmc_op_multi(u32 opcode)
 {
@@ -238,6 +245,11 @@ static inline bool mmc_op_multi(u32 opcode)
  */
 
 #define EXT_CSD_CMDQ_MODE_EN		15	/* R/W */
+#define EXT_CSD_CMDQ_MODE		15	/* R/W */
+#define EXT_CSD_FFU_STATUS		26	/* R */
+#define EXT_CSD_MODE_OPERATION_CODES	29	/* W */
+#define EXT_CSD_MODE_CONFIG		30	/* R/W */
+#define EXT_CSD_BARRIER_CTRL		31      /* W */
 #define EXT_CSD_FLUSH_CACHE		32      /* W */
 #define EXT_CSD_CACHE_CTRL		33      /* R/W */
 #define EXT_CSD_POWER_OFF_NOTIFICATION	34	/* R/W */
@@ -246,6 +258,7 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_EXP_EVENTS_STATUS	54	/* RO, 2 bytes */
 #define EXT_CSD_EXP_EVENTS_CTRL		56	/* R/W, 2 bytes */
 #define EXT_CSD_DATA_SECTOR_SIZE	61	/* R */
+#define EXT_CSD_VENDOR_FEATURE_SUPPORT	124	/* Reserved R */
 #define EXT_CSD_GP_SIZE_MULT		143	/* R/W */
 #define EXT_CSD_PARTITION_SETTING_COMPLETED 155	/* R/W */
 #define EXT_CSD_PARTITION_ATTRIBUTE	156	/* R/W */
@@ -258,14 +271,19 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_WR_REL_PARAM		166	/* RO */
 #define EXT_CSD_RPMB_MULT		168	/* RO */
 #define EXT_CSD_FW_CONFIG		169	/* R/W */
+#define EXT_CSD_USER_WP			171	/* R/W */
 #define EXT_CSD_BOOT_WP			173	/* R/W */
 #define EXT_CSD_ERASE_GROUP_DEF		175	/* R/W */
 #define EXT_CSD_PART_CONFIG		179	/* R/W */
+#define EXT_CSD_RPMB_REGION1_SIZE_MULT	180	/* Reserved R/W */
 #define EXT_CSD_ERASED_MEM_CONT		181	/* RO */
+#define EXT_CSD_RPMB_REGION2_SIZE_MULT	182	/* Reserved R/W */
 #define EXT_CSD_BUS_WIDTH		183	/* R/W */
 #define EXT_CSD_STROBE_SUPPORT		184	/* RO */
 #define EXT_CSD_HS_TIMING		185	/* R/W */
+#define EXT_CSD_RPMB_REGION3_SIZE_MULT	186	/* Reserved R/W */
 #define EXT_CSD_POWER_CLASS		187	/* R/W */
+#define EXT_CSD_RPMB_REGION4_SIZE_MULT	188	/* Reserved R/W */
 #define EXT_CSD_REV			192	/* RO */
 #define EXT_CSD_STRUCTURE		194	/* RO */
 #define EXT_CSD_CARD_TYPE		196	/* RO */
@@ -277,6 +295,7 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_PWR_CL_52_360		202	/* RO */
 #define EXT_CSD_PWR_CL_26_360		203	/* RO */
 #define EXT_CSD_SEC_CNT			212	/* RO, 4 bytes */
+#define EXT_CSD_SLEEP_NOTIFICATION_TIME 216	/* Ro */
 #define EXT_CSD_S_A_TIMEOUT		217	/* RO */
 #define EXT_CSD_REL_WR_SEC_C		222	/* RO */
 #define EXT_CSD_HC_WP_GRP_SIZE		221	/* RO */
@@ -291,6 +310,7 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_PWR_CL_200_360		237	/* RO */
 #define EXT_CSD_PWR_CL_DDR_52_195	238	/* RO */
 #define EXT_CSD_PWR_CL_DDR_52_360	239	/* RO */
+#define EXT_CSD_CACHE_FLUSH_POLICY	240	/* RO */
 #define EXT_CSD_BKOPS_STATUS		246	/* RO */
 #define EXT_CSD_POWER_OFF_LONG_TIME	247	/* RO */
 #define EXT_CSD_GENERIC_CMD6_TIME	248	/* RO */
@@ -298,10 +318,16 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_PWR_CL_DDR_200_360	253	/* RO */
 #define EXT_CSD_FIRMWARE_VERSION	254	/* RO, 8 bytes */
 #define EXT_CSD_PRE_EOL_INFO		267	/* RO */
-#define EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_A	268	/* RO */
-#define EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_B	269	/* RO */
-#define EXT_CSD_CMDQ_DEPTH		307	/* RO */
+#define EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_A		 268	/* RO */
+#define EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_B		 269	/* RO */
+#define EXT_CSD_HEALTH_REPORT     270     /* RO 32 bits*/
+#define EXT_CSD_NUM_OF_FW_SEC_PROG	302	/* RO */
+#define EXT_CSD_CMDQ_DEPTH			307	/* RO */
 #define EXT_CSD_CMDQ_SUPPORT		308	/* RO */
+#define EXT_CSD_BARRIER_SUPPORT		486	/* RO */
+#define EXT_CSD_FFU_ARG			487	/* RO, 4 bytes */
+#define EXT_CSD_OPERATION_CODE_TIMEOUT	491	/* RO */
+#define EXT_CSD_FFU_FEATURES		492	/* RO */
 #define EXT_CSD_SUPPORTED_MODE		493	/* RO */
 #define EXT_CSD_TAG_UNIT_SIZE		498	/* RO */
 #define EXT_CSD_DATA_TAG_SUPPORT	499	/* RO */
@@ -315,6 +341,7 @@ static inline bool mmc_op_multi(u32 opcode)
  */
 
 #define EXT_CSD_WR_REL_PARAM_EN		(1<<2)
+#define EXT_CSD_RPMB_REL_WR_EN			(1<<4)
 
 #define EXT_CSD_BOOT_WP_B_PWR_WP_DIS	(0x40)
 #define EXT_CSD_BOOT_WP_B_PERM_WP_DIS	(0x10)
@@ -379,13 +406,40 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_POWER_ON		1
 #define EXT_CSD_POWER_OFF_SHORT		2
 #define EXT_CSD_POWER_OFF_LONG		3
+#define EXT_CSD_SLEEP_NOTIFICATION	4
 
 #define EXT_CSD_PWR_CL_8BIT_MASK	0xF0	/* 8 bit PWR CLS */
 #define EXT_CSD_PWR_CL_4BIT_MASK	0x0F	/* 8 bit PWR CLS */
 #define EXT_CSD_PWR_CL_8BIT_SHIFT	4
 #define EXT_CSD_PWR_CL_4BIT_SHIFT	0
 
+#ifdef CONFIG_HUAWEI_EMMC_DSM
+#define EXT_CSD_DYNCAP_EVENT_EN	BIT(1)
+#define EXT_CSD_SYSPOOL_EVENT_EN	BIT(2)
+#endif
 #define EXT_CSD_PACKED_EVENT_EN	BIT(3)
+
+#define EXT_CSD_TIMING_BC	0	/* Backwards compatility */
+#define EXT_CSD_TIMING_HS	1	/* High speed */
+#define EXT_CSD_TIMING_HS200	2	/* HS200 */
+#define EXT_CSD_TIMING_HS400	3	/* HS400 */
+
+#define EXT_CSD_DRVIER_STRENGTH_SHIFT	4 /*Hight 4bit of EXT_CSD_HS_TIMING*/
+#define EXT_CSD_DRVIER_STRENGTH_50		0x0
+#define EXT_CSD_DRVIER_STRENGTH_33		0x1
+#define EXT_CSD_DRVIER_STRENGTH_66		0x2
+#define EXT_CSD_DRVIER_STRENGTH_100		0x3
+#define EXT_CSD_DRVIER_STRENGTH_40		0x4
+
+#define EXT_CSD_STROBE_ENHANCED				BIT(7)
+
+#define EXT_CSD_TRIGGER_CACHE_FLUSH			BIT(0)
+#define EXT_CSD_SET_CACHE_FLUSH_BARRIER	BIT(1)
+
+#define EXT_CSD_CACHE_FLUSH_POLICY_FIFO		BIT(0)
+
+#define EXT_CSD_BKOPS_MANUAL_EN			BIT(0)
+#define EXT_CSD_BKOPS_AUTO_EN				BIT(1)
 
 /*
  * EXCEPTION_EVENT_STATUS field
@@ -423,6 +477,38 @@ static inline bool mmc_op_multi(u32 opcode)
 #define MMC_SWITCH_MODE_SET_BITS	0x01	/* Set bits which are 1 in value */
 #define MMC_SWITCH_MODE_CLEAR_BITS	0x02	/* Clear bits which are 1 in value */
 #define MMC_SWITCH_MODE_WRITE_BYTE	0x03	/* Set target to value */
+
+/*
+ * MMC_LOCK_UNLOCK modes
+ */
+#ifdef CONFIG_MMC_PASSWORDS
+#define MMC_LOCK_MODE_ERASE		(1<<3)
+#define MMC_LOCK_MODE_LOCK		(1<<2)
+#define MMC_LOCK_MODE_CLR_PWD	(1<<1)
+#define MMC_LOCK_MODE_SET_PWD	(1<<0)
+#define MMC_LOCK_MODE_UNLOCK    (1<<4)
+#endif /* CONFIG_MMC_PASSWORDS */
+
+extern u64 cmdlog_enable_flag;   /* 0 : Disable , X: Enable */
+#define EMMC_EN   		(1<<0)
+#define BLK_EN   		(1<<1)
+#define EXT4_EN   		(1<<2)
+
+/*
+ * MMC_LOCK_UNLOCK modes
+ */
+#ifdef CONFIG_MMC_PASSWORDS
+#define MMC_LOCK_MODE_ERASE		(1<<3)
+#define MMC_LOCK_MODE_LOCK		(1<<2)
+#define MMC_LOCK_MODE_CLR_PWD	(1<<1)
+#define MMC_LOCK_MODE_SET_PWD	(1<<0)
+#define MMC_LOCK_MODE_UNLOCK    (1<<4)
+#endif /* CONFIG_MMC_PASSWORDS */
+
+extern u64 cmdlog_enable_flag;   /* 0 : Disable , X: Enable */
+#define EMMC_EN   		(1<<0)
+#define BLK_EN   		(1<<1)
+#define EXT4_EN   		(1<<2)
 
 /*
  * Erase/trim/discard

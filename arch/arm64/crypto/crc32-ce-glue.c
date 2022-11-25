@@ -29,8 +29,40 @@
 asmlinkage u32 crc32_pmull_le(const u8 buf[], u64 len, u32 init_crc);
 asmlinkage u32 crc32_armv8_le(u32 init_crc, const u8 buf[], size_t len);
 
+#ifdef CONFIG_CFI_CLANG
+static inline u32 __cfi_crc32_pmull_le(const u8 buf[], u64 len, u32 init_crc)
+{
+	return crc32_pmull_le(buf, len, init_crc);
+}
+#define crc32_pmull_le __cfi_crc32_pmull_le
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline u32 __cfi_crc32_armv8_le(u32 init_crc, const u8 buf[], size_t len)
+{
+	return crc32_armv8_le(init_crc, buf, len);
+}
+#define crc32_armv8_le __cfi_crc32_armv8_le
+#endif
+
 asmlinkage u32 crc32c_pmull_le(const u8 buf[], u64 len, u32 init_crc);
 asmlinkage u32 crc32c_armv8_le(u32 init_crc, const u8 buf[], size_t len);
+
+#ifdef CONFIG_CFI_CLANG
+static inline u32 __cfi_crc32c_pmull_le(const u8 buf[], u64 len, u32 init_crc)
+{
+	return crc32c_pmull_le(buf, len, init_crc);
+}
+#define crc32c_pmull_le __cfi_crc32c_pmull_le
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline u32 __cfi_crc32c_armv8_le(u32 init_crc, const u8 buf[], size_t len)
+{
+	return crc32c_armv8_le(init_crc, buf, len);
+}
+#define crc32c_armv8_le __cfi_crc32c_armv8_le
+#endif
 
 static u32 (*fallback_crc32)(u32 init_crc, const u8 buf[], size_t len);
 static u32 (*fallback_crc32c)(u32 init_crc, const u8 buf[], size_t len);

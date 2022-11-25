@@ -530,7 +530,7 @@ config CHARGER_BQ24257
 	tristate "TI BQ24250/24251/24257 battery charger driver"
 	depends on I2C
 	depends on GPIOLIB || COMPILE_TEST
-	depends on REGMAP_I2C
+	select REGMAP_I2C
 	help
 	  Say Y to enable support for the TI BQ24250, BQ24251, and BQ24257 battery
 	  chargers.
@@ -609,5 +609,15 @@ config CHARGER_RT9455
 	select REGMAP_I2C
 	help
 	  Say Y to enable support for Richtek RT9455 battery charger.
+
+config POWER_HISI
+        bool "hisilicon power charger/coul driver"
+        default n
+        help
+          support hisi power charger/coul driver
+
+if POWER_HISI
+source "drivers/power/hisi/Kconfig"
+endif
 
 endif # POWER_SUPPLY

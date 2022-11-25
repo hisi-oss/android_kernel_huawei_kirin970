@@ -68,6 +68,9 @@ int dev_pm_opp_init_cpufreq_table(struct device *dev,
 		}
 		freq_table[i].driver_data = i;
 		freq_table[i].frequency = rate / 1000;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+		freq_table[i].electric_current = opp->supplies[0].u_amp;
+#endif
 
 		/* Is Boost/turbo opp ? */
 		if (dev_pm_opp_is_turbo(opp))
@@ -78,6 +81,9 @@ int dev_pm_opp_init_cpufreq_table(struct device *dev,
 
 	freq_table[i].driver_data = i;
 	freq_table[i].frequency = CPUFREQ_TABLE_END;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+	freq_table[i].electric_current = CPUFREQ_TABLE_END;
+#endif
 
 	*table = &freq_table[0];
 
@@ -177,7 +183,9 @@ int dev_pm_opp_set_sharing_cpus(struct device *cpu_dev,
 			continue;
 		}
 
+		mutex_lock(&opp_table_lock);
 		opp_dev = _add_opp_dev(dev, opp_table);
+		mutex_unlock(&opp_table_lock);
 		if (!opp_dev) {
 			dev_err(dev, "%s: failed to add opp-dev for cpu%d device\n",
 				__func__, cpu);

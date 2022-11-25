@@ -35,6 +35,9 @@
 #define ACCESSORY_STRING_VERSION        3
 #define ACCESSORY_STRING_URI            4
 #define ACCESSORY_STRING_SERIAL         5
+#ifdef CONFIG_USB_HICAR_SUPPORT
+#define ACCESSORY_STRING_EXTRA_DATA     0xA0
+#endif
 
 /* Control request for retrieving device's protocol version
  *
@@ -142,5 +145,10 @@
 #define ACCESSORY_IS_START_REQUESTED        _IO('M', 7)
 /* returns audio mode (set via the ACCESSORY_SET_AUDIO_MODE control request) */
 #define ACCESSORY_GET_AUDIO_MODE            _IO('M', 8)
+#ifdef CONFIG_USB_HICAR_SUPPORT
+/* returns extra data set by the host */
+#define ACC_EXTRA_DATA_SIZE                 256
+#define ACCESSORY_GET_EXTRA_DATA            _IOW('M', 0xC0, char[ACC_EXTRA_DATA_SIZE])
+#endif
 
 #endif /* _UAPI_LINUX_USB_F_ACCESSORY_H */

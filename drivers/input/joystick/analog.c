@@ -442,6 +442,7 @@ static void analog_name(struct analog *analog)
 
 	if (analog->mask & ANALOG_HATS_ALL)
 		snprintf(analog->name, sizeof(analog->name), "%s %d-hat",
+			// cppcheck-suppress *
 			 analog->name, hweight16(analog->mask & ANALOG_HATS_ALL));
 
 	if (analog->mask & ANALOG_HAT_FCS)

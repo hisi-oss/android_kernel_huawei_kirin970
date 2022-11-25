@@ -13,6 +13,7 @@
 
 #include <linux/delay.h>
 #include <linux/sched.h>
+#include <linux/mmc/core.h>
 
 struct mmc_host;
 struct mmc_card;
@@ -21,6 +22,11 @@ struct mmc_request;
 #define MMC_CMD_RETRIES        3
 
 struct mmc_bus_ops {
+#ifdef CONFIG_SD_SDIO_CRC_RETUNING
+	int (*mmc_retuning)(struct mmc_host *);
+#endif
+	int (*awake)(struct mmc_host *);
+	int (*sleep)(struct mmc_host *);
 	void (*remove)(struct mmc_host *);
 	void (*detect)(struct mmc_host *);
 	int (*pre_suspend)(struct mmc_host *);
@@ -33,6 +39,10 @@ struct mmc_bus_ops {
 	int (*alive)(struct mmc_host *);
 	int (*shutdown)(struct mmc_host *);
 	int (*reset)(struct mmc_host *);
+#ifdef CONFIG_MMC_PASSWORDS
+	int (*sysfs_add)(struct mmc_host *, struct mmc_card *card);
+	void (*sysfs_remove)(struct mmc_host *, struct mmc_card *card);
+#endif
 };
 
 void mmc_attach_bus(struct mmc_host *host, const struct mmc_bus_ops *ops);
@@ -58,12 +68,14 @@ void mmc_power_up(struct mmc_host *host, u32 ocr);
 void mmc_power_off(struct mmc_host *host);
 void mmc_power_cycle(struct mmc_host *host, u32 ocr);
 void mmc_set_initial_state(struct mmc_host *host);
+void zodiac_mmc_power_off(struct mmc_host *host);
+void zodiac_mmc_power_up(struct mmc_host *host);
 
 static inline void mmc_delay(unsigned int ms)
 {
 	if (ms < 1000 / HZ) {
 		cond_resched();
-		mdelay(ms);
+		mdelay(ms); /*lint !e647*/
 	} else {
 		msleep(ms);
 	}
@@ -78,6 +90,12 @@ int mmc_detect_card_removed(struct mmc_host *host);
 
 int mmc_attach_mmc(struct mmc_host *host);
 int mmc_attach_sd(struct mmc_host *host);
+
+#if defined(CONFIG_MMC_DW_MUX_SDSIM) || defined(CONFIG_MMC_SDHCI_MUX_SDSIM)
+int mmc_detect_mmc(struct mmc_host *host);
+int mmc_detect_sd_or_mmc(struct mmc_host *host);
+#endif
+
 int mmc_attach_sdio(struct mmc_host *host);
 
 /* Module parameters */
@@ -104,6 +122,9 @@ static inline void mmc_register_pm_notifier(struct mmc_host *host) { }
 static inline void mmc_unregister_pm_notifier(struct mmc_host *host) { }
 #endif
 
+int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
+	struct mmc_card *oldcard);
+
 void mmc_wait_for_req_done(struct mmc_host *host, struct mmc_request *mrq);
 bool mmc_is_req_done(struct mmc_host *host, struct mmc_request *mrq);
 
@@ -128,20 +149,31 @@ int mmc_set_blocklen(struct mmc_card *card, unsigned int blocklen);
 int mmc_set_blockcount(struct mmc_card *card, unsigned int blockcount,
 			bool is_rel_write);
 
-int __mmc_claim_host(struct mmc_host *host, atomic_t *abort);
-void mmc_release_host(struct mmc_host *host);
 void mmc_get_card(struct mmc_card *card);
 void mmc_put_card(struct mmc_card *card);
+void mmc_set_ios(struct mmc_host *host);
+void mmc_bus_get(struct mmc_host *host);
+void mmc_bus_put(struct mmc_host *host);
 
-/**
- *	mmc_claim_host - exclusively claim a host
- *	@host: mmc host to claim
- *
- *	Claim a host for a set of operations.
- */
-static inline void mmc_claim_host(struct mmc_host *host)
-{
-	__mmc_claim_host(host, NULL);
-}
+void mmc_process_ap_err(struct mmc_card *card);
+
+#ifdef CONFIG_HW_MMC_MAINTENANCE_CMD
+extern void record_mmc_cmdq_cmd(struct mmc_request *mrq);
+#endif
+
+extern int cmdq_clear_task(struct mmc_host *mmc, u32 task, bool entire);
+extern int sdhci_cmdq_discard_task(struct mmc_host *mmc, u32 tag, bool entire);
+extern u64 rwlog_enable_flag;
+
+extern int mmc_screen_test_cache_enable(struct mmc_card *card);
+extern int mmc_blk_is_retryable(struct mmc_host *mmc);
+#ifdef CONFIG_MMC_CQ_HCI
+extern void mmc_blk_cmdq_dishalt(struct mmc_card *card);
+extern int cmdq_is_reset(struct mmc_host *host);
+extern int mmc_blk_cmdq_halt(struct mmc_card *card);
+#endif
+#if defined(CONFIG_HISI_DEBUG_FS)
+extern unsigned int sd_test_reset_flag;
+#endif
 
 #endif

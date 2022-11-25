@@ -18,7 +18,11 @@
 
 #ifdef CONFIG_SPARSEMEM
 #define MAX_PHYSMEM_BITS	48
+#ifdef CONFIG_HISI_LB_L3_EXTENSION
+#define SECTION_SIZE_BITS	29
+#else
 #define SECTION_SIZE_BITS	30
+#endif /* CONFIG_HISI_LB_L3_EXTENSION */
 #endif
 
 #endif

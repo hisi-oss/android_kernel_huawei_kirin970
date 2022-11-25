@@ -16,6 +16,9 @@
 #include <linux/binfmts.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/task.h>
+#ifdef CONFIG_HISI_SWAP_ZDATA
+#include <linux/mm.h>
+#endif
 
 struct ctl_table_header;
 struct mempolicy;
@@ -51,7 +54,7 @@ struct proc_dir_entry {
 	spinlock_t pde_unload_lock; /* proc_fops checks and pde_users bumps */
 	u8 namelen;
 	char name[];
-} __randomize_layout;
+};
 
 union proc_op {
 	int (*proc_get_link)(struct dentry *, struct path *);
@@ -70,7 +73,7 @@ struct proc_inode {
 	struct hlist_node sysctl_inodes;
 	const struct proc_ns_operations *ns_ops;
 	struct inode vfs_inode;
-} __randomize_layout;
+};
 
 /*
  * General functions
@@ -199,6 +202,13 @@ struct pde_opener {
 extern const struct inode_operations proc_link_inode_operations;
 
 extern const struct inode_operations proc_pid_link_inode_operations;
+extern const struct file_operations proc_reclaim_operations;
+
+#ifdef CONFIG_HISI_SMART_RECLAIM
+extern void smart_soft_shrink(struct mm_struct *);
+#else
+static inline void smart_soft_shrink(void) { }
+#endif
 
 extern void proc_init_inodecache(void);
 void set_proc_pid_nlink(void);
@@ -289,7 +299,7 @@ struct proc_maps_private {
 #ifdef CONFIG_NUMA
 	struct mempolicy *task_mempolicy;
 #endif
-} __randomize_layout;
+};
 
 struct mm_struct *proc_mem_open(struct inode *inode, unsigned int mode);
 
@@ -299,6 +309,7 @@ extern const struct file_operations proc_pid_numa_maps_operations;
 extern const struct file_operations proc_tid_numa_maps_operations;
 extern const struct file_operations proc_pid_smaps_operations;
 extern const struct file_operations proc_pid_smaps_rollup_operations;
+extern const struct file_operations proc_pid_smaps_simple_operations;
 extern const struct file_operations proc_tid_smaps_operations;
 extern const struct file_operations proc_clear_refs_operations;
 extern const struct file_operations proc_pagemap_operations;
@@ -308,3 +319,16 @@ extern unsigned long task_statm(struct mm_struct *,
 				unsigned long *, unsigned long *,
 				unsigned long *, unsigned long *);
 extern void task_mem(struct seq_file *, struct mm_struct *);
+#ifdef CONFIG_HISI_SWAP_ZDATA
+extern bool process_reclaim_need_abort(struct mm_walk *walk);
+extern struct reclaim_result *process_reclaim_result_cache_alloc(gfp_t gfp);
+extern void process_reclaim_result_cache_free(struct reclaim_result *result);
+extern int process_reclaim_result_read(struct seq_file *m,
+				struct pid_namespace *ns,
+				struct pid *pid,
+				struct task_struct *tsk);
+extern void process_reclaim_result_write(struct task_struct *task,
+				unsigned nr_reclaimed,
+				unsigned nr_writedblock,
+				s64 elapsed_centisecs64);
+#endif

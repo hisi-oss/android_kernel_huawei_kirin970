@@ -11,6 +11,7 @@
 #include <linux/fs.h>
 #include <linux/namei.h>
 #include <linux/xattr.h>
+#include <linux/security.h>
 #include <linux/mount.h>
 #include <linux/parser.h>
 #include <linux/module.h>
@@ -39,7 +40,9 @@ module_param_named(index, ovl_index_def, bool, 0644);
 MODULE_PARM_DESC(ovl_index_def,
 		 "Default to on or off for the inodes index feature");
 
-static bool __read_mostly ovl_override_creds_def = true;
+
+static bool __read_mostly ovl_override_creds_def = IS_ENABLED(CONFIG_OVERLAY_FS_CREDS_OVERRIDE);
+
 module_param_named(override_creds, ovl_override_creds_def, bool, 0644);
 MODULE_PARM_DESC(ovl_override_creds_def,
 		 "Use mounter's credentials for accesses");
@@ -1178,6 +1181,10 @@ static int ovl_fill_super(struct super_block *sb, void *data, int silent)
 		       ovl_dentry_lower(root_dentry));
 
 	sb->s_root = root_dentry;
+
+#ifdef CONFIG_SECURITY
+	security_sb_clone_mnt_opts(oe->lowerstack[0].mnt->mnt_sb, sb, 0, NULL);
+#endif
 	return 0;
 
 out_free_oe:

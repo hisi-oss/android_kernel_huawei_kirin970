@@ -15,6 +15,7 @@
 #include <linux/capability.h>
 #include <linux/device.h>
 #include <linux/kobject.h>
+#include <securec.h>
 
 #include "cpuidle.h"
 
@@ -115,12 +116,45 @@ static ssize_t store_current_governor(struct device *dev,
 		return count;
 }
 
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+static ssize_t show_lp_mode(struct device *dev,
+				   struct device_attribute *attr,
+				   char *buf)
+{
+	int enabled = get_lp_mode();
+
+	return snprintf_s(buf, PAGE_SIZE, PAGE_SIZE - 1, "%d\n", enabled);
+}
+
+static ssize_t store_lp_mode(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	int enabled;
+	int err;
+
+	err = kstrtoint(buf, 0, &enabled);
+	if (err)
+		return err;
+
+	cpuidle_switch_to_lp_mode(enabled);
+
+	return count;
+}
+#endif // CONFIG_HISI_CPUIDLE_LP_MODE
+
 static DEVICE_ATTR(current_driver, 0444, show_current_driver, NULL);
 static DEVICE_ATTR(current_governor_ro, 0444, show_current_governor, NULL);
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+static DEVICE_ATTR(lp_mode, 0640, show_lp_mode, store_lp_mode);
+#endif
 
 static struct attribute *cpuidle_default_attrs[] = {
 	&dev_attr_current_driver.attr,
 	&dev_attr_current_governor_ro.attr,
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+	&dev_attr_lp_mode.attr,
+#endif
 	NULL
 };
 
@@ -414,7 +448,7 @@ static int cpuidle_add_state_sysfs(struct cpuidle_device *device)
 		ret = kobject_init_and_add(&kobj->kobj, &ktype_state_cpuidle,
 					   &kdev->kobj, "state%d", i);
 		if (ret) {
-			kfree(kobj);
+			kobject_put(&kobj->kobj);
 			goto error_state;
 		}
 		kobject_uevent(&kobj->kobj, KOBJ_ADD);
@@ -544,7 +578,7 @@ static int cpuidle_add_driver_sysfs(struct cpuidle_device *dev)
 	ret = kobject_init_and_add(&kdrv->kobj, &ktype_driver_cpuidle,
 				   &kdev->kobj, "driver");
 	if (ret) {
-		kfree(kdrv);
+		kobject_put(&kdrv->kobj);
 		return ret;
 	}
 
@@ -638,7 +672,7 @@ int cpuidle_add_sysfs(struct cpuidle_device *dev)
 	error = kobject_init_and_add(&kdev->kobj, &ktype_cpuidle, &cpu_dev->kobj,
 				   "cpuidle");
 	if (error) {
-		kfree(kdev);
+		kobject_put(&kdev->kobj);
 		return error;
 	}
 

@@ -120,6 +120,24 @@ enum {
 #define TCP_FASTOPEN_CONNECT	30	/* Attempt FastOpen with connect */
 #define TCP_ULP			31	/* Attach a ULP to a TCP connection */
 #define TCP_MD5SIG_EXT		32	/* TCP MD5 Signature with extensions */
+#ifdef CONFIG_MPTCP
+#define MPTCP_ENABLED		42
+#define MPTCP_SCHEDULER		43
+#define MPTCP_PATH_MANAGER	44
+#define MPTCP_INFO			45
+#define MPTCP_HW_EXT		46
+#define MPTCP_INFO_FLAG_SAVE_MASTER	0x01
+#endif
+
+#ifdef CONFIG_HUAWEI_BASTET
+#define TCP_RECONN		100
+#endif
+#ifdef CONFIG_HUAWEI_TCP_QUICK_START
+#define TCP_QUICK_START		121
+#endif
+
+#define TCP_SLOW_START_AFTER_IDLE	141	/* Slow start after transmission idle */
+
 
 struct tcp_repair_opt {
 	__u32	opt_code;
@@ -242,6 +260,60 @@ enum {
 
 };
 
+#ifdef CONFIG_MPTCP
+struct mptcp_meta_info {
+	__u8	mptcpi_state;
+	__u8	mptcpi_retransmits;
+	__u8	mptcpi_probes;
+	__u8	mptcpi_backoff;
+
+	__u32	mptcpi_rto;
+	__u32	mptcpi_unacked;
+
+	/* Times. */
+	__u32	mptcpi_last_data_sent;
+	__u32	mptcpi_last_data_recv;
+	__u32	mptcpi_last_ack_recv;
+
+	__u32	mptcpi_total_retrans;
+	/* RFC4898 tcpEStatsAppHCThruOctetsAcked */
+	__u64	mptcpi_bytes_acked;
+	/* RFC4898 tcpEStatsAppHCThruOctetsReceived */
+	__u64	mptcpi_bytes_received;
+};
+
+struct mptcp_sub_info {
+	union {
+		struct sockaddr src;
+		struct sockaddr_in src_v4;
+		struct sockaddr_in6 src_v6;
+	};
+
+	union {
+		struct sockaddr dst;
+		struct sockaddr_in dst_v4;
+		struct sockaddr_in6 dst_v6;
+	};
+};
+
+struct mptcp_info {
+	/* Length of each struct tcp_info in subflows pointer */
+	__u32	tcp_info_len;
+	/* Total length of memory pointed to by subflows pointer */
+	__u32	sub_len;
+	__u32	meta_len;	/* Length of memory pointed to by meta_info */
+	/* Length of each struct mptcp_sub_info in subflow_info pointer */
+	__u32	sub_info_len;
+	/* Total length of memory pointed to by subflow_info */
+	__u32	total_sub_info_len;
+
+	struct mptcp_meta_info	*meta_info;
+	struct tcp_info		*initial;
+	/* Pointer to array of tcp_info structs */
+	struct tcp_info		*subflows;
+	struct mptcp_sub_info	*subflow_info;
+};
+#endif
 /* for TCP_MD5SIG socket option */
 #define TCP_MD5SIG_MAXKEYLEN	80
 

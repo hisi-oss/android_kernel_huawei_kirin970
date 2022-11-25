@@ -15,6 +15,7 @@
 #include <linux/ratelimit.h>
 #include "overlayfs.h"
 #include "ovl_entry.h"
+#include <linux/security.h>
 
 int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 {
@@ -230,9 +231,9 @@ int ovl_xattr_set(struct dentry *dentry, struct inode *inode, const char *name,
 	}
 
 	old_cred = ovl_override_creds(dentry->d_sb);
-	if (value)
+	if (value) {
 		err = vfs_setxattr(realdentry, name, value, size, flags);
-	else {
+	} else {
 		WARN_ON(flags != XATTR_REPLACE);
 		err = vfs_removexattr(realdentry, name);
 	}
@@ -265,7 +266,8 @@ static bool ovl_can_list(const char *s)
 		return true;
 
 	/* Never list trusted.overlay, list other trusted for superuser only */
-	return !ovl_is_private_xattr(s) && capable(CAP_SYS_ADMIN);
+	return !ovl_is_private_xattr(s) &&
+	       ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN);
 }
 
 ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
@@ -388,6 +390,35 @@ static const struct inode_operations ovl_symlink_inode_operations = {
 	.update_time	= ovl_update_time,
 };
 
+void ovl_copyattr(struct inode *from, struct inode *to)
+{
+#ifdef CONFIG_SECURITY
+	void   *secctx;
+	u32  ctxlen;
+	int     err = -1;
+
+	err = security_inode_getsecctx(from, &secctx, &ctxlen);
+	if (!err) {
+		/*
+		 * replace the fresh inode_security_struct because it should be
+		 * the same as the real underlying inode.
+		 */
+		err = security_inode_notifysecctx(to, secctx, ctxlen);
+		security_release_secctx(secctx, ctxlen);
+	}
+	if (err)
+		WARN(1, "cannot copy up security context err:%d\n", err);
+
+#endif
+	to->i_uid = from->i_uid;
+	to->i_gid = from->i_gid;
+	to->i_mode = from->i_mode;
+	to->i_atime = from->i_atime;
+	to->i_mtime = from->i_mtime;
+	to->i_ctime = from->i_ctime;
+	//copy the size attribute of lower indoe to merge layer
+	i_size_write(to, i_size_read(from));
+}
 /*
  * It is possible to stack overlayfs instance on top of another
  * overlayfs instance as lower layer. We need to annonate the

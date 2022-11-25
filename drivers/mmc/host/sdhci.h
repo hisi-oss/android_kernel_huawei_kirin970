@@ -21,6 +21,14 @@
 #include <linux/interrupt.h>
 
 #include <linux/mmc/host.h>
+#ifdef CONFIG_HUAWEI_DSM_IOMT_EMMC_HOST
+#include <linux/iomt_host/dsm_iomt_emmc_host.h>
+#endif
+
+/* sctrl register */
+#define SCTRL_PEREN1			(0x170)
+#define SCTRL_PERDIS1			(0x174)
+#define GT_CLK_EMMC		(0x1 << 22)
 
 /*
  * Controller registers
@@ -89,11 +97,18 @@
 #define   SDHCI_CTRL_8BITBUS	0x20
 #define  SDHCI_CTRL_CDTEST_INS	0x40
 #define  SDHCI_CTRL_CDTEST_EN	0x80
+/*0x10 means adma2 when host ver4 is enabled*/
+#define   SDHCI_CTRL_ADMA2	0x10
 
 #define SDHCI_POWER_CONTROL	0x29
 #define  SDHCI_POWER_ON		0x01
+#ifdef CONFIG_MMC_SDHCI_DWC_MSHC
+#define  SDHCI_POWER_180	0x0C
+#define  SDHCI_POWER_300	0x0E
+#else
 #define  SDHCI_POWER_180	0x0A
 #define  SDHCI_POWER_300	0x0C
+#endif
 #define  SDHCI_POWER_330	0x0E
 
 #define SDHCI_BLOCK_GAP_CONTROL	0x2A
@@ -113,6 +128,8 @@
 #define  SDHCI_CLOCK_CARD_EN	0x0004
 #define  SDHCI_CLOCK_INT_STABLE	0x0002
 #define  SDHCI_CLOCK_INT_EN	0x0001
+/*only for synopsis controller*/
+#define  SDHCI_PLL_ENABLE	0x0008
 
 #define SDHCI_TIMEOUT_CONTROL	0x2E
 
@@ -135,6 +152,7 @@
 #define  SDHCI_INT_CARD_INT	0x00000100
 #define  SDHCI_INT_RETUNE	0x00001000
 #define  SDHCI_INT_CQE		0x00004000
+#define  SDHCI_INT_CMDQ		0x00004000
 #define  SDHCI_INT_ERROR	0x00008000
 #define  SDHCI_INT_TIMEOUT	0x00010000
 #define  SDHCI_INT_CRC		0x00020000
@@ -158,6 +176,8 @@
 		SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | \
 		SDHCI_INT_DATA_END_BIT | SDHCI_INT_ADMA_ERROR | \
 		SDHCI_INT_BLK_GAP)
+
+#define SDHCI_INT_CMDQ_EN	(0x1 << 14)
 #define SDHCI_INT_ALL_MASK	((unsigned int)-1)
 
 #define SDHCI_CQE_INT_ERR_MASK ( \
@@ -190,6 +210,15 @@
 #define  SDHCI_CTRL_EXEC_TUNING		0x0040
 #define  SDHCI_CTRL_TUNED_CLK		0x0080
 #define  SDHCI_CTRL_PRESET_VAL_ENABLE	0x8000
+#define  SDHCI_CTRL_64BIT_ADDR	    0x2000
+#define  SDHCI_CTRL_HOST_VER4_ENABLE	0x1000
+/* synopsys speed mode */
+#define  SDHCI_CTRL_HS_SDR		0x0001
+#define  SDHCI_CTRL_HS_DDR		0x0004
+#define  SDHCI_CTRL_HS_HS200		0x0003
+#define  SDHCI_CTRL_HS_HS400		0x0007
+#define  SDHCI_CTRL_INV_DATA		(0x1 << 9)
+
 
 #define SDHCI_CAPABILITIES	0x40
 #define  SDHCI_TIMEOUT_CLK_MASK	0x0000003F
@@ -265,6 +294,8 @@
 #define SDHCI_PRESET_SDCLK_FREQ_MASK   0x3FF
 #define SDHCI_PRESET_SDCLK_FREQ_SHIFT	0
 
+#define SDHCI_ENHANCED_STROBE_EBABLE 0x78
+
 #define SDHCI_SLOT_INT_STATUS	0xFC
 
 #define SDHCI_HOST_VERSION	0xFE
@@ -275,6 +306,41 @@
 #define   SDHCI_SPEC_100	0
 #define   SDHCI_SPEC_200	1
 #define   SDHCI_SPEC_300	2
+
+#define SDHCI_CORE_CFG1						0x404
+#define SDHCI_CORE_CFG1_64BIT_SUPPORT		(0x1 << 31)
+
+#define SDHCI_DEBUG_REG0						0x420
+#define SDHCI_DEBUG_REG1						0x424
+#define SDHCI_DEBUG_REG2						0x428
+#define SDHCI_DEBUG_REG3						0x42C
+#define SDHCI_PHY_CTRL1							0x430
+#define SDHCI_PHY_CTRL2							0x434
+#define SDHCI_PHY_CTRL3							0x438
+#define SDHCI_PHY_STATUS						0x440
+#define SDHCI_PHY_CTRL1_ODEN_CMD				(0x1)
+#define SDHCI_PHY_CTRL1_EN_DLL					(0x1 << 7)
+#define SDHCI_PHY_CTRL1_DLL_TRIM_ICP			8
+#define SDHCI_PHY_CTRL1_DLL_TRIM_ICP_MASK	0xFF
+#define SDHCI_PHY_CTRL1_EN_RTRIM				(0x1 << 16)
+#define SDHCI_PHY_CTRL1_PDB					(0x1 << 25)
+#define SDHCI_PHY_CTRL1_DR_TY					22
+#define SDHCI_PHY_CTRL1_DR_TY_MASK			0x7
+#define SDHCI_PHY_CTRL2_ODEN_DAT				22
+#define SDHCI_PHY_CTRL3_STRBSEL_MASK			0xF
+#define SDHCI_PHY_CTRL3_STRBSEL				2
+#define SDHCI_PHY_CTRL3_OTAPDLYSEL				9
+#define SDHCI_PHY_CTRL3_OTAPDLYSEL_MASK		0xF
+#define SDHCI_PHY_CTRL3_OTAPDLYENA			(0x1 << 8)
+#define SDHCI_PHY_CTRL3_ITAPDLYSEL				15
+#define SDHCI_PHY_CTRL3_ITAPDLYSEL_MASK		0x1F
+#define SDHCI_PHY_CTRL3_ITAPDLYENA				(0x1 << 14)
+#define SDHCI_PHY_CTRL3_ITAPCHGWIN			(0x1 << 13)
+#define SDHCI_PHY_CTRL3_DLL_FREQ_SEL			28
+#define SDHCI_PHY_CTRL3_DLL_FREQ_SEL_MASK	0x7
+#define SDHCI_PHY_STATUS_EXR_NINST			(0x1)
+#define SDHCI_PHY_STATUS_DLLRDY				(0x1 << 1)
+#define SDHCI_PHY_STATUS_CALDONE				(0x1 << 6)
 
 /*
  * End of controller registers.
@@ -292,26 +358,33 @@
 /* ADMA2 32-bit DMA descriptor size */
 #define SDHCI_ADMA2_32_DESC_SZ	8
 
+/* ADMA2 32-bit DMA alignment */
+#define SDHCI_ADMA2_32_ALIGN	4
+
 /* ADMA2 32-bit descriptor */
 struct sdhci_adma2_32_desc {
 	__le16	cmd;
 	__le16	len;
 	__le32	addr;
-}  __packed __aligned(4);
+}  __packed __aligned(SDHCI_ADMA2_32_ALIGN);
 
-/* ADMA2 data alignment */
-#define SDHCI_ADMA2_ALIGN	4
-#define SDHCI_ADMA2_MASK	(SDHCI_ADMA2_ALIGN - 1)
 
-/*
- * ADMA2 descriptor alignment.  Some controllers (e.g. Intel) require 8 byte
- * alignment for the descriptor table even in 32-bit DMA mode.  Memory
- * allocation is at least 8 byte aligned anyway, so just stipulate 8 always.
- */
-#define SDHCI_ADMA2_DESC_ALIGN	8
-
+#ifdef CONFIG_MMC_SDHCI_DWC_MSHC
+/* ADMA2 64-bit DMA descriptor size */
+#define SDHCI_ADMA2_64_DESC_SZ	16
+/* ADMA2 64-bit DMA alignment */
+#define SDHCI_ADMA2_64_ALIGN	8
+#elif CONFIG_MMC_SDHCI_HISI_SCORPIO
+/* ADMA2 64-bit DMA descriptor size */
+#define SDHCI_ADMA2_64_DESC_SZ	16
+/* ADMA2 64-bit DMA alignment */
+#define SDHCI_ADMA2_64_ALIGN	8
+#else
 /* ADMA2 64-bit DMA descriptor size */
 #define SDHCI_ADMA2_64_DESC_SZ	12
+/* ADMA2 64-bit DMA alignment */
+#define SDHCI_ADMA2_64_ALIGN	4
+#endif
 
 /*
  * ADMA2 64-bit descriptor. Note 12-byte descriptor can't always be 8-byte
@@ -322,7 +395,7 @@ struct sdhci_adma2_64_desc {
 	__le16	len;
 	__le32	addr_lo;
 	__le32	addr_hi;
-}  __packed __aligned(4);
+}  __packed __aligned(SDHCI_ADMA2_64_ALIGN);
 
 #define ADMA2_TRAN_VALID	0x21
 #define ADMA2_NOP_END_VALID	0x3
@@ -442,9 +515,18 @@ struct sdhci_host {
 #define SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN		(1<<15)
 /* Controller has CRC in 136 bit Command Response */
 #define SDHCI_QUIRK2_RSP_136_HAS_CRC			(1<<16)
+#define SDHCI_QUIRK2_USE_1_8_V_VMMC			(1<<17)
+/* use hisi combo phy testchip */
+#define SDHCI_QUIRK2_HISI_COMBO_PHY_TC		(1UL<<31)
 
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
+	void __iomem *mmc_phy;
+	void __iomem *mmc_sys;
+	void __iomem *sysctrl;
+	void __iomem *hsdt1crg;
+	void __iomem *crgctrl;
+
 	char *bounce_buffer;	/* For packing SDMA reads/writes */
 	dma_addr_t bounce_addr;
 	unsigned int bounce_buffer_size;
@@ -456,14 +538,14 @@ struct sdhci_host {
 	struct mmc_host_ops mmc_host_ops;	/* MMC host ops */
 	u64 dma_mask;		/* custom DMA mask */
 
-#if IS_ENABLED(CONFIG_LEDS_CLASS)
+#if IS_ENABLED(CONFIG_LEDS_CLASS) /*lint !e553*/
 	struct led_classdev led;	/* LED control */
 	char led_name[32];
 #endif
 
 	spinlock_t lock;	/* Mutex */
 
-	int flags;		/* Host attributes */
+	unsigned int flags;		/* Host attributes */
 #define SDHCI_USE_SDMA		(1<<0)	/* Host is SDMA capable */
 #define SDHCI_USE_ADMA		(1<<1)	/* Host is ADMA capable */
 #define SDHCI_REQ_USE_DMA	(1<<2)	/* Use DMA for this req. */
@@ -478,6 +560,9 @@ struct sdhci_host {
 #define SDHCI_SIGNALING_330	(1<<14)	/* Host is capable of 3.3V signaling */
 #define SDHCI_SIGNALING_180	(1<<15)	/* Host is capable of 1.8V signaling */
 #define SDHCI_SIGNALING_120	(1<<16)	/* Host is capable of 1.2V signaling */
+#define SDHCI_EXE_SOFT_TUNING	(1<<17)	/* Host execute soft tuning */
+#define SDHCI_SET_TX_CLK_1_3T	(1<<18)	/* cancel config strobe clk 1/3T */
+#define SDHCI_WITHOUT_TUNING_MOVE	(1<<19)	/* host close tuning move */
 
 	unsigned int version;	/* SDHCI spec. version */
 
@@ -514,11 +599,17 @@ struct sdhci_host {
 	dma_addr_t align_addr;	/* Mapped bounce buffer */
 
 	unsigned int desc_sz;	/* ADMA descriptor size */
+	unsigned int align_sz;	/* ADMA alignment */
+	unsigned int align_mask;	/* ADMA alignment mask */
 
 	struct tasklet_struct finish_tasklet;	/* Tasklet structures */
 
 	struct timer_list timer;	/* Timer for timeouts */
 	struct timer_list data_timer;	/* Timer for data timeouts */
+
+#ifdef CONFIG_HUAWEI_DSM_IOMT_EMMC_HOST
+	struct iomt_host_info iomt_host_info_entity;
+#endif
 
 	u32 caps;		/* CAPABILITY_0 */
 	u32 caps1;		/* CAPABILITY_1 */
@@ -548,14 +639,22 @@ struct sdhci_host {
 #define SDHCI_TUNING_MODE_1	0
 #define SDHCI_TUNING_MODE_2	1
 #define SDHCI_TUNING_MODE_3	2
+#define SDHCI_TUNING_MODE_RESERVED	3
 	/* Delay (ms) between tuning commands */
 	int			tuning_delay;
 
 	/* Host SDMA buffer boundary. */
 	u32			sdma_boundary;
+	struct cmdq_host	*cq_host;
+	struct i2c_client *i2c_client;
 
 	unsigned long private[0] ____cacheline_aligned;
 };
+
+#define TUNING_CLK 					0
+#define TUNING_STROBE 				1
+#define TUNING_FLAG_NOUSE			0
+#define TUNING_FLAG_CLEAR_COUNT	1
 
 struct sdhci_ops {
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS
@@ -590,8 +689,23 @@ struct sdhci_ops {
 	void	(*set_uhs_signaling)(struct sdhci_host *host, unsigned int uhs);
 	void	(*hw_reset)(struct sdhci_host *host);
 	void    (*adma_workaround)(struct sdhci_host *host, u32 intmask);
+	void    (*platform_init)(struct sdhci_host *host);
 	void    (*card_event)(struct sdhci_host *host);
 	void	(*voltage_switch)(struct sdhci_host *host);
+	void	(*update_phy_control)(struct sdhci_host *host, unsigned char timing);
+	int	(*tuning_soft)(struct sdhci_host *host, u32 opcode, bool set);
+	int	(*tuning_move)(struct sdhci_host *host, int is_move_strobe, int flag);
+	int	(*enable_enhanced_strobe)(struct sdhci_host *host);
+	void	(*init_tuning_para)(struct sdhci_host *host);
+	int     (*check_busy_before_send_cmd)(struct sdhci_host *host,
+				struct mmc_command* cmd);
+	void (*restore_transfer_para)(struct sdhci_host *host);
+	void (*select_card_type)(struct sdhci_host *host);
+        void (*dumpregs)(struct sdhci_host *host);
+	void (*delay_measurement)(struct sdhci_host *host, struct mmc_ios *ios);
+	void (*set_clk_emmc_gt)(struct sdhci_host *host, bool enable);
+	void (*sqscmd_idle_tmr)(struct cmdq_host *cq_host);
+	int (*sdhci_get_cd)(struct sdhci_host *host);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS
@@ -678,8 +792,12 @@ static inline u8 sdhci_readb(struct sdhci_host *host, int reg)
 
 #endif /* CONFIG_MMC_SDHCI_IO_ACCESSORS */
 
-struct sdhci_host *sdhci_alloc_host(struct device *dev, size_t priv_size);
-void sdhci_free_host(struct sdhci_host *host);
+#define sdhci_sctrl_writel(host, val, reg) writel((val), (host)->sysctrl + (reg))
+#define sdhci_sctrl_readl(host, reg) readl((host)->sysctrl + (reg))
+
+extern struct sdhci_host *sdhci_alloc_host(struct device *dev,
+	size_t priv_size);
+extern void sdhci_free_host(struct sdhci_host *host);
 
 static inline void *sdhci_priv(struct sdhci_host *host)
 {
@@ -737,5 +855,8 @@ bool sdhci_cqe_irq(struct sdhci_host *host, u32 intmask, int *cmd_error,
 		   int *data_error);
 
 void sdhci_dumpregs(struct sdhci_host *host);
+int sdhci_card_busy_data0(struct mmc_host *mmc);
+void sdhci_set_transfer_irqs(struct sdhci_host *host);
+void sdhci_set_default_irqs(struct sdhci_host *host);
 
 #endif /* __SDHCI_HW_H */

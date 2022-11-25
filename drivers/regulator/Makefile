@@ -2,8 +2,6 @@
 #
 # Makefile for regulator drivers.
 #
-
-
 obj-$(CONFIG_REGULATOR) += core.o dummy.o fixed-helper.o helpers.o devres.o
 obj-$(CONFIG_OF) += of_regulator.o
 obj-$(CONFIG_REGULATOR_FIXED_VOLTAGE) += fixed.o
@@ -123,5 +121,10 @@ obj-$(CONFIG_REGULATOR_WM8350) += wm8350-regulator.o
 obj-$(CONFIG_REGULATOR_WM8400) += wm8400-regulator.o
 obj-$(CONFIG_REGULATOR_WM8994) += wm8994-regulator.o
 
-
+obj-$(CONFIG_HISI_REGULATOR) += hisi_regulator_regmap.o
+obj-$(CONFIG_HISI_SMARTPA_REGULATOR) += hisi_smartpa_regulator.o
+obj-$(CONFIG_HISI_REGULATOR_SPMI) += hisi_regulator_spmi.o
+obj-$(CONFIG_HISI_SUB_REGULATOR_SPMI) += hisi_sub_regulator_spmi.o
+obj-$(CONFIG_DRV_HISI_IP_REGULATOR) += ip_regulator.o
+obj-$(CONFIG_HISI_REGULATOR_DEBUG) += regulator_debug.o
 ccflags-$(CONFIG_REGULATOR_DEBUG) += -DDEBUG

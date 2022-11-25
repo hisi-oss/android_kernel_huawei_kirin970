@@ -98,6 +98,51 @@ struct inodes_stat_t {
 	long dummy[5];		/* padding for sysctl ABI compatibility */
 };
 
+/* unistore */
+enum cust_blkdev_cmd {
+	CUST_BLKDEV_INVALID = 0,
+	CUST_BLKDEV_SET_STREAM_ID = 1,
+	CUST_BLKDEV_GET_OPEN_PTR = 2,
+	CUST_BLKDEV_GET_SEGS_PER_SEC = 3,
+	CUST_BLKDEV_RESET_FTL = 4,
+	CUST_BLKDEV_SET_MAPPING_POS = 5,
+	CUST_BLKDEV_GET_OP_SIZE = 6,
+	CUST_BLKDEV_GET_UNISTORE_ENABLE = 7,
+	CUST_BLKDEV_GET_MAPPING_POS = 8,
+	CUST_BLKDEV_CLOSE_SECTION = 9,
+	CUST_BLKDEV_FS_SYNC_DONE = 10,
+	CUST_BLKDEV_SET_MAX_META_MAPPING_POS = 11,
+	CUST_BLKDEV_MAX,
+};
+
+struct blkdev_cmd {
+	unsigned long cmd;
+	void __user *cust_argp;
+	unsigned long cust_arg_len;
+};
+
+struct blkdev_set_stream {
+	unsigned char stream_id;
+};
+
+struct blkdev_segments_per_section {
+	unsigned long segments_per_section;
+};
+
+struct blkdev_set_mapping_pos {
+	unsigned char lun_number;
+	unsigned short mapping_pos;
+};
+
+struct blkdev_op_size {
+	unsigned int op_size;
+};
+
+struct blkdev_unistore_enable {
+	uint8_t enable;
+};
+/* end of unistore */
+
 
 #define NR_FILE  8192	/* this can well be larger on a larger system */
 
@@ -210,6 +255,9 @@ struct fsxattr {
 /* This was here just to show that the number is taken -
    probably all these _IO(0x12,*) ioctls should be moved to blkpg.h. */
 #endif
+
+#define BLKCUST_CMD	_IO(0x12, 111) /* unistore - Custom Command */
+
 /* A jump here: 108-111 have been used for various private purposes. */
 #define BLKBSZGET  _IOR(0x12,112,size_t)
 #define BLKBSZSET  _IOW(0x12,113,size_t)
@@ -265,8 +313,7 @@ struct fsxattr {
 #define FS_POLICY_FLAGS_PAD_16		0x02
 #define FS_POLICY_FLAGS_PAD_32		0x03
 #define FS_POLICY_FLAGS_PAD_MASK	0x03
-#define FS_POLICY_FLAG_DIRECT_KEY	0x04	/* use master key directly */
-#define FS_POLICY_FLAGS_VALID		0x07
+#define FS_POLICY_FLAGS_VALID		0x03
 
 /* Encryption algorithms */
 #define FS_ENCRYPTION_MODE_INVALID		0
@@ -276,9 +323,8 @@ struct fsxattr {
 #define FS_ENCRYPTION_MODE_AES_256_CTS		4
 #define FS_ENCRYPTION_MODE_AES_128_CBC		5
 #define FS_ENCRYPTION_MODE_AES_128_CTS		6
-#define FS_ENCRYPTION_MODE_SPECK128_256_XTS	7 /* Removed, do not use. */
-#define FS_ENCRYPTION_MODE_SPECK128_256_CTS	8 /* Removed, do not use. */
-#define FS_ENCRYPTION_MODE_ADIANTUM		9
+#define FS_ENCRYPTION_MODE_SPECK128_256_XTS	7
+#define FS_ENCRYPTION_MODE_SPECK128_256_CTS	8
 
 struct fscrypt_policy {
 	__u8 version;
@@ -348,11 +394,13 @@ struct fscrypt_key {
 #define FS_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
 #define FS_HUGE_FILE_FL			0x00040000 /* Reserved for ext4 */
 #define FS_EXTENT_FL			0x00080000 /* Extents */
+#define FS_VERITY_FL			0x00100000 /* Verity protected inode */
 #define FS_EA_INODE_FL			0x00200000 /* Inode used for large EA */
 #define FS_EOFBLOCKS_FL			0x00400000 /* Reserved for ext4 */
 #define FS_NOCOW_FL			0x00800000 /* Do not cow file */
 #define FS_INLINE_DATA_FL		0x10000000 /* Reserved for ext4 */
 #define FS_PROJINHERIT_FL		0x20000000 /* Create with parents projid */
+#define FS_CASEFOLD_FL			0x40000000 /* Folder is case insensitive */
 #define FS_RESERVED_FL			0x80000000 /* reserved for ext2 lib */
 
 #define FS_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */

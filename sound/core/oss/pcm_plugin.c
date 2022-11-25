@@ -66,8 +66,8 @@ static int snd_pcm_plugin_alloc(struct snd_pcm_plugin *plugin, snd_pcm_uframes_t
 		return -ENXIO;
 	size /= 8;
 	if (plugin->buf_frames < frames) {
-		kvfree(plugin->buf);
-		plugin->buf = kvzalloc(size, GFP_KERNEL);
+		vfree(plugin->buf);
+		plugin->buf = vmalloc(size);
 		plugin->buf_frames = frames;
 	}
 	if (!plugin->buf) {
@@ -191,7 +191,7 @@ int snd_pcm_plugin_free(struct snd_pcm_plugin *plugin)
 	if (plugin->private_free)
 		plugin->private_free(plugin);
 	kfree(plugin->buf_channels);
-	kvfree(plugin->buf);
+	vfree(plugin->buf);
 	kfree(plugin);
 	return 0;
 }

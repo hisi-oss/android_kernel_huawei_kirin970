@@ -9,6 +9,7 @@
 #include <linux/mmc/core.h>
 #include <linux/mmc/host.h>
 #include <linux/tracepoint.h>
+#include <linux/mmc/mmc.h>
 
 TRACE_EVENT(mmc_request_start,
 

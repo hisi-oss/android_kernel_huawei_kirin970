@@ -477,8 +477,7 @@ static int sun8i_dwmac_init(struct platform_device *pdev, void *priv)
 	return 0;
 }
 
-static void sun8i_dwmac_core_init(struct mac_device_info *hw,
-				  struct net_device *dev)
+static void sun8i_dwmac_core_init(struct mac_device_info *hw, int mtu)
 {
 	void __iomem *ioaddr = hw->pcsr;
 	u32 v;

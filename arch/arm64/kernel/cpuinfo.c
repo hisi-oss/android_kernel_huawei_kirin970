@@ -19,6 +19,7 @@
 #include <asm/cpu.h>
 #include <asm/cputype.h>
 #include <asm/cpufeature.h>
+#include <asm/elf.h>
 
 #include <linux/bitops.h>
 #include <linux/bug.h>
@@ -33,6 +34,10 @@
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/delay.h>
+#include <linux/of_fdt.h>
+
+char* (*arch_read_hardware_id)(void);
+EXPORT_SYMBOL(arch_read_hardware_id);
 
 /*
  * In case the boot CPU is hotpluggable, we record its initial state and
@@ -74,6 +79,13 @@ static const char *const hwcap_str[] = {
 	"sm4",
 	"asimddp",
 	"sha512",
+	"sve",
+	"asimdfhm",
+	"dit",
+	"uscat",
+	"ilrcpc",
+	"flagm",
+	"ssbs",
 	NULL
 };
 
@@ -119,6 +131,8 @@ static int c_show(struct seq_file *m, void *v)
 	int i, j;
 	bool compat = personality(current->personality) == PER_LINUX32;
 
+	seq_printf(m, "Processor\t: AArch64 Processor rev %d (%s)\n",
+		read_cpuid_id() & 15, ELF_PLATFORM);
 	for_each_online_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
 		u32 midr = cpuinfo->reg_midr;
@@ -132,11 +146,11 @@ static int c_show(struct seq_file *m, void *v)
 		if (compat)
 			seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
 				   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
-
+#ifndef CONFIG_PRODUCT_ARMPC
 		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
 			   loops_per_jiffy / (500000UL/HZ),
 			   loops_per_jiffy / (5000UL/HZ) % 100);
-
+#endif
 		/*
 		 * Dump out the common processor features in a single line.
 		 * Userspace should read the hwcaps with getauxval(AT_HWCAP)
@@ -168,6 +182,11 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
 	}
+
+	if (!arch_read_hardware_id)
+		seq_printf(m, "Hardware\t: UNKNOWN SOC TYPE\n");
+	else
+		seq_printf(m, "Hardware\t: %s\n", arch_read_hardware_id());
 
 	return 0;
 }
@@ -317,7 +336,15 @@ static void cpuinfo_detect_icache_policy(struct cpuinfo_arm64 *info)
 static void __cpuinfo_store_cpu(struct cpuinfo_arm64 *info)
 {
 	info->reg_cntfrq = arch_timer_get_cntfrq();
-	info->reg_ctr = read_cpuid_cachetype();
+	/*
+	 * Use the effective value of the CTR_EL0 than the raw value
+	 * exposed by the CPU. CTR_E0.IDC field value must be interpreted
+	 * with the CLIDR_EL1 fields to avoid triggering false warnings
+	 * when there is a mismatch across the CPUs. Keep track of the
+	 * effective value of the CTR_EL0 in our internal records for
+	 * acurate sanity check and feature enablement.
+	 */
+	info->reg_ctr = read_cpuid_effective_cachetype();
 	info->reg_dczid = read_cpuid(DCZID_EL0);
 	info->reg_midr = read_cpuid_id();
 	info->reg_revidr = read_cpuid(REVIDR_EL1);

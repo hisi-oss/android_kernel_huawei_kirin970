@@ -345,6 +345,13 @@ config BLK_DEV_RAM_DAX
 	  and will prevent RAM block device backing store memory from being
 	  allocated from highmem (only a problem for highmem systems).
 
+config HISI_BLK_DEV_RAM_EMU
+	bool "Support EMU RAM block devices"
+	depends on BLK_DEV_RAM && HISI_DEBUG_FS
+	default n
+	help
+	  Support create a emulator ram filesystem.
+
 config CDROM_PKTCDVD
 	tristate "Packet writing on CD/DVD media (DEPRECATED)"
 	depends on !UML

@@ -29,6 +29,9 @@
 #include <linux/freezer.h>
 #include <linux/compat.h>
 #include <linux/module.h>
+#ifdef CONFIG_HUAWEI_DUBAI
+#include <chipset_common/dubai/dubai.h>
+#endif
 
 #include "posix-timers.h"
 
@@ -65,6 +68,87 @@ static struct rtc_timer		rtctimer;
 static struct rtc_device	*rtcdev;
 static DEFINE_SPINLOCK(rtcdev_lock);
 
+#define ALARM_AHEAD_TIME    (60)
+//shut down cost: avg:8s, std:4s
+#define ALARM_AFTER_TIME    (15)
+struct rtc_wkalrm poweroff_rtc_alarm = { 0, 0, {0} };
+extern void hisi_pmu_rtc_setalarmtime(unsigned long time);
+extern void hisi_pmu_rtc_readtime(struct rtc_time *tm);
+
+/**
+ * set_power_on_alarm - set power on alarm value into rtc register
+ *
+ */
+int set_power_on_alarm(long time_sec, bool enable_irq)
+{
+	struct timespec tmp_time = {0};
+	struct rtc_time rtc_current_rtc_time = {0};
+	unsigned long rtc_current_time = 0;
+	unsigned long offset = 0;
+	unsigned long alarm_value = 0;
+	struct rtc_time setting_time = {0};
+	/* remove rtc alarm */
+	if (time_sec == 0) {
+		pr_info("%s(): remove rtc alarm\n", __func__);
+		/* set current as alarm time, and turn off the irq */
+		rtc_time_to_tm(rtc_current_time, &poweroff_rtc_alarm.time);
+		poweroff_rtc_alarm.enabled = 0;
+		hisi_pmu_rtc_setalarmtime(0);
+		return 0;
+	}
+	getnstimeofday(&tmp_time);
+
+	rtc_time_to_tm(time_sec, &setting_time);
+	pr_info("%s() setting_time is : [%d-%d-%d] [%d:%d:%d] %lu\n",
+		__func__,
+		setting_time.tm_year + 1900,
+		setting_time.tm_mon + 1,
+		setting_time.tm_mday,
+		setting_time.tm_hour,
+		setting_time.tm_min,
+		setting_time.tm_sec,
+		time_sec);
+
+	hisi_pmu_rtc_readtime(&rtc_current_rtc_time);
+	rtc_tm_to_time(&rtc_current_rtc_time, &rtc_current_time);
+	pr_info("%s() rtc_current_rtc_time is : [%d-%d-%d] [%d:%d:%d] %lu\n",
+		__func__,
+		rtc_current_rtc_time.tm_year + 1900,
+		rtc_current_rtc_time.tm_mon + 1,
+		rtc_current_rtc_time.tm_mday,
+		rtc_current_rtc_time.tm_hour,
+		rtc_current_rtc_time.tm_min,
+		rtc_current_rtc_time.tm_sec,
+		rtc_current_time);
+
+	/* get offset if system utc time does not equal rtc time */
+	offset = tmp_time.tv_sec - rtc_current_time;
+	/* printk(KERN_INFO "%ld - %ld = %ld\n", */
+	/*       tmp_time.tv_sec, rtc_current_time, offset); */
+
+	memset(&poweroff_rtc_alarm, 0, sizeof(poweroff_rtc_alarm));
+	alarm_value = time_sec - offset;
+	if (alarm_value < (ALARM_AHEAD_TIME + rtc_current_time)) {
+		//less then 60s: phone'll be start in 15s after shut down
+		alarm_value = ALARM_AFTER_TIME + rtc_current_time;
+	}else{
+		alarm_value -= ALARM_AHEAD_TIME;
+	}
+	rtc_time_to_tm(alarm_value, &poweroff_rtc_alarm.time);
+	poweroff_rtc_alarm.enabled = (enable_irq == true ? 1 : 0);
+	pr_info("%s() set_rtc_time is : [%d-%d-%d] [%d:%d:%d] %lu\n",
+		__func__,
+		poweroff_rtc_alarm.time.tm_year + 1900,
+		poweroff_rtc_alarm.time.tm_mon + 1,
+		poweroff_rtc_alarm.time.tm_mday,
+		poweroff_rtc_alarm.time.tm_hour,
+		poweroff_rtc_alarm.time.tm_min,
+		poweroff_rtc_alarm.time.tm_sec,
+		alarm_value);
+	hisi_pmu_rtc_setalarmtime(alarm_value);
+	return 0;
+}
+
 /**
  * alarmtimer_get_rtcdev - Return selected rtcdevice
  *
@@ -91,6 +175,7 @@ static int alarmtimer_rtc_add_device(struct device *dev,
 	unsigned long flags;
 	struct rtc_device *rtc = to_rtc_device(dev);
 	struct wakeup_source *__ws;
+	int ret = 0;
 
 	if (rtcdev)
 		return -EBUSY;
@@ -105,8 +190,8 @@ static int alarmtimer_rtc_add_device(struct device *dev,
 	spin_lock_irqsave(&rtcdev_lock, flags);
 	if (!rtcdev) {
 		if (!try_module_get(rtc->owner)) {
-			spin_unlock_irqrestore(&rtcdev_lock, flags);
-			return -1;
+			ret = -1;
+			goto unlock;
 		}
 
 		rtcdev = rtc;
@@ -115,11 +200,12 @@ static int alarmtimer_rtc_add_device(struct device *dev,
 		ws = __ws;
 		__ws = NULL;
 	}
+unlock:
 	spin_unlock_irqrestore(&rtcdev_lock, flags);
 
 	wakeup_source_unregister(__ws);
 
-	return 0;
+	return ret;
 }
 
 static inline void alarmtimer_rtc_timer_init(void)
@@ -141,6 +227,10 @@ static void alarmtimer_rtc_interface_remove(void)
 	class_interface_unregister(&alarmtimer_rtc_interface);
 }
 #else
+int set_power_on_alarm(long time_sec, bool enable_irq)
+{
+	return 0;
+}
 struct rtc_device *alarmtimer_get_rtcdev(void)
 {
 	return NULL;
@@ -232,6 +322,13 @@ ktime_t alarm_expires_remaining(const struct alarm *alarm)
 }
 EXPORT_SYMBOL_GPL(alarm_expires_remaining);
 
+bool hw_alarm_stop = 0;
+module_param(hw_alarm_stop, bool, 0644);
+MODULE_PARM_DESC(hw_alarm_stop, "stop or not alarm");
+EXPORT_SYMBOL(hw_alarm_stop);
+
+extern unsigned int runmode_is_factory(void);
+
 #ifdef CONFIG_RTC_CLASS
 /**
  * alarmtimer_suspend - Suspend time callback
@@ -247,9 +344,21 @@ static int alarmtimer_suspend(struct device *dev)
 {
 	ktime_t min, now, expires;
 	int i, ret, type;
+#ifdef CONFIG_HISI_RTC_LOG
+	ktime_t alarm;
+#endif
+#ifdef CONFIG_HUAWEI_DUBAI
+	struct timerqueue_node *alarm_node = NULL;
+	struct alarm *rtc_alarm = NULL;
+#endif
 	struct rtc_device *rtc;
 	unsigned long flags;
 	struct rtc_time tm;
+
+	if (hw_alarm_stop && runmode_is_factory()){
+		pr_err("runmode_is_factory 1, forbid alarms\n");
+		return 0;
+	}
 
 	spin_lock_irqsave(&freezer_delta_lock, flags);
 	min = freezer_delta;
@@ -279,6 +388,9 @@ static int alarmtimer_suspend(struct device *dev)
 			expires = next->expires;
 			min = delta;
 			type = i;
+#ifdef CONFIG_HUAWEI_DUBAI
+			alarm_node = next;
+#endif
 		}
 	}
 	if (min == 0)
@@ -286,6 +398,22 @@ static int alarmtimer_suspend(struct device *dev)
 
 	if (ktime_to_ns(min) < 2 * NSEC_PER_SEC) {
 		__pm_wakeup_event(ws, 2 * MSEC_PER_SEC);
+#ifdef CONFIG_HISI_RTC_LOG
+		rtc_read_time(rtc, &tm);
+		alarm = rtc_tm_to_ktime(tm);
+		alarm = ktime_add(alarm, min);
+		tm = rtc_ktime_to_tm(alarm);
+		printk(KERN_ERR "Too short to sleep \n");
+		printk(KERN_ERR "[%s:%d]  time %d-%d-%d %d:%d:%d\n",
+			__FUNCTION__, __LINE__,
+			tm.tm_year+1900, tm.tm_mon+1,
+			tm.tm_mday, tm.tm_hour,
+			tm.tm_min, tm.tm_sec);
+		printk(KERN_ERR "Wake up source : %s-%lu %lu %lu-%d-%d %lu %lu\r\n",
+			ws->name, jiffies, ws->timer_expires,
+			ws->timer.expires, ws->timer.flags,
+			ws->active, ws->active_count, ws->relax_count);
+#endif
 		return -EBUSY;
 	}
 
@@ -301,6 +429,12 @@ static int alarmtimer_suspend(struct device *dev)
 	ret = rtc_timer_start(rtc, &rtctimer, now, 0);
 	if (ret < 0)
 		__pm_wakeup_event(ws, MSEC_PER_SEC);
+#ifdef CONFIG_HUAWEI_DUBAI
+	else if (alarm_node != NULL) {
+		rtc_alarm = container_of(alarm_node, struct alarm, node);
+		dubai_set_rtc_timer(rtc_alarm->timer.comm, rtc_alarm->timer.pid);
+	}
+#endif
 	return ret;
 }
 
@@ -519,12 +653,14 @@ static void alarmtimer_freezerset(ktime_t absexp, enum alarmtimer_type type)
  * clock2alarm - helper that converts from clockid to alarmtypes
  * @clockid: clockid.
  */
-static enum alarmtimer_type clock2alarm(clockid_t clockid)
+enum alarmtimer_type clock2alarm(clockid_t clockid)
 {
 	if (clockid == CLOCK_REALTIME_ALARM)
 		return ALARM_REALTIME;
 	if (clockid == CLOCK_BOOTTIME_ALARM)
 		return ALARM_BOOTTIME;
+	if (clockid == CLOCK_POWEROFF_ALARM)
+		return ALARM_POWEROFF_REALTIME;
 	return -1;
 }
 
@@ -676,7 +812,7 @@ static int alarm_timer_create(struct k_itimer *new_timer)
 	enum  alarmtimer_type type;
 
 	if (!alarmtimer_get_rtcdev())
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	if (!capable(CAP_WAKE_ALARM))
 		return -EPERM;
@@ -794,7 +930,7 @@ static int alarm_timer_nsleep(const clockid_t which_clock, int flags,
 	int ret = 0;
 
 	if (!alarmtimer_get_rtcdev())
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	if (flags & ~TIMER_ABSTIME)
 		return -EINVAL;
@@ -873,6 +1009,8 @@ static int __init alarmtimer_init(void)
 	/* Initialize alarm bases */
 	alarm_bases[ALARM_REALTIME].base_clockid = CLOCK_REALTIME;
 	alarm_bases[ALARM_REALTIME].gettime = &ktime_get_real;
+	alarm_bases[ALARM_POWEROFF_REALTIME].base_clockid = CLOCK_REALTIME;
+	alarm_bases[ALARM_POWEROFF_REALTIME].gettime = &ktime_get_real;
 	alarm_bases[ALARM_BOOTTIME].base_clockid = CLOCK_BOOTTIME;
 	alarm_bases[ALARM_BOOTTIME].gettime = &ktime_get_boottime;
 	for (i = 0; i < ALARM_NUMTYPE; i++) {

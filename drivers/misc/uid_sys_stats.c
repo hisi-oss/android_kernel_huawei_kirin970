@@ -70,6 +70,10 @@ struct uid_entry {
 	u64 stime;
 	u64 active_utime;
 	u64 active_stime;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+	unsigned long long active_power;
+	unsigned long long power;
+#endif
 	int state;
 	struct io_stats io[UID_STATE_SIZE];
 	struct hlist_node hash;
@@ -344,6 +348,9 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 	hash_for_each(hash_table, bkt, uid_entry, hash) {
 		uid_entry->active_stime = 0;
 		uid_entry->active_utime = 0;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+		uid_entry->active_power = 0;
+#endif
 	}
 
 	rcu_read_lock();
@@ -358,9 +365,20 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 				__func__, uid);
 			return -ENOMEM;
 		}
-		task_cputime_adjusted(task, &utime, &stime);
-		uid_entry->active_utime += utime;
-		uid_entry->active_stime += stime;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+		/* if this task is exiting, we have already accounted for the
+		 * time and power.
+		 */
+		if (task->cpu_power == ULLONG_MAX)
+			continue;
+		uid_entry->active_power += task->cpu_power;
+#endif
+		/* avoid double accounting of dying threads */
+		if (!(task->flags & PF_EXITING)) {
+			task_cputime_adjusted(task, &utime, &stime);
+			uid_entry->active_utime += utime;
+			uid_entry->active_stime += stime;
+		}
 	} while_each_thread(temp, task);
 	rcu_read_unlock();
 
@@ -369,8 +387,16 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 							uid_entry->active_utime;
 		u64 total_stime = uid_entry->stime +
 							uid_entry->active_stime;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+		unsigned long long total_power = uid_entry->power +
+							uid_entry->active_power;
+		seq_printf(m, "%d: %llu %llu %llu\n", uid_entry->uid,
+			ktime_to_ms(total_utime), ktime_to_ms(total_stime),
+			total_power);
+#else
 		seq_printf(m, "%d: %llu %llu\n", uid_entry->uid,
 			ktime_to_ms(total_utime), ktime_to_ms(total_stime));
+#endif
 	}
 
 	rt_mutex_unlock(&uid_lock);
@@ -400,7 +426,7 @@ static ssize_t uid_remove_write(struct file *file,
 	struct uid_entry *uid_entry;
 	struct hlist_node *tmp;
 	char uids[128];
-	char *start_uid, *end_uid = NULL;
+	char *start_uid = NULL, *end_uid = NULL;
 	long int uid_start = 0, uid_end = 0;
 
 	if (count >= sizeof(uids))
@@ -452,6 +478,10 @@ static void add_uid_io_stats(struct uid_entry *uid_entry,
 			struct task_struct *task, int slot)
 {
 	struct io_stats *io_slot = &uid_entry->io[slot];
+
+	/* avoid double accounting of dying threads */
+	if (slot != UID_STATE_DEAD_TASKS && (task->flags & PF_EXITING))
+		return;
 
 	io_slot->read_bytes += task->ioac.read_bytes;
 	io_slot->write_bytes += compute_write_bytes(task);
@@ -641,6 +671,10 @@ static int process_notifier(struct notifier_block *self,
 	task_cputime_adjusted(task, &utime, &stime);
 	uid_entry->utime += utime;
 	uid_entry->stime += stime;
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+	uid_entry->power += task->cpu_power;
+	task->cpu_power = ULLONG_MAX;
+#endif
 
 	add_uid_io_stats(uid_entry, task, UID_STATE_DEAD_TASKS);
 

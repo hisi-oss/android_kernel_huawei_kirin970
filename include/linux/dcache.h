@@ -17,6 +17,15 @@
 struct path;
 struct vfsmount;
 
+#ifdef CONFIG_MM_PAGECACHE_DEBUG
+struct mapping_stat_t {
+	unsigned long mmap_sync_read_times;
+	unsigned long generic_sync_read_times;
+	unsigned long async_read_times;
+	unsigned long shrink_page_times;
+};
+#endif
+
 /*
  * linux/include/linux/dcache.h
  *
@@ -111,6 +120,11 @@ struct dentry {
 	};
 	struct list_head d_child;	/* child of parent list */
 	struct list_head d_subdirs;	/* our children */
+
+#ifdef CONFIG_MM_PAGECACHE_DEBUG
+	struct mapping_stat_t mapping_stat;
+#endif
+
 	/*
 	 * d_alias and d_rcu can share memory
 	 */
@@ -119,7 +133,7 @@ struct dentry {
 		struct hlist_bl_node d_in_lookup_hash;	/* only for in-lookup ones */
 	 	struct rcu_head d_rcu;
 	} d_u;
-} __randomize_layout;
+};
 
 /*
  * dentry->d_lock spinlock nesting subclasses:

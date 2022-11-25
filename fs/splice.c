@@ -34,6 +34,7 @@
 #include <linux/socket.h>
 #include <linux/compat.h>
 #include <linux/sched/signal.h>
+#include <linux/fscrypt_common.h>
 
 #include "internal.h"
 
@@ -868,6 +869,11 @@ static long do_splice_to(struct file *in, loff_t *ppos,
 	ret = rw_verify_area(READ, in, ppos, len);
 	if (unlikely(ret < 0))
 		return ret;
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	ret = rw_begin(in);
+	if (ret)
+		return ret;
+#endif
 
 	if (unlikely(len > MAX_RW_COUNT))
 		len = MAX_RW_COUNT;
@@ -877,7 +883,13 @@ static long do_splice_to(struct file *in, loff_t *ppos,
 	else
 		splice_read = default_file_splice_read;
 
-	return splice_read(in, ppos, pipe, len, flags);
+	ret = splice_read(in, ppos, pipe, len, flags);
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	rw_finish(READ, in);
+#endif
+
+	return ret;
 }
 
 /**
@@ -1057,10 +1069,19 @@ long do_splice_direct(struct file *in, loff_t *ppos, struct file *out,
 	ret = rw_verify_area(WRITE, out, opos, len);
 	if (unlikely(ret < 0))
 		return ret;
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	ret = rw_begin(out);
+	if (ret)
+		return ret;
+#endif
 
 	ret = splice_direct_to_actor(in, &sd, direct_splice_actor);
 	if (ret > 0)
 		*ppos = sd.pos;
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	rw_finish(WRITE, out);
+#endif
 
 	return ret;
 }
@@ -1142,6 +1163,11 @@ static long do_splice(struct file *in, loff_t __user *off_in,
 		ret = rw_verify_area(WRITE, out, &offset, len);
 		if (unlikely(ret < 0))
 			return ret;
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	ret = rw_begin(out);
+	if (ret)
+		return ret;
+#endif
 
 		file_start_write(out);
 		ret = do_splice_from(ipipe, out, &offset, len, flags);
@@ -1151,6 +1177,10 @@ static long do_splice(struct file *in, loff_t __user *off_in,
 			out->f_pos = offset;
 		else if (copy_to_user(off_out, &offset, sizeof(loff_t)))
 			ret = -EFAULT;
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		rw_finish(WRITE, out);
+#endif
 
 		return ret;
 	}

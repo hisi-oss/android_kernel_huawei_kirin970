@@ -246,8 +246,7 @@ static void spk_ttyio_send_xchar(char ch)
 		return;
 	}
 
-	if (speakup_tty->ops->send_xchar)
-		speakup_tty->ops->send_xchar(speakup_tty, ch);
+	speakup_tty->ops->send_xchar(speakup_tty, ch);
 	mutex_unlock(&speakup_tty_mutex);
 }
 
@@ -259,8 +258,7 @@ static void spk_ttyio_tiocmset(unsigned int set, unsigned int clear)
 		return;
 	}
 
-	if (speakup_tty->ops->tiocmset)
-		speakup_tty->ops->tiocmset(speakup_tty, set, clear);
+	speakup_tty->ops->tiocmset(speakup_tty, set, clear);
 	mutex_unlock(&speakup_tty_mutex);
 }
 

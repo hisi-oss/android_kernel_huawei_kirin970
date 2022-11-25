@@ -38,6 +38,11 @@
 #include <linux/magic.h>
 #include "ecryptfs_kernel.h"
 
+#ifdef CONFIG_ECRYPT_FS_FILTER
+#include <linux/ctype.h>
+#include <securec.h>
+#endif
+
 /**
  * Module parameter that defines the ecryptfs_verbosity level.
  */
@@ -175,6 +180,9 @@ enum { ecryptfs_opt_sig, ecryptfs_opt_ecryptfs_sig,
        ecryptfs_opt_fn_cipher, ecryptfs_opt_fn_cipher_key_bytes,
        ecryptfs_opt_unlink_sigs, ecryptfs_opt_mount_auth_tok_only,
        ecryptfs_opt_check_dev_ruid,
+#ifdef CONFIG_ECRYPT_FS_FILTER
+       ecryptfs_opt_enable_filtering,
+#endif
        ecryptfs_opt_err };
 
 static const match_table_t tokens = {
@@ -192,6 +200,9 @@ static const match_table_t tokens = {
 	{ecryptfs_opt_unlink_sigs, "ecryptfs_unlink_sigs"},
 	{ecryptfs_opt_mount_auth_tok_only, "ecryptfs_mount_auth_tok_only"},
 	{ecryptfs_opt_check_dev_ruid, "ecryptfs_check_dev_ruid"},
+#ifdef CONFIG_ECRYPT_FS_FILTER
+	{ecryptfs_opt_enable_filtering, "ecryptfs_enable_filtering=%s"},
+#endif
 	{ecryptfs_opt_err, NULL}
 };
 
@@ -232,6 +243,96 @@ static void ecryptfs_init_mount_crypt_stat(
 	mutex_init(&mount_crypt_stat->global_auth_tok_list_mutex);
 	mount_crypt_stat->flags |= ECRYPTFS_MOUNT_CRYPT_STAT_INITIALIZED;
 }
+
+#ifdef CONFIG_ECRYPT_FS_FILTER
+static void clear_mem(struct ecryptfs_mount_crypt_stat *mcs)
+{
+	if (!mcs)
+		return;
+	(void)memset_s(mcs->enc_filter_folder_name,
+		sizeof(mcs->enc_filter_folder_name), 0,
+		sizeof(mcs->enc_filter_folder_name));
+}
+
+static int parse_enc_folder_filter_parms(
+	struct ecryptfs_mount_crypt_stat *mcs, char *str)
+{
+	char *token = NULL;
+	int count = 0;
+
+	if (!mcs || !str) {
+		ecryptfs_printk(KERN_ERR,
+			"ECRYPTFS_FILTER bad param in %s\n", __func__);
+		return -EINVAL;
+	}
+	if (strlen(str) == 0) {
+		ecryptfs_printk(KERN_ERR,
+			"ECRYPTFS_FILTER %s str length is 0\n", __func__);
+		return 0;
+	}
+	clear_mem(mcs);
+	while ((token = strsep(&str, "|")) != NULL) {
+		if (count >= SD_ENC_FOLDER_NUM) {
+			ecryptfs_printk(KERN_ERR,
+				"ECRYPTFS_FILTER too many folder in %s\n",
+				__func__);
+			clear_mem(mcs);
+			return -EINVAL;
+		}
+		if (strlen(token) >= SD_ENC_FOLDER_LEN) {
+			ecryptfs_printk(KERN_ERR,
+				"ECRYPTFS_FILTER in %s token [%s] over len\n",
+				token, __func__);
+			clear_mem(mcs);
+			return -EINVAL;
+		} else if (strlen(token) == 0) {
+			ecryptfs_printk(KERN_WARNING,
+				"ECRYPTFS_FILTER %s token 0\n", __func__);
+			continue;
+		} else if (token[0] == ' ' ||
+			token[strlen(token - 1)] == ' ') {
+			ecryptfs_printk(KERN_WARNING,
+				"ECRYPTFS_FILTER %s space happen\n", __func__);
+			continue;
+		} else {
+			if (strncpy_s(mcs->enc_filter_folder_name[count++],
+				sizeof(mcs->enc_filter_folder_name[count++]),
+				token, strlen(token)) != 0)
+				return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+/*
+ * parse encryption filter parms parcels encrypt extent
+ * name and file name white list
+ *
+ * @mcs: mount crypt stat
+ * @str: filter string
+ * Returns zero on success; non-zero otherwise
+ */
+static int parse_enc_filter_parms(
+	struct ecryptfs_mount_crypt_stat *mcs, char *str)
+{
+	int rc = -EINVAL;
+
+	if (!mcs || !str) {
+		ecryptfs_printk(KERN_ERR,
+			"ECRYPTFS_FILTER invalid param in %s\n", __func__);
+		return rc;
+	}
+	if (strlen(str) == 0) {
+		ecryptfs_printk(KERN_ERR, "ECRYPTFS_FILTER str length is 0\n");
+		return 0;
+	}
+	rc = parse_enc_folder_filter_parms(mcs, str);
+	if (rc != 0)
+		ecryptfs_printk(KERN_ERR,
+			"ECRYPTFS_FILTER %s err returned %d\n", __func__, rc);
+	return rc;
+}
+#endif
 
 /**
  * ecryptfs_parse_options
@@ -389,6 +490,20 @@ static int ecryptfs_parse_options(struct ecryptfs_sb_info *sbi, char *options,
 		case ecryptfs_opt_check_dev_ruid:
 			*check_ruid = 1;
 			break;
+#ifdef CONFIG_ECRYPT_FS_FILTER
+		case ecryptfs_opt_enable_filtering:
+			rc = parse_enc_filter_parms(
+				mount_crypt_stat, args[0].from);
+			if (rc != 0) {
+				ecryptfs_printk(KERN_ERR,
+					"ECRYPTFS_FILTER Error "
+					"attempting to parse encryption "
+					"filtering parameters.\n");
+				goto out;
+			}
+			mount_crypt_stat->flags |= ECRYPTFS_ENABLE_FILTERING;
+			break;
+#endif
 		case ecryptfs_opt_err:
 		default:
 			printk(KERN_WARNING

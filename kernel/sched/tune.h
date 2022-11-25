@@ -19,6 +19,10 @@ int schedtune_prefer_idle(struct task_struct *tsk);
 
 void schedtune_enqueue_task(struct task_struct *p, int cpu);
 void schedtune_dequeue_task(struct task_struct *p, int cpu);
+#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL_OPT
+int schedtune_freq_boost(int cpu);
+int schedtune_top_task(struct task_struct *tsk);
+#endif
 
 #else /* CONFIG_SCHED_TUNE */
 
@@ -29,5 +33,14 @@ void schedtune_dequeue_task(struct task_struct *p, int cpu);
 
 #define schedtune_enqueue_task(task, cpu) do { } while (0)
 #define schedtune_dequeue_task(task, cpu) do { } while (0)
+
+#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL_OPT
+static inline int schedtune_freq_boost(int cpu) {
+	return 0;
+}
+static inline int schedtune_top_task(struct task_struct *tsk) {
+	return 0;
+}
+#endif
 
 #endif /* CONFIG_SCHED_TUNE */

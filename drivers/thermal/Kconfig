@@ -408,7 +408,7 @@ config MTK_THERMAL
 	  controller present in Mediatek SoCs
 
 menu "Broadcom thermal drivers"
-depends on ARCH_BCM || ARCH_BCM2835 || COMPILE_TEST
+depends on ARCH_BCM || COMPILE_TEST
 source "drivers/thermal/broadcom/Kconfig"
 endmenu
 
@@ -449,6 +449,11 @@ config QCOM_SPMI_TEMP_ALARM
 	  trip points. The temperature reported by the thermal sensor reflects the
 	  real time die temperature if an ADC is present or an estimate of the
 	  temperature based upon the over temperature stage value.
+
+menu "Hisilicon thermal drivers"
+depends on ARCH_HISI
+source "drivers/thermal/hisi/Kconfig"
+endmenu
 
 config GENERIC_ADC_THERMAL
 	tristate "Generic ADC based thermal sensor"

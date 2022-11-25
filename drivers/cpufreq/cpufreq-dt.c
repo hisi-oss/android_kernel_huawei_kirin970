@@ -24,14 +24,26 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
+#include <linux/version.h>
 
 #include "cpufreq-dt.h"
+#include <linux/hisi/hisi_cpufreq_dt.h>
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+#include <linux/hisi/hw_vote.h>
+#endif
+
+#ifdef CONFIG_DRG
+#include <linux/drg.h>
+#endif
 
 struct private_data {
 	struct opp_table *opp_table;
 	struct device *cpu_dev;
 	struct thermal_cooling_device *cdev;
 	const char *reg_name;
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+	struct hvdev *cpu_hvdev;
+#endif
 	bool have_static_opps;
 };
 
@@ -47,8 +59,15 @@ static int set_target(struct cpufreq_policy *policy, unsigned int index)
 	unsigned long freq = policy->freq_table[index].frequency;
 	int ret;
 
-	ret = dev_pm_opp_set_rate(priv->cpu_dev, freq * 1000);
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+#ifdef CONFIG_LPCPU_L2_DYNAMIC_RETENTION
+	l2_dynamic_retention_ctrl(policy, freq);
+#endif
 
+	ret = lpcpu_cpufreq_set(priv->cpu_hvdev, freq);
+#else
+	ret = dev_pm_opp_set_rate(priv->cpu_dev, freq * 1000);
+#endif
 	if (!ret) {
 		arch_set_freq_scale(policy->related_cpus, freq,
 				    policy->cpuinfo.max_freq);
@@ -205,6 +224,15 @@ static int cpufreq_init(struct cpufreq_policy *policy)
 		}
 	}
 
+#ifdef CONFIG_HISI_CPUFREQ_DT
+	opp_table = lpcpu_cpufreq_set_supported_hw(cpu_dev);
+	if (IS_ERR(opp_table)) {
+		ret = PTR_ERR(opp_table);
+		dev_err(cpu_dev, "%s: failed to set supported hw: %d\n",
+			__func__, ret);
+		goto out_put_regulator;
+	}
+#endif
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
 		ret = -ENOMEM;
@@ -257,11 +285,17 @@ static int cpufreq_init(struct cpufreq_policy *policy)
 		goto out_free_opp;
 	}
 
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+	priv->cpu_hvdev = lpcpu_cpufreq_hv_init(cpu_dev);
+#endif
 	priv->cpu_dev = cpu_dev;
 	policy->driver_data = priv;
 	policy->clk = cpu_clk;
 
 	policy->suspend_freq = dev_pm_opp_get_suspend_opp_freq(cpu_dev) / 1000;
+#ifdef CONFIG_HISI_CPUFREQ_DT
+	lpcpu_cpufreq_get_suspend_freq(policy);
+#endif
 
 	ret = cpufreq_table_validate_and_show(policy, freq_table);
 	if (ret) {
@@ -286,6 +320,10 @@ static int cpufreq_init(struct cpufreq_policy *policy)
 	policy->cpuinfo.transition_latency = transition_latency;
 	policy->dvfs_possible_from_any_cpu = true;
 
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+	lpcpu_cpufreq_policy_cur_init(priv->cpu_hvdev, policy);
+#endif
+
 	return 0;
 
 out_free_cpufreq_table:
@@ -294,6 +332,9 @@ out_free_opp:
 	if (priv->have_static_opps)
 		dev_pm_opp_of_cpumask_remove_table(policy->cpus);
 	kfree(priv);
+#ifdef CONFIG_HISI_CPUFREQ_DT
+	lpcpu_cpufreq_put_supported_hw(opp_table);
+#endif
 out_put_regulator:
 	if (name)
 		dev_pm_opp_put_regulators(opp_table);
@@ -307,14 +348,28 @@ static int cpufreq_exit(struct cpufreq_policy *policy)
 {
 	struct private_data *priv = policy->driver_data;
 
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+	lpcpu_cpufreq_hv_exit(priv->cpu_hvdev, policy->cpu);
+	priv->cpu_hvdev = NULL;
+#endif
 	cpufreq_cooling_unregister(priv->cdev);
+#ifdef CONFIG_DRG
+	drg_cpufreq_unregister(policy);
+#endif
 	dev_pm_opp_free_cpufreq_table(priv->cpu_dev, &policy->freq_table);
 	if (priv->have_static_opps)
 		dev_pm_opp_of_cpumask_remove_table(policy->related_cpus);
+#ifdef CONFIG_HISI_CPUFREQ_DT
+	if (priv->opp_table)
+		lpcpu_cpufreq_put_supported_hw(priv->opp_table);
+#endif
 	if (priv->reg_name)
 		dev_pm_opp_put_regulators(priv->opp_table);
 
 	clk_put(policy->clk);
+#ifdef CONFIG_HISI_CPUFREQ
+	policy->clk = ERR_PTR(-EINVAL);
+#endif
 	kfree(priv);
 
 	return 0;
@@ -327,6 +382,10 @@ static void cpufreq_ready(struct cpufreq_policy *policy)
 
 	if (WARN_ON(!np))
 		return;
+
+#ifdef CONFIG_DRG
+	drg_cpufreq_register(policy);
+#endif
 
 	/*
 	 * For now, just loading the cooling device;
@@ -356,7 +415,11 @@ static struct cpufreq_driver dt_cpufreq_driver = {
 	.flags = CPUFREQ_STICKY | CPUFREQ_NEED_INITIAL_FREQ_CHECK,
 	.verify = cpufreq_generic_frequency_table_verify,
 	.target_index = set_target,
+#ifdef CONFIG_LPCPU_HW_VOTE_CPU_FREQ
+	.get = lpcpu_cpufreq_get,
+#else
 	.get = cpufreq_generic_get,
+#endif
 	.init = cpufreq_init,
 	.exit = cpufreq_exit,
 	.ready = cpufreq_ready,
@@ -383,6 +446,13 @@ static int dt_cpufreq_probe(struct platform_device *pdev)
 
 	if (data && data->have_governor_per_policy)
 		dt_cpufreq_driver.flags |= CPUFREQ_HAVE_GOVERNOR_PER_POLICY;
+
+#ifdef CONFIG_HISI_CPUFREQ_DT
+	dt_cpufreq_driver.flags |= CPUFREQ_HAVE_GOVERNOR_PER_POLICY;
+	ret = lpcpu_cpufreq_init();
+	if (ret)
+		return ret;
+#endif
 
 	ret = cpufreq_register_driver(&dt_cpufreq_driver);
 	if (ret)

@@ -813,7 +813,7 @@ static irqreturn_t au1xmmc_irq(int irq, void *dev_id)
 		/* IRQ_OFF(host, SD_CONFIG_TH | SD_CONFIG_RA | SD_CONFIG_RF); */
 		tasklet_schedule(&host->finish_task);
 	}
-#if 0
+#ifndef CONFIG_ZODIAC_MMC
 	else if (status & SD_STATUS_DD) {
 		/* Sometimes we get a DD before a NE in PIO mode */
 		if (!(host->flags & HOST_F_DMA) && (status & SD_STATUS_NE))

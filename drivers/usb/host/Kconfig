@@ -44,6 +44,11 @@ config USB_XHCI_PLATFORM
 
 	  If unsure, say N.
 
+config VENDOR_XHCI_EVENT_DEBUG
+	bool "Hisilicon USB Xhci Debug Event"
+	---help---
+	This option adds support for Hisilicon Xhci Driver Debug Event.
+
 config USB_XHCI_MTK
 	tristate "xHCI support for Mediatek MT65xx/MT7621"
 	select MFD_SYSCON
@@ -78,6 +83,11 @@ config USB_XHCI_TEGRA
 	---help---
 	  Say 'Y' to enable the support for the xHCI host controller
 	  found in NVIDIA Tegra124 and later SoCs.
+
+config CHIP_USB_XHCI_HUB_PORT_DIS
+	bool
+	---help---
+	  Work around the bug which hub port maybe is abnomal, disable it after reset
 
 endif # USB_XHCI_HCD
 

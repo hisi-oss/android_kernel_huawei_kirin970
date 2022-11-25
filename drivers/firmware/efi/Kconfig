@@ -138,6 +138,13 @@ config EFI_TEST
 	  Say Y here to enable the runtime services support via /dev/efi_test.
 	  If unsure, say N.
 
+config HISI_EFI_TEST
+	bool "Hisi efi runtime test"
+	depends on EFI
+	default n
+	help
+	  This option enables hisi efi test, used for test uefi runtime interface.
+
 config APPLE_PROPERTIES
 	bool "Apple Device Properties"
 	depends on EFI_STUB && X86

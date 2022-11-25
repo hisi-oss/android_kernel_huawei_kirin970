@@ -38,6 +38,7 @@
 #include <linux/pagemap.h>
 /* For sys_open & sys_close */
 #include <linux/syscalls.h>
+#include <chipset_common/security/kshield.h>
 #include <net/sock.h>
 
 #include <linux/libcfs/libcfs.h>
@@ -50,6 +51,11 @@ kernel_sock_unlocked_ioctl(struct file *filp, int cmd, unsigned long arg)
 	int err;
 
 	set_fs(KERNEL_DS);
+	if (kshield_chk_heap_ret2dir(filp) ||
+	    kshield_chk_fops(filp->f_op, sizeof(*filp->f_op))) {
+		set_fs(oldfs);
+		return -EINVAL;
+	}
 	err = filp->f_op->unlocked_ioctl(filp, cmd, arg);
 	set_fs(oldfs);
 

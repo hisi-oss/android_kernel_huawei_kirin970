@@ -1854,20 +1854,6 @@ static void end_sync_read(struct bio *bio)
 		reschedule_retry(r1_bio);
 }
 
-static void abort_sync_write(struct mddev *mddev, struct r1bio *r1_bio)
-{
-	sector_t sync_blocks = 0;
-	sector_t s = r1_bio->sector;
-	long sectors_to_go = r1_bio->sectors;
-
-	/* make sure these bits don't get cleared. */
-	do {
-		bitmap_end_sync(mddev->bitmap, s, &sync_blocks, 1);
-		s += sync_blocks;
-		sectors_to_go -= sync_blocks;
-	} while (sectors_to_go > 0);
-}
-
 static void end_sync_write(struct bio *bio)
 {
 	int uptodate = !bio->bi_status;
@@ -1879,7 +1865,16 @@ static void end_sync_write(struct bio *bio)
 	struct md_rdev *rdev = conf->mirrors[find_bio_disk(r1_bio, bio)].rdev;
 
 	if (!uptodate) {
-		abort_sync_write(mddev, r1_bio);
+		sector_t sync_blocks = 0;
+		sector_t s = r1_bio->sector;
+		long sectors_to_go = r1_bio->sectors;
+		/* make sure these bits doesn't get cleared. */
+		do {
+			bitmap_end_sync(mddev->bitmap, s,
+					&sync_blocks, 1);
+			s += sync_blocks;
+			sectors_to_go -= sync_blocks;
+		} while (sectors_to_go > 0);
 		set_bit(WriteErrorSeen, &rdev->flags);
 		if (!test_and_set_bit(WantReplacement, &rdev->flags))
 			set_bit(MD_RECOVERY_NEEDED, &
@@ -2169,10 +2164,8 @@ static void sync_request_write(struct mddev *mddev, struct r1bio *r1_bio)
 		     (i == r1_bio->read_disk ||
 		      !test_bit(MD_RECOVERY_SYNC, &mddev->recovery))))
 			continue;
-		if (test_bit(Faulty, &conf->mirrors[i].rdev->flags)) {
-			abort_sync_write(mddev, r1_bio);
+		if (test_bit(Faulty, &conf->mirrors[i].rdev->flags))
 			continue;
-		}
 
 		bio_set_op_attrs(wbio, REQ_OP_WRITE, 0);
 		if (test_bit(FailFast, &conf->mirrors[i].rdev->flags))

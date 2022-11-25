@@ -21,6 +21,15 @@
  * ----------------------------------------------------------------------------
  *
  */
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+#include <linux/dmaengine.h>
+#include <linux/dma-mapping.h>
+#include <linux/scatterlist.h>
+#include <linux/clk.h>
+#ifdef CONFIG_HUAWEI_DSM
+#include <dsm/dsm_pub.h>
+#endif
+#endif
 
 #include <linux/i2c.h>
 #include <linux/pm_qos.h>
@@ -44,6 +53,59 @@
 #define DW_IC_CON_STOP_DET_IFADDRESSED		0x80
 #define DW_IC_CON_TX_EMPTY_CTRL		0x100
 #define DW_IC_CON_RX_FIFO_FULL_HLD_CTRL		0x200
+
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+
+#define DW_IC_CON_SPEED_HIGH		0x6
+#define ACCESS_32BIT			0x00000004
+
+struct dw_i2c_dev;
+
+struct hs_i2c_priv_data {
+	u32 delay_off;
+	u32 delay_bit;
+	u32 reset_enable_off;
+	u32 reset_disable_off;
+	u32 reset_status_off;
+	u32 reset_bit;
+};
+
+struct dw_i2c_dma_data {
+	struct dma_chan	*chan;
+	struct scatterlist	sg;
+	u8		*buf;
+};
+
+struct dw_i2c_controller {
+	volatile int		irq_is_run;
+	//void			*priv;
+	/* DMA stuff */
+	u32			dmacr;
+	bool			using_tx_dma;
+	bool			using_rx_dma;
+	struct dw_i2c_dma_data  	dmarx;
+	struct dw_i2c_dma_data  	dmatx;
+	int  			timeout_count;
+	struct completion		dma_complete;
+	bool			using_dma;
+	/* user defined*/
+	//struct device		*platform_dev;
+	struct pinctrl		*pinctrl;
+	int			pinctrl_flag;
+	resource_size_t 		mapbase;
+	u32			delay_off;
+	void __iomem		*reset_reg_base;
+	void			(*reset_controller) (struct dw_i2c_dev *dev);
+	void 			(*recover_bus)(struct i2c_adapter *);
+	struct hs_i2c_priv_data 	priv;
+
+};
+
+#ifdef CONFIG_HUAWEI_DSM
+#define  DSM_TIME	3
+#define  DSM_EUSB_I2C_TRANSFER_NO	925205600
+#endif
+#endif
 
 /*
  * Registers offset
@@ -284,16 +346,39 @@ struct dw_i2c_dev {
 	void			(*disable_int)(struct dw_i2c_dev *dev);
 	int			(*init)(struct dw_i2c_dev *dev);
 	int			mode;
+#if defined CONFIG_HISI_I2C_DESIGNWARE
+	struct mutex		lock;
+	void			*priv_data;
+	bool 			secure_mode;
+	u32             reg_base;
+#ifdef CONFIG_HUAWEI_DSM
+	int dmd_support;
+	int dsm_count;
+	struct dsm_client *i2c_dclient;
+#endif
+#endif
 };
 
 #define ACCESS_SWAP		0x00000001
 #define ACCESS_16BIT		0x00000002
 #define ACCESS_INTR_MASK	0x00000004
 
+extern u32 dw_readl(struct dw_i2c_dev *dev, u32 offset);
+extern void dw_writel(struct dw_i2c_dev *dev, u32 b, u32 offset);
+extern u32 i2c_dw_scl_hcnt(u32 ic_clk, u32 tSYMBOL, u32 tf, int cond, int offset);
+extern u32 i2c_dw_scl_lcnt(u32 ic_clk, u32 tLOW, u32 tf, int offset);
+extern int i2c_dw_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
+		int num);
+extern u32 i2c_dw_func(struct i2c_adapter *adap);
+extern irqreturn_t i2c_dw_isr(int this_irq, void *dev_id);
+extern void i2c_dw_enable(struct dw_i2c_dev *dev);
+extern u32 i2c_dw_is_enabled(struct dw_i2c_dev *dev);
+extern void i2c_dw_clear_int(struct dw_i2c_dev *dev);
+
 #define MODEL_CHERRYTRAIL	0x00000100
 
-u32 dw_readl(struct dw_i2c_dev *dev, int offset);
-void dw_writel(struct dw_i2c_dev *dev, u32 b, int offset);
+u32 dw_readl(struct dw_i2c_dev *dev, u32 offset);
+void dw_writel(struct dw_i2c_dev *dev, u32 b, u32 offset);
 u32 i2c_dw_scl_hcnt(u32 ic_clk, u32 tSYMBOL, u32 tf, int cond, int offset);
 u32 i2c_dw_scl_lcnt(u32 ic_clk, u32 tLOW, u32 tf, int offset);
 void __i2c_dw_enable(struct dw_i2c_dev *dev, bool enable);
@@ -309,16 +394,26 @@ void i2c_dw_disable_int(struct dw_i2c_dev *dev);
 
 extern u32 i2c_dw_read_comp_param(struct dw_i2c_dev *dev);
 extern int i2c_dw_probe(struct dw_i2c_dev *dev);
-#if IS_ENABLED(CONFIG_I2C_DESIGNWARE_SLAVE)
+extern int i2c_dw_init_master(struct dw_i2c_dev *dev);
+#if IS_ENABLED(CONFIG_I2C_DESIGNWARE_SLAVE) //lint !e553
 extern int i2c_dw_probe_slave(struct dw_i2c_dev *dev);
 #else
 static inline int i2c_dw_probe_slave(struct dw_i2c_dev *dev) { return -EINVAL; }
 #endif
 
-#if IS_ENABLED(CONFIG_I2C_DESIGNWARE_BAYTRAIL)
+#if IS_ENABLED(CONFIG_I2C_DESIGNWARE_BAYTRAIL) //lint !e553
 extern int i2c_dw_probe_lock_support(struct dw_i2c_dev *dev);
 extern void i2c_dw_remove_lock_support(struct dw_i2c_dev *dev);
 #else
 static inline int i2c_dw_probe_lock_support(struct dw_i2c_dev *dev) { return 0; }
 static inline void i2c_dw_remove_lock_support(struct dw_i2c_dev *dev) {}
+#endif
+#if CONFIG_HISI_I2C_DESIGNWARE
+int dw_i2c_pins_ctrl(struct dw_i2c_dev *dev, const char *name);
+int i2c_dw_xfer_msg_dma(struct dw_i2c_dev *dev, int *alllen);
+void i2c_dw_dma_fifo_cfg(struct dw_i2c_dev *dev);
+void i2c_dw_dma_clear(struct dw_i2c_dev *dev);
+int i2c_init_secos(struct i2c_adapter *adap);
+int i2c_exit_secos(struct i2c_adapter *adap);
+void reset_i2c_controller(struct dw_i2c_dev *dev);
 #endif

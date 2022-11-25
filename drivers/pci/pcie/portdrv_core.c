@@ -189,6 +189,11 @@ static int pcie_init_service_irqs(struct pci_dev *dev, int *irqs, int mask)
 	for (i = 0; i < PCIE_PORT_DEVICE_MAXSERVICES; i++)
 		irqs[i] = -1;
 
+#ifdef CONFIG_PCIE_KPORT
+	if (kport_pcie_bypass_pm(dev))
+		return -ENODEV;
+#endif
+
 	/*
 	 * If we support PME or hotplug, but we can't use MSI/MSI-X for
 	 * them, we have to fall back to INTx or other interrupts, e.g., a
@@ -402,6 +407,10 @@ static int suspend_iter(struct device *dev, void *data)
  */
 int pcie_port_device_suspend(struct device *dev)
 {
+#ifdef CONFIG_PCIE_KPORT
+	if (kport_pcie_bypass_pm(to_pci_dev(dev)))
+		return 0;
+#endif
 	return device_for_each_child(dev, NULL, suspend_iter);
 }
 
@@ -424,6 +433,10 @@ static int resume_iter(struct device *dev, void *data)
  */
 int pcie_port_device_resume(struct device *dev)
 {
+#ifdef CONFIG_PCIE_KPORT
+	if (kport_pcie_bypass_pm(to_pci_dev(dev)))
+		return 0;
+#endif
 	return device_for_each_child(dev, NULL, resume_iter);
 }
 #endif /* PM */

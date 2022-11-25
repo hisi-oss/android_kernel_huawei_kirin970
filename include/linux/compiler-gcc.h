@@ -108,7 +108,7 @@
 #define __weak		__attribute__((weak))
 #define __alias(symbol)	__attribute__((alias(#symbol)))
 
-#ifdef CONFIG_RETPOLINE
+#ifdef RETPOLINE
 #define __noretpoline __attribute__((indirect_branch("keep")))
 #endif
 
@@ -333,6 +333,12 @@
  * Conflicts with inlining: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=67368
  */
 #define __no_sanitize_address __attribute__((no_sanitize_address))
+#ifdef CONFIG_KASAN
+#define __no_sanitize_address_or_inline					\
+	__no_sanitize_address __maybe_unused notrace
+#else
+#define __no_sanitize_address_or_inline inline
+#endif
 #endif
 
 #if GCC_VERSION >= 50100
@@ -343,6 +349,10 @@
 #define __designated_init __attribute__((designated_init))
 #endif
 
+#if GCC_VERSION >= 90100
+#define __copy(symbol)                 __attribute__((__copy__(symbol)))
+#endif
+
 #endif	/* gcc version >= 40000 specific checks */
 
 #if !defined(__noclone)
@@ -351,6 +361,7 @@
 
 #if !defined(__no_sanitize_address)
 #define __no_sanitize_address
+#define __no_sanitize_address_or_inline inline
 #endif
 
 /*
@@ -358,7 +369,3 @@
  * code
  */
 #define uninitialized_var(x) x = x
-
-#if GCC_VERSION >= 50100
-#define COMPILER_HAS_GENERIC_BUILTIN_OVERFLOW 1
-#endif

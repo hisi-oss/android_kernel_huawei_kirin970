@@ -14,7 +14,12 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/page_isolation.h>
-
+#ifdef CONFIG_HISI_CMA_DEBUG
+#include <linux/sched.h>
+#include <linux/cma.h>
+#include "cma.h"
+#include <linux/hisi/hisi_cma_debug.h>
+#endif
 static int set_migratetype_isolate(struct page *page,
 				bool skip_hwpoisoned_pages)
 {
@@ -174,6 +179,9 @@ int start_isolate_page_range(unsigned long start_pfn, unsigned long end_pfn,
 	unsigned long pfn;
 	unsigned long undo_pfn;
 	struct page *page;
+#ifdef CONFIG_HISI_CMA_DEBUG
+	ktime_t stime;
+#endif
 
 	BUG_ON(!IS_ALIGNED(start_pfn, pageblock_nr_pages));
 	BUG_ON(!IS_ALIGNED(end_pfn, pageblock_nr_pages));
@@ -190,6 +198,9 @@ int start_isolate_page_range(unsigned long start_pfn, unsigned long end_pfn,
 	}
 	return 0;
 undo:
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_stime(&stime);
+#endif
 	for (pfn = start_pfn;
 	     pfn < undo_pfn;
 	     pfn += pageblock_nr_pages) {
@@ -198,6 +209,9 @@ undo:
 			continue;
 		unset_migratetype_isolate(page, migratetype);
 	}
+#ifdef CONFIG_HISI_CMA_DEBUG
+	cma_record_alloc_etime_with_log(stime, UNDO_MIGRATE_ISOLATE_PATH);
+#endif
 
 	return -EBUSY;
 }
@@ -236,6 +250,7 @@ __test_page_isolated_in_pageblock(unsigned long pfn, unsigned long end_pfn,
 				  bool skip_hwpoisoned_pages)
 {
 	struct page *page;
+	unsigned long rc = 0;
 
 	while (pfn < end_pfn) {
 		if (!pfn_valid_within(pfn)) {
@@ -253,11 +268,23 @@ __test_page_isolated_in_pageblock(unsigned long pfn, unsigned long end_pfn,
 		else if (skip_hwpoisoned_pages && PageHWPoison(page))
 			/* A HWPoisoned page cannot be also PageBuddy */
 			pfn++;
-		else
+		else {
+#ifdef CONFIG_HISI_CMA_DEBUG
+			if (!get_himntn_cma_trace_flag())
+				break;
+
+			SetPageCmaPin(page);
+			if (!rc)
+				rc = pfn;
+			pfn++;
+			continue;
+#else
 			break;
+#endif
+		}
 	}
 
-	return pfn;
+	return (rc ? rc : pfn);
 }
 
 /* Caller should ensure that requested range is in a single zone */

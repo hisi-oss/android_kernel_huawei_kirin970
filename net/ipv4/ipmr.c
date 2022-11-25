@@ -68,8 +68,6 @@
 #include <linux/netconf.h>
 #include <net/nexthop.h>
 
-#include <linux/nospec.h>
-
 struct ipmr_rule {
 	struct fib_rule		common;
 };
@@ -1293,7 +1291,7 @@ static void mrtsock_destruct(struct sock *sk)
 	struct net *net = sock_net(sk);
 	struct mr_table *mrt;
 
-	ASSERT_RTNL();
+	rtnl_lock();
 	ipmr_for_each_table(mrt, net) {
 		if (sk == rtnl_dereference(mrt->mroute_sk)) {
 			IPV4_DEVCONF_ALL(net, MC_FORWARDING)--;
@@ -1305,6 +1303,7 @@ static void mrtsock_destruct(struct sock *sk)
 			mroute_clean_tables(mrt, false);
 		}
 	}
+	rtnl_unlock();
 }
 
 /* Socket options and virtual interface manipulation. The whole
@@ -1369,8 +1368,13 @@ int ip_mroute_setsockopt(struct sock *sk, int optname, char __user *optval,
 		if (sk != rcu_access_pointer(mrt->mroute_sk)) {
 			ret = -EACCES;
 		} else {
+			/* We need to unlock here because mrtsock_destruct takes
+			 * care of rtnl itself and we can't change that due to
+			 * the IP_ROUTER_ALERT setsockopt which runs without it.
+			 */
+			rtnl_unlock();
 			ret = ip_ra_control(sk, 0, NULL);
-			goto out_unlock;
+			goto out;
 		}
 		break;
 	case MRT_ADD_VIF:
@@ -1481,6 +1485,7 @@ int ip_mroute_setsockopt(struct sock *sk, int optname, char __user *optval,
 	}
 out_unlock:
 	rtnl_unlock();
+out:
 	return ret;
 }
 
@@ -1622,7 +1627,6 @@ int ipmr_compat_ioctl(struct sock *sk, unsigned int cmd, void __user *arg)
 			return -EFAULT;
 		if (vr.vifi >= mrt->maxvif)
 			return -EINVAL;
-		vr.vifi = array_index_nospec(vr.vifi, mrt->maxvif);
 		read_lock(&mrt_lock);
 		vif = &mrt->vif_table[vr.vifi];
 		if (VIF_EXISTS(mrt, vr.vifi)) {
@@ -2502,6 +2506,8 @@ static int ipmr_rtm_dumproute(struct sk_buff *skb, struct netlink_callback *cb)
 next_entry:
 			e++;
 		}
+		e = 0;
+		s_e = 0;
 
 		spin_lock_bh(&mfc_unres_lock);
 		list_for_each_entry(mfc, &mrt->mfc_unres_queue, list) {

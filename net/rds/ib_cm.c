@@ -946,7 +946,7 @@ int rds_ib_conn_alloc(struct rds_connection *conn, gfp_t gfp)
 	if (!ic)
 		return -ENOMEM;
 
-	ret = rds_ib_recv_alloc_caches(ic, gfp);
+	ret = rds_ib_recv_alloc_caches(ic);
 	if (ret) {
 		kfree(ic);
 		return ret;

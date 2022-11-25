@@ -36,6 +36,8 @@ obj-$(CONFIG_USBPCWATCHDOG) += pcwd_usb.o
 # ALPHA Architecture
 
 # ARM Architecture
+obj-$(CONFIG_HI_V500_WATCHDOG) += hi_v500_wdt.o
+obj-$(CONFIG_HISI_SP805_WATCHDOG) += dfx_sp805_wdt.o
 obj-$(CONFIG_ARM_SP805_WATCHDOG) += sp805_wdt.o
 obj-$(CONFIG_ARM_SBSA_WATCHDOG) += sbsa_gwdt.o
 obj-$(CONFIG_ASM9260_WATCHDOG) += asm9260_wdt.o

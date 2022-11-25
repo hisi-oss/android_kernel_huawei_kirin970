@@ -497,17 +497,8 @@ static ssize_t tpm_try_transmit(struct tpm_chip *chip,
 	if (rc < 0) {
 		if (rc != -EPIPE)
 			dev_err(&chip->dev,
-				"%s: send(): error %d\n", __func__, rc);
+				"%s: tpm_send: error %d\n", __func__, rc);
 		goto out;
-	}
-
-	/* A sanity check. send() should just return zero on success e.g.
-	 * not the command length.
-	 */
-	if (rc > 0) {
-		dev_warn(&chip->dev,
-			 "%s: send(): invalid value %d\n", __func__, rc);
-		rc = 0;
 	}
 
 	if (chip->flags & TPM_CHIP_FLAG_IRQ)
@@ -621,13 +612,12 @@ ssize_t tpm_transmit(struct tpm_chip *chip, struct tpm_space *space,
 		rc = be32_to_cpu(header->return_code);
 		if (rc != TPM2_RC_RETRY)
 			break;
-
+		delay_msec *= 2;
 		if (delay_msec > TPM2_DURATION_LONG) {
 			dev_err(&chip->dev, "TPM is in retry loop\n");
 			break;
 		}
 		tpm_msleep(delay_msec);
-		delay_msec *= 2;
 		memcpy(buf, save, save_size);
 	}
 	return ret;
@@ -663,8 +653,7 @@ ssize_t tpm_transmit_cmd(struct tpm_chip *chip, struct tpm_space *space,
 		return len;
 
 	err = be32_to_cpu(header->return_code);
-	if (err != 0 && err != TPM_ERR_DISABLED && err != TPM_ERR_DEACTIVATED
-	    && desc)
+	if (err != 0 && desc)
 		dev_err(&chip->dev, "A TPM error (%d) occurred %s\n", err,
 			desc);
 	if (err)
@@ -718,7 +707,6 @@ int tpm_startup(struct tpm_chip *chip)
 	return rc;
 }
 
-#define TPM_DIGEST_SIZE 20
 #define TPM_RET_CODE_IDX 6
 #define TPM_INTERNAL_RESULT_SIZE 200
 #define TPM_ORD_GET_CAP 101

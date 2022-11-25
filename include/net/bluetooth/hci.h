@@ -1887,6 +1887,10 @@ struct hci_ev_le_conn_complete {
 	__u8     clk_accurancy;
 } __packed;
 
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+#define HCI_VENDOR_SPECIFIC_EVT		0xFF
+#define HCI_VENDOR_SUB_EVT_RESET	0xC7
+#endif
 /* Advertising report event types */
 #define LE_ADV_IND		0x00
 #define LE_ADV_DIRECT_IND	0x01

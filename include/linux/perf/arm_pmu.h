@@ -90,6 +90,12 @@ enum armpmu_attr_groups {
 	ARMPMU_NR_ATTR_GROUPS
 };
 
+enum armpmu_pmu_states {
+	ARM_PMU_STATE_OFF,
+	ARM_PMU_STATE_RUNNING,
+	ARM_PMU_STATE_GOING_DOWN,
+};
+
 struct arm_pmu {
 	struct pmu	pmu;
 	cpumask_t	active_irqs;
@@ -112,7 +118,12 @@ struct arm_pmu {
 	int		(*map_event)(struct perf_event *event);
 	int		(*filter_match)(struct perf_event *event);
 	int		num_events;
+	int		pmu_state;
+	int		percpu_irq;
 	u64		max_period;
+#ifdef CONFIG_HISI_HW_PERF_EVENTS
+	u64		min_period;
+#endif
 	bool		secure_access; /* 32-bit ARM only */
 #define ARMV8_PMUV3_MAX_COMMON_EVENTS 0x40
 	DECLARE_BITMAP(pmceid_bitmap, ARMV8_PMUV3_MAX_COMMON_EVENTS);
@@ -128,6 +139,10 @@ struct arm_pmu {
 };
 
 #define to_arm_pmu(p) (container_of(p, struct arm_pmu, pmu))
+
+#ifdef CONFIG_HISI_HARDEN_BRANCH_PREDICTOR
+u32 armv8pmu_get_counter(struct perf_event *event);
+#endif
 
 u64 armpmu_event_update(struct perf_event *event);
 

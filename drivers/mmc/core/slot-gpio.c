@@ -20,6 +20,7 @@
 
 #include "slot-gpio.h"
 
+
 struct mmc_gpio {
 	struct gpio_desc *ro_gpio;
 	struct gpio_desc *cd_gpio;
@@ -79,11 +80,11 @@ int mmc_gpio_get_cd(struct mmc_host *host)
 
 	if (!ctx || !ctx->cd_gpio)
 		return -ENOSYS;
-
+	/*lint -save -e514*/
 	if (ctx->override_cd_active_level)
 		return !gpiod_get_raw_value_cansleep(ctx->cd_gpio) ^
 			!!(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH);
-
+	/*lint -restore*/
 	return gpiod_get_value_cansleep(ctx->cd_gpio);
 }
 EXPORT_SYMBOL(mmc_gpio_get_cd);

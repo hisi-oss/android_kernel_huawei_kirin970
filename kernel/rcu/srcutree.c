@@ -414,10 +414,12 @@ static void srcu_gp_start(struct srcu_struct *sp)
 
 	lockdep_assert_held(&sp->lock);
 	WARN_ON_ONCE(ULONG_CMP_GE(sp->srcu_gp_seq, sp->srcu_gp_seq_needed));
+	raw_spin_lock_rcu_node(sdp);  /* Interrupts already disabled. */
 	rcu_segcblist_advance(&sdp->srcu_cblist,
 			      rcu_seq_current(&sp->srcu_gp_seq));
 	(void)rcu_segcblist_accelerate(&sdp->srcu_cblist,
 				       rcu_seq_snap(&sp->srcu_gp_seq));
+	raw_spin_unlock_rcu_node(sdp);  /* Interrupts remain disabled. */
 	smp_mb(); /* Order prior store to ->srcu_gp_seq_needed vs. GP start. */
 	rcu_seq_start(&sp->srcu_gp_seq);
 	state = rcu_seq_state(READ_ONCE(sp->srcu_gp_seq));
@@ -465,8 +467,7 @@ static bool srcu_queue_delayed_work_on(int cpu, struct workqueue_struct *wq,
  */
 static void srcu_schedule_cbs_sdp(struct srcu_data *sdp, unsigned long delay)
 {
-	srcu_queue_delayed_work_on(sdp->cpu, system_power_efficient_wq,
-				   &sdp->work, delay);
+	srcu_queue_delayed_work_on(sdp->cpu, rcu_gp_wq, &sdp->work, delay);
 }
 
 /*
@@ -664,8 +665,7 @@ static void srcu_funnel_gp_start(struct srcu_struct *sp, struct srcu_data *sdp,
 	    rcu_seq_state(sp->srcu_gp_seq) == SRCU_STATE_IDLE) {
 		WARN_ON_ONCE(ULONG_CMP_GE(sp->srcu_gp_seq, sp->srcu_gp_seq_needed));
 		srcu_gp_start(sp);
-		queue_delayed_work(system_power_efficient_wq, &sp->work,
-				   srcu_get_delay(sp));
+		queue_delayed_work(rcu_gp_wq, &sp->work, srcu_get_delay(sp));
 	}
 	raw_spin_unlock_irqrestore_rcu_node(sp, flags);
 }
@@ -815,6 +815,7 @@ void __call_srcu(struct srcu_struct *sp, struct rcu_head *rhp,
 		 rcu_callback_t func, bool do_norm)
 {
 	unsigned long flags;
+	int idx;
 	bool needexp = false;
 	bool needgp = false;
 	unsigned long s;
@@ -828,6 +829,7 @@ void __call_srcu(struct srcu_struct *sp, struct rcu_head *rhp,
 		return;
 	}
 	rhp->func = func;
+	idx = srcu_read_lock(sp);
 	local_irq_save(flags);
 	sdp = this_cpu_ptr(sp->sda);
 	raw_spin_lock_rcu_node(sdp);
@@ -849,6 +851,7 @@ void __call_srcu(struct srcu_struct *sp, struct rcu_head *rhp,
 		srcu_funnel_gp_start(sp, sdp, s, do_norm);
 	else if (needexp)
 		srcu_funnel_exp_start(sp, sdp->mynode, s);
+	srcu_read_unlock(sp, idx);
 }
 
 /**
@@ -1198,7 +1201,7 @@ static void srcu_reschedule(struct srcu_struct *sp, unsigned long delay)
 	raw_spin_unlock_irq_rcu_node(sp);
 
 	if (pushgp)
-		queue_delayed_work(system_power_efficient_wq, &sp->work, delay);
+		queue_delayed_work(rcu_gp_wq, &sp->work, delay);
 }
 
 /*

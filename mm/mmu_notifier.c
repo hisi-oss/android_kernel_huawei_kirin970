@@ -214,6 +214,55 @@ void __mmu_notifier_invalidate_range_end(struct mm_struct *mm,
 }
 EXPORT_SYMBOL_GPL(__mmu_notifier_invalidate_range_end);
 
+#ifdef CONFIG_VM_COPY
+void __mmu_notifier_change_pte_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long address,
+				pte_t pte)
+{
+	struct mmu_notifier *mn;
+	int id;
+
+	id = srcu_read_lock(&srcu);
+	hlist_for_each_entry_rcu(mn, &mm->mmu_notifier_mm->list, hlist) {
+		if (mn->ops->change_pte_vmcpy)
+			mn->ops->change_pte_vmcpy(mn, mm, vma, address, pte);
+	}
+	srcu_read_unlock(&srcu, id);
+}
+
+void __mmu_notifier_invalidate_range_start_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end)
+{
+	struct mmu_notifier *mn;
+	int id;
+
+	id = srcu_read_lock(&srcu);
+	hlist_for_each_entry_rcu(mn, &mm->mmu_notifier_mm->list, hlist) {
+		if (mn->ops->invalidate_range_start_vmcpy)
+			mn->ops->invalidate_range_start_vmcpy(mn, mm,
+					vma, start, end);
+	}
+	srcu_read_unlock(&srcu, id);
+}
+
+void __mmu_notifier_invalidate_range_end_vmcpy(struct mm_struct *mm,
+				struct vm_area_struct *vma,
+				unsigned long start, unsigned long end)
+{
+	struct mmu_notifier *mn;
+	int id;
+
+	id = srcu_read_lock(&srcu);
+	hlist_for_each_entry_rcu(mn, &mm->mmu_notifier_mm->list, hlist) {
+		if (mn->ops->invalidate_range_end_vmcpy)
+			mn->ops->invalidate_range_end_vmcpy(mn, mm,
+					vma, start, end);
+	}
+	srcu_read_unlock(&srcu, id);
+}
+#endif
 void __mmu_notifier_invalidate_range(struct mm_struct *mm,
 				  unsigned long start, unsigned long end)
 {
@@ -267,7 +316,7 @@ static int do_mmu_notifier_register(struct mmu_notifier *mn,
 	 * thanks to mm_take_all_locks().
 	 */
 	spin_lock(&mm->mmu_notifier_mm->lock);
-	hlist_add_head(&mn->hlist, &mm->mmu_notifier_mm->list);
+	hlist_add_head_rcu(&mn->hlist, &mm->mmu_notifier_mm->list);
 	spin_unlock(&mm->mmu_notifier_mm->lock);
 
 	mm_drop_all_locks(mm);

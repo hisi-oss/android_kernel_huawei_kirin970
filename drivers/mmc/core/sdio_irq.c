@@ -35,8 +35,16 @@ static int process_sdio_pending_irqs(struct mmc_host *host)
 {
 	struct mmc_card *card = host->card;
 	int i, ret, count;
+	bool sdio_irq_pending = host->sdio_irq_pending;
 	unsigned char pending;
 	struct sdio_func *func;
+
+	/* Don't process SDIO IRQs if the card is suspended. */
+	if (mmc_card_suspended(card))
+		return 0;
+
+	/* Clear the flag to indicate that we have processed the IRQ. */
+	host->sdio_irq_pending = false;
 
 	/*
 	 * Optimization, if there is only 1 function interrupt registered
@@ -44,7 +52,7 @@ static int process_sdio_pending_irqs(struct mmc_host *host)
 	 * Otherwise do the full probe.
 	 */
 	func = card->sdio_single_irq;
-	if (func && host->sdio_irq_pending) {
+	if (func && sdio_irq_pending) {
 		func->irq_handler(func);
 		return 1;
 	}
@@ -96,7 +104,6 @@ void sdio_run_irqs(struct mmc_host *host)
 {
 	mmc_claim_host(host);
 	if (host->sdio_irqs) {
-		host->sdio_irq_pending = true;
 		process_sdio_pending_irqs(host);
 		if (host->ops->ack_sdio_irq)
 			host->ops->ack_sdio_irq(host);
@@ -115,6 +122,7 @@ void sdio_irq_work(struct work_struct *work)
 
 void sdio_signal_irq(struct mmc_host *host)
 {
+	host->sdio_irq_pending = true;
 	queue_delayed_work(system_wq, &host->sdio_irq_work, 0);
 }
 EXPORT_SYMBOL_GPL(sdio_signal_irq);
@@ -155,11 +163,10 @@ static int sdio_irq_thread(void *_host)
 		 * holding of the host lock does not cover too much work
 		 * that doesn't require that lock to be held.
 		 */
-		ret = __mmc_claim_host(host, &host->sdio_irq_thread_abort);
+		ret = __mmc_claim_host(host, NULL, &host->sdio_irq_thread_abort);
 		if (ret)
 			break;
 		ret = process_sdio_pending_irqs(host);
-		host->sdio_irq_pending = false;
 		mmc_release_host(host);
 
 		/*
@@ -167,10 +174,10 @@ static int sdio_irq_thread(void *_host)
 		 * errors.
 		 */
 		if (ret < 0) {
-			set_current_state(TASK_INTERRUPTIBLE);
+			set_current_state(TASK_INTERRUPTIBLE); /*lint !e446 !e666*/
 			if (!kthread_should_stop())
 				schedule_timeout(HZ);
-			set_current_state(TASK_RUNNING);
+			set_current_state(TASK_RUNNING); /*lint !e446 !e666*/
 		}
 
 		/*
@@ -188,12 +195,12 @@ static int sdio_irq_thread(void *_host)
 			}
 		}
 
-		set_current_state(TASK_INTERRUPTIBLE);
+		set_current_state(TASK_INTERRUPTIBLE); /*lint !e446 !e666*/
 		if (host->caps & MMC_CAP_SDIO_IRQ)
 			host->ops->enable_sdio_irq(host, 1);
 		if (!kthread_should_stop())
 			schedule_timeout(period);
-		set_current_state(TASK_RUNNING);
+		set_current_state(TASK_RUNNING); /*lint !e446 !e666*/
 	} while (!kthread_should_stop());
 
 	if (host->caps & MMC_CAP_SDIO_IRQ)
@@ -255,7 +262,7 @@ static int sdio_card_irq_put(struct mmc_card *card)
 static void sdio_single_irq_set(struct mmc_card *card)
 {
 	struct sdio_func *func;
-	int i;
+	unsigned int i;
 
 	card->sdio_single_irq = NULL;
 	if ((card->host->caps & MMC_CAP_SDIO_IRQ) &&
@@ -298,7 +305,7 @@ int sdio_claim_irq(struct sdio_func *func, sdio_irq_handler_t *handler)
 	if (ret)
 		return ret;
 
-	reg |= 1 << func->num;
+	reg |= 1 << func->num; /*lint !e502*/
 
 	reg |= 1; /* Master interrupt enable */
 

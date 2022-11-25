@@ -74,7 +74,11 @@ static struct shash_alg alg = {
 	.finup		=	crypto_sha1_finup,
 	.descsize	=	sizeof(struct sha1_state),
 	.base		=	{
+#if defined(CONFIG_DM_HISI_SHA_USE_SOFT)
+		.cra_name	=	"shas",
+#else
 		.cra_name	=	"sha1",
+#endif
 		.cra_driver_name=	"sha1-generic",
 		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA1_BLOCK_SIZE,

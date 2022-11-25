@@ -10,7 +10,6 @@
 #include <linux/sched/signal.h>
 #include <linux/sched/hotplug.h>
 #include <linux/sched/task.h>
-#include <linux/sched/smt.h>
 #include <linux/unistd.h>
 #include <linux/cpu.h>
 #include <linux/oom.h>
@@ -36,6 +35,9 @@
 #include <trace/events/cpuhp.h>
 
 #include "smpboot.h"
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/hisi_bbox_diaginfo.h>
+#endif
 
 /**
  * cpuhp_cpu_state - Per cpu hotplug state storage
@@ -287,7 +289,36 @@ void cpu_maps_update_done(void)
 static int cpu_hotplug_disabled;
 
 #ifdef CONFIG_HOTPLUG_CPU
+#ifdef CONFIG_ARCH_HISI
+DECLARE_RWSEM(cpu_hotplug_lock);
 
+void cpus_read_lock(void)
+{
+	down_read(&cpu_hotplug_lock);
+}
+EXPORT_SYMBOL_GPL(cpus_read_lock);
+
+void cpus_read_unlock(void)
+{
+	up_read(&cpu_hotplug_lock);
+}
+EXPORT_SYMBOL_GPL(cpus_read_unlock);
+
+void cpus_write_lock(void)
+{
+	down_write(&cpu_hotplug_lock);
+}
+
+void cpus_write_unlock(void)
+{
+	up_write(&cpu_hotplug_lock);
+}
+
+void lockdep_assert_cpus_held(void)
+{
+	WARN_ON(!rwsem_is_locked(&cpu_hotplug_lock)); /*lint !e548 !e665*/
+}
+#else
 DEFINE_STATIC_PERCPU_RWSEM(cpu_hotplug_lock);
 
 void cpus_read_lock(void)
@@ -325,6 +356,7 @@ void lockdep_assert_cpus_held(void)
 
 	percpu_rwsem_assert_held(&cpu_hotplug_lock);
 }
+#endif
 
 /*
  * Wait for currently running CPU hotplug operations to complete (if any) and
@@ -357,12 +389,6 @@ void cpu_hotplug_enable(void)
 EXPORT_SYMBOL_GPL(cpu_hotplug_enable);
 #endif	/* CONFIG_HOTPLUG_CPU */
 
-/*
- * Architectures that need SMT-specific errata handling during SMT hotplug
- * should override this.
- */
-void __weak arch_smt_update(void) { }
-
 #ifdef CONFIG_HOTPLUG_SMT
 enum cpuhp_smt_control cpu_smt_control __read_mostly = CPU_SMT_ENABLED;
 
@@ -376,6 +402,7 @@ void __init cpu_smt_disable(bool force)
 		pr_info("SMT: Force disabled\n");
 		cpu_smt_control = CPU_SMT_FORCE_DISABLED;
 	} else {
+		pr_info("SMT: disabled\n");
 		cpu_smt_control = CPU_SMT_DISABLED;
 	}
 }
@@ -493,8 +520,7 @@ static int bringup_wait_for_ap(unsigned int cpu)
 	if (WARN_ON_ONCE((!cpu_online(cpu))))
 		return -ECANCELED;
 
-	/* Unpark the stopper thread and the hotplug thread of the target cpu */
-	stop_machine_unpark(cpu);
+	/* Unpark the hotplug thread of the target cpu */
 	kthread_unpark(st->thread);
 
 	/*
@@ -960,6 +986,13 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 	if (!cpu_present(cpu))
 		return -EINVAL;
 
+#ifdef CONFIG_CPU_ISOLATION_OPT
+	if (!tasks_frozen &&
+	    !cpu_isolated(cpu) &&
+	    num_online_uniso_cpus() == 1)
+		return -EBUSY;
+#endif
+
 	cpus_write_lock();
 
 	cpuhp_tasks_frozen = tasks_frozen;
@@ -1005,7 +1038,6 @@ out:
 	 * concurrent CPU hotplug via cpu_add_remove_lock.
 	 */
 	lockup_detector_cleanup();
-	arch_smt_update();
 	return ret;
 }
 
@@ -1063,8 +1095,8 @@ void notify_cpu_starting(unsigned int cpu)
 
 /*
  * Called from the idle task. Wake up the controlling task which brings the
- * stopper and the hotplug thread of the upcoming CPU up and then delegates
- * the rest of the online bringup to the hotplug thread.
+ * hotplug thread of the upcoming CPU up and then delegates the rest of the
+ * online bringup to the hotplug thread.
  */
 void cpuhp_online_idle(enum cpuhp_state state)
 {
@@ -1073,6 +1105,12 @@ void cpuhp_online_idle(enum cpuhp_state state)
 	/* Happens for the boot cpu */
 	if (state != CPUHP_AP_ONLINE_IDLE)
 		return;
+
+	/*
+	 * Unpart the stopper thread before we start the idle loop (and start
+	 * scheduling); this ensures the stopper task is always available.
+	 */
+	stop_machine_unpark(smp_processor_id());
 
 	st->state = CPUHP_AP_ONLINE_IDLE;
 	complete_ap_thread(st, true);
@@ -1134,7 +1172,6 @@ static int _cpu_up(unsigned int cpu, int tasks_frozen, enum cpuhp_state target)
 	ret = cpuhp_up_callbacks(cpu, st, target);
 out:
 	cpus_write_unlock();
-	arch_smt_update();
 	return ret;
 }
 
@@ -1167,6 +1204,11 @@ static int do_cpu_up(unsigned int cpu, enum cpuhp_state target)
 	}
 
 	err = _cpu_up(cpu, 0, target);
+
+#ifdef CONFIG_HISI_BB
+	cpu_up_diaginfo_record(cpu, err);
+#endif
+
 out:
 	cpu_maps_update_done();
 	return err;
@@ -1463,7 +1505,7 @@ static struct cpuhp_step cpuhp_ap_states[] = {
 	},
 	[CPUHP_AP_PERF_ONLINE] = {
 		.name			= "perf:online",
-		.startup.single		= perf_event_init_cpu,
+		.startup.single		= perf_event_restart_events,
 		.teardown.single	= perf_event_exit_cpu,
 	},
 	[CPUHP_AP_WORKQUEUE_ONLINE] = {
@@ -1951,6 +1993,9 @@ static ssize_t write_cpuhp_fail(struct device *dev,
 	if (ret)
 		return ret;
 
+	if (fail < CPUHP_OFFLINE || fail > CPUHP_ONLINE)
+		return -EINVAL;
+
 	/*
 	 * Cannot fail STARTING/DYING callbacks.
 	 */
@@ -2087,10 +2132,8 @@ static int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval)
 		 */
 		cpuhp_offline_cpu_device(cpu);
 	}
-	if (!ret) {
+	if (!ret)
 		cpu_smt_control = ctrlval;
-		arch_smt_update();
-	}
 	cpu_maps_update_done();
 	return ret;
 }
@@ -2101,7 +2144,6 @@ static int cpuhp_smt_enable(void)
 
 	cpu_maps_update_begin();
 	cpu_smt_control = CPU_SMT_ENABLED;
-	arch_smt_update();
 	for_each_present_cpu(cpu) {
 		/* Skip online CPUs and CPUs on offline nodes */
 		if (cpu_online(cpu) || !node_online(cpu_to_node(cpu)))
@@ -2261,6 +2303,11 @@ EXPORT_SYMBOL(__cpu_present_mask);
 struct cpumask __cpu_active_mask __read_mostly;
 EXPORT_SYMBOL(__cpu_active_mask);
 
+#ifdef CONFIG_CPU_ISOLATION_OPT
+struct cpumask __cpu_isolated_mask __read_mostly;
+EXPORT_SYMBOL(__cpu_isolated_mask);
+#endif
+
 void init_cpu_present(const struct cpumask *src)
 {
 	cpumask_copy(&__cpu_present_mask, src);
@@ -2276,6 +2323,13 @@ void init_cpu_online(const struct cpumask *src)
 	cpumask_copy(&__cpu_online_mask, src);
 }
 
+#ifdef CONFIG_CPU_ISOLATION_OPT
+void init_cpu_isolated(const struct cpumask *src)
+{
+	cpumask_copy(&__cpu_isolated_mask, src);
+}
+#endif
+
 /*
  * Activate the first processor.
  */
@@ -2288,6 +2342,9 @@ void __init boot_cpu_init(void)
 	set_cpu_active(cpu, true);
 	set_cpu_present(cpu, true);
 	set_cpu_possible(cpu, true);
+#ifdef CONFIG_CPU_ISOLATION_OPT
+	set_cpu_isolated(cpu, false);
+#endif
 
 #ifdef CONFIG_SMP
 	__boot_cpu_id = cpu;
@@ -2304,3 +2361,23 @@ void __init boot_cpu_hotplug_init(void)
 #endif
 	this_cpu_write(cpuhp_state.state, CPUHP_ONLINE);
 }
+
+static ATOMIC_NOTIFIER_HEAD(idle_notifier);
+
+void idle_notifier_register(struct notifier_block *n)
+{
+	atomic_notifier_chain_register(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_register);
+
+void idle_notifier_unregister(struct notifier_block *n)
+{
+	atomic_notifier_chain_unregister(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_unregister);
+
+void idle_notifier_call_chain(unsigned long val)
+{
+	atomic_notifier_call_chain(&idle_notifier, val, NULL);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_call_chain);

@@ -50,6 +50,7 @@
 #include <linux/export.h>
 
 #include <linux/usb/quirks.h>
+#include <linux/hisi/usb/chip_usb_log.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_eh.h>
@@ -944,13 +945,17 @@ void usb_stor_stop_transport(struct us_data *us)
 	 */
 	if (test_and_clear_bit(US_FLIDX_URB_ACTIVE, &us->dflags)) {
 		usb_stor_dbg(us, "-- cancelling URB\n");
+		hiusb_dev_info(&us->pusb_dev->dev, "++ cancelling URB\n");
 		usb_unlink_urb(us->current_urb);
+		hiusb_dev_info(&us->pusb_dev->dev, "-- cancelling URB\n");
 	}
 
 	/* If we are waiting for a scatter-gather operation, cancel it. */
 	if (test_and_clear_bit(US_FLIDX_SG_ACTIVE, &us->dflags)) {
 		usb_stor_dbg(us, "-- cancelling sg request\n");
+		hiusb_dev_info(&us->pusb_dev->dev, "++ cancelling sg request\n");
 		usb_sg_cancel(&us->current_sg);
+		hiusb_dev_info(&us->pusb_dev->dev, "-- cancelling sg request\n");
 	}
 }
 
@@ -1431,6 +1436,7 @@ int usb_stor_port_reset(struct us_data *us)
 {
 	int result;
 
+	hiusb_dev_info(&us->pusb_dev->dev, "++\n");
 	/*for these devices we must use the class specific method */
 	if (us->pusb_dev->quirks & USB_QUIRK_RESET)
 		return -EPERM;
@@ -1451,5 +1457,6 @@ int usb_stor_port_reset(struct us_data *us)
 		}
 		usb_unlock_device(us->pusb_dev);
 	}
+	hiusb_dev_info(&us->pusb_dev->dev, "--result %d\n", result);
 	return result;
 }

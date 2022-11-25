@@ -351,6 +351,10 @@ static inline struct sk_buff *bt_skb_send_alloc(struct sock *sk,
 	if (!skb && *err)
 		return NULL;
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+	alloc_skb_with_frags_stats_inc(BT_SKB_SEND_ALLOC_COUNT);
+#endif
+
 	*err = sock_error(sk);
 	if (*err)
 		goto out;

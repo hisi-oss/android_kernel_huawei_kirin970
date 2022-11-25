@@ -71,7 +71,7 @@ static void warn_ignored_character(char chr)
 {
 	fprintf(stderr,
 	        "%s:%d:warning: ignoring unsupported character '%c'\n",
-	        current_file->name, yylineno, chr);
+	        zconf_curname(), zconf_lineno(), chr);
 }
 %}
 
@@ -191,8 +191,6 @@ n	[A-Za-z0-9_-]
 	}
 	<<EOF>>	{
 		BEGIN(INITIAL);
-		yylval.string = text;
-		return T_WORD_QUOTE;
 	}
 }
 
@@ -305,6 +303,16 @@ void zconf_initscan(const char *name)
 
 	current_file = file_lookup(name);
 	current_file->lineno = 1;
+}
+
+void zconf_if_exist_nextfile(const char *name)
+{
+	FILE *file = zconf_fopen(name);
+
+	if (!file)
+		return;
+	fclose(file);
+	zconf_nextfile(name);
 }
 
 void zconf_nextfile(const char *name)

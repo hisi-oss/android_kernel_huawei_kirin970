@@ -23,4 +23,22 @@ void cpufreq_add_update_util_hook(int cpu, struct update_util_data *data,
 void cpufreq_remove_update_util_hook(int cpu);
 #endif /* CONFIG_CPU_FREQ */
 
+#define SUGOV_START	0
+#define SUGOV_STOP	1
+#define SUGOV_ACTIVE	2
+
+#ifdef CONFIG_CPU_FREQ_GOV_SCHEDUTIL_OPT
+int sugov_register_notifier(struct notifier_block *nb);
+int sugov_unregister_notifier(struct notifier_block *nb);
+#else
+static inline int sugov_register_notifier(struct notifier_block *nb)
+{
+	return 0;
+}
+static inline int sugov_unregister_notifier(struct notifier_block *nb)
+{
+	return 0;
+}
+#endif
+
 #endif /* _LINUX_SCHED_CPUFREQ_H */

@@ -42,6 +42,7 @@ static int mincore_hugetlb(pte_t *pte, unsigned long hmask, unsigned long addr,
 	return 0;
 }
 
+#ifdef CONFIG_HUAWEI_MINCORE_CLASSIC
 /*
  * Later we can get more picky about what "in core" means precisely.
  * For now, simply check to see if the page is in the page cache,
@@ -168,6 +169,90 @@ out:
 	cond_resched();
 	return 0;
 }
+static inline bool can_do_mincore(struct vm_area_struct *vma)
+{
+	/* always can do mincore if CONFIG_HUAWEI_MINCORE_DEBUG defined */
+	return true;
+}
+
+#else
+
+static int mincore_unmapped_range(unsigned long addr, unsigned long end,
+				   struct mm_walk *walk)
+{
+	unsigned char *vec = walk->private;
+	unsigned long nr = (end - addr) >> PAGE_SHIFT;
+
+	memset(vec, 0, nr);
+	walk->private += nr;
+	return 0;
+}
+
+static int mincore_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
+			struct mm_walk *walk)
+{
+	spinlock_t *ptl;
+	struct vm_area_struct *vma = walk->vma;
+	pte_t *ptep;
+	unsigned char *vec = walk->private;
+	int nr = (end - addr) >> PAGE_SHIFT;
+
+	ptl = pmd_trans_huge_lock(pmd, vma);
+	if (ptl) {
+		memset(vec, 1, nr);
+		spin_unlock(ptl);
+		goto out;
+	}
+
+	/* We'll consider a THP page under construction to be there */
+	if (pmd_trans_unstable(pmd)) {
+		memset(vec, 1, nr);
+		goto out;
+	}
+
+	ptep = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
+	for (; addr != end; ptep++, addr += PAGE_SIZE) {
+		pte_t pte = *ptep;
+
+		if (pte_none(pte))
+			*vec = 0;
+		else if (pte_present(pte))
+			*vec = 1;
+		else { /* pte is a swap entry */
+			swp_entry_t entry = pte_to_swp_entry(pte);
+
+			/*
+			 * migration or hwpoison entries are always
+			 * uptodate
+			 */
+			*vec = !!non_swap_entry(entry);
+		}
+		vec++;
+	}
+	pte_unmap_unlock(ptep - 1, ptl);
+out:
+	walk->private += nr;
+	cond_resched();
+	return 0;
+}
+
+static inline bool can_do_mincore(struct vm_area_struct *vma)
+{
+	if (vma_is_anonymous(vma))
+		return true;
+	if (!vma->vm_file)
+		return false;
+	/*
+	 * Reveal pagecache information only for non-anonymous mappings that
+	 * correspond to the files the calling process could (if tried) open
+	 * for writing; otherwise we'd be including shared non-exclusive
+	 * mappings, which opens a side channel.
+	 */
+	return inode_owner_or_capable(file_inode(vma->vm_file)) ||
+		inode_permission(file_inode(vma->vm_file), MAY_WRITE) == 0;
+}
+
+#endif /* end of CONFIG_HUAWEI_MINCORE_CLASSIC */
 
 /*
  * Do a chunk of "sys_mincore()". We've already checked
@@ -189,8 +274,13 @@ static long do_mincore(unsigned long addr, unsigned long pages, unsigned char *v
 	vma = find_vma(current->mm, addr);
 	if (!vma || addr < vma->vm_start)
 		return -ENOMEM;
-	mincore_walk.mm = vma->vm_mm;
 	end = min(vma->vm_end, addr + (pages << PAGE_SHIFT));
+	if (!can_do_mincore(vma)) {
+		unsigned long pages = DIV_ROUND_UP(end - addr, PAGE_SIZE);
+		memset(vec, 1, pages);
+		return pages;
+	}
+	mincore_walk.mm = vma->vm_mm;
 	err = walk_page_range(addr, end, &mincore_walk);
 	if (err < 0)
 		return err;
@@ -227,6 +317,8 @@ SYSCALL_DEFINE3(mincore, unsigned long, start, size_t, len,
 	long retval;
 	unsigned long pages;
 	unsigned char *tmp;
+
+	start = untagged_addr(start);
 
 	/* Check the start address: needs to be page-aligned.. */
 	if (start & ~PAGE_MASK)

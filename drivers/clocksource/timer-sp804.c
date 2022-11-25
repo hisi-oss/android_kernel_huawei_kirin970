@@ -100,9 +100,15 @@ int  __init __sp804_clocksource_and_sched_clock_init(void __iomem *base,
 	/* setup timer 0 as free-running clocksource */
 	writel(0, base + TIMER_CTRL);
 	writel(0xffffffff, base + TIMER_LOAD);
+#ifdef CONFIG_LPCPU_HITIMER
+	writel(LPCPU_CLK_CTRL_VAL, base + LPCPU_CLK_CTRL);
+	writel((TIMER_CTRL_32BIT | TIMER_CTRL_ENABLE | TIMER_CTRL_PERIODIC) | TIMER_CTRL_INT_MASK,
+		base + TIMER_CTRL);
+#else
 	writel(0xffffffff, base + TIMER_VALUE);
 	writel(TIMER_CTRL_32BIT | TIMER_CTRL_ENABLE | TIMER_CTRL_PERIODIC,
 		base + TIMER_CTRL);
+#endif
 
 	clocksource_mmio_init(base + TIMER_VALUE, name,
 		rate, 200, 32, clocksource_mmio_readl_down);
@@ -211,6 +217,9 @@ int __init __sp804_clockevents_init(void __iomem *base, unsigned int irq, struct
 	evt->cpumask = cpu_possible_mask;
 
 	writel(0, base + TIMER_CTRL);
+#ifdef CONFIG_LPCPU_HITIMER
+	writel(LPCPU_CLK_CTRL_VAL, base + LPCPU_CLK_CTRL);
+#endif
 
 	setup_irq(irq, &sp804_timer_irq);
 	clockevents_config_and_register(evt, rate, 0xf, 0xffffffff);

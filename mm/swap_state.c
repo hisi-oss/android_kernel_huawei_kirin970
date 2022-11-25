@@ -21,8 +21,10 @@
 #include <linux/vmalloc.h>
 #include <linux/swap_slots.h>
 #include <linux/huge_mm.h>
+#include <linux/hisi/page_tracker.h>
 
 #include <asm/pgtable.h>
+#include "internal.h"
 
 /*
  * swapper_space is a fiction, retained to simplify the path through
@@ -106,6 +108,7 @@ void show_swap_cache_info(void)
 	printk("Total swap = %lukB\n", total_swap_pages << (PAGE_SHIFT - 10));
 }
 
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 /*
  * __add_to_swap_cache resembles add_to_page_cache_locked on swapper_space,
  * but sets SwapCache flag and private instead of mapping and index.
@@ -135,6 +138,8 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry)
 	if (likely(!error)) {
 		address_space->nrpages += nr;
 		__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, nr);
+		page_tracker_set_type(page, TRACK_FILE, 0);
+		__inc_zone_page_state(page, NR_SWAPCACHE);
 		ADD_CACHE_INFO(add_total, nr);
 	} else {
 		/*
@@ -194,15 +199,203 @@ void __delete_from_swap_cache(struct page *page)
 	ClearPageSwapCache(page);
 	address_space->nrpages -= nr;
 	__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, -nr);
+	__mod_zone_page_state(page_zone(page), NR_SWAPCACHE, -nr);
 	ADD_CACHE_INFO(del_total, nr);
 }
+#else
+/*
+ * __add_to_swap_cache, if the page slot have a shadow entry(it's mark as
+ * exceptional entry), we need record the entry info into shadowp to refault
+ * protect.
+ */
+int __add_to_swap_cache(struct page *page, swp_entry_t entry, void **shadowp)
+{
+	int error, i, nr = hpage_nr_pages(page);
+	struct address_space *address_space;
+	pgoff_t idx = swp_offset(entry);
+	struct radix_tree_node *node = NULL;
+	void **slot = NULL;
+	int nr_shadows = 0;
+
+	VM_BUG_ON_PAGE(!PageLocked(page), page);
+	VM_BUG_ON_PAGE(PageSwapCache(page), page);
+	VM_BUG_ON_PAGE(!PageSwapBacked(page), page);
+
+	page_ref_add(page, nr);
+	SetPageSwapCache(page);
+
+	address_space = swap_address_space(entry);
+	spin_lock_irq(&address_space->tree_lock);
+
+	for (i = 0; i < nr; i++) {
+		error = __radix_tree_create(&address_space->page_tree, idx + i,
+					    0, &node, &slot);
+		if (unlikely(error))
+			break;
+
+		if (*slot) {
+			void *p;
+
+			p = radix_tree_deref_slot_protected(
+				slot, &address_space->tree_lock);
+
+			/*
+			* This mean trigger VM_BUG_ON, due to  pack_shadow will
+			* add RADIX_TREE_EXCEPTIONAL_ENTRY into shadow.
+			* So if slot is exist, entry must exceptional.
+			*/
+			if (!radix_tree_exceptional_entry(p)) {
+				error = -EEXIST;
+				break;
+			}
+
+			++nr_shadows;
+			if (shadowp)
+				*shadowp = p;
+		}
+
+		set_page_private(page + i, entry.val + i);
+		__radix_tree_replace(&address_space->page_tree, node, slot,
+				     page + i, workingset_update_node,
+				     address_space);
+	}
+
+	if (likely(!error)) {
+		address_space->nrpages += nr;
+		address_space->nrexceptional -= nr_shadows;
+		__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, nr);
+		page_tracker_set_type(page, TRACK_FILE, 0);
+		__inc_zone_page_state(page, NR_SWAPCACHE);
+		ADD_CACHE_INFO(add_total, nr);
+	} else {
+		/*
+		 * Only the context which have set SWAP_HAS_CACHE flag
+		 * would call add_to_swap_cache().
+		 * So add_to_swap_cache() doesn't returns -EEXIST.
+		 */
+		VM_BUG_ON(error == -EEXIST);
+		set_page_private(page + i, 0UL);
+		while (i--) {
+			radix_tree_delete(&address_space->page_tree, idx + i);
+			set_page_private(page + i, 0UL);
+		}
+		ClearPageSwapCache(page);
+		page_ref_sub(page, nr);
+	}
+
+	spin_unlock_irq(&address_space->tree_lock);
+
+	return error;
+}
+
+int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp_mask,
+		      void **shadowp)
+{
+	int error;
+
+	error = radix_tree_maybe_preload_order(gfp_mask, compound_order(page));
+	if (!error) {
+		error = __add_to_swap_cache(page, entry, shadowp);
+		radix_tree_preload_end();
+	}
+	return error;
+}
+
+/*
+ * This must be called only on pages that have
+ * been verified to be in the swap cache.
+ * we do not delete radix tree node, just replace it with shadow
+ */
+void __delete_from_swap_cache(struct page *page, void *shadow)
+{
+	struct address_space *address_space;
+	int i, nr = hpage_nr_pages(page);
+	swp_entry_t entry;
+	pgoff_t idx;
+	void **slot = NULL;
+	struct radix_tree_node *node = NULL;
+
+	VM_BUG_ON_PAGE(!PageLocked(page), page);
+	VM_BUG_ON_PAGE(!PageSwapCache(page), page);
+	VM_BUG_ON_PAGE(PageWriteback(page), page);
+
+	entry.val = page_private(page);
+	address_space = swap_address_space(entry);
+	idx = swp_offset(entry);
+	for (i = 0; i < nr; i++) {
+		__radix_tree_lookup(&address_space->page_tree, idx + i, &node,
+				    &slot);
+
+		VM_BUG_ON_PAGE(!node && nr != 1, page);
+
+		radix_tree_clear_tags(&address_space->page_tree, node, slot);
+		__radix_tree_replace(&address_space->page_tree, node, slot,
+				     shadow, workingset_update_node,
+				     address_space);
+		set_page_private(page + i, 0);
+	}
+	ClearPageSwapCache(page);
+	if (shadow) {
+		address_space->nrexceptional += nr;
+		smp_wmb();
+	}
+	address_space->nrpages -= nr;
+	__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, -nr);
+	__mod_zone_page_state(page_zone(page), NR_SWAPCACHE, -nr);
+	ADD_CACHE_INFO(del_total, nr);
+}
+
+void clear_shadow_from_swap_cache(int type, unsigned long begin,
+				unsigned long end)
+{
+	unsigned long curr = begin;
+	struct radix_tree_iter iter;
+	struct radix_tree_node *node = NULL;
+	swp_entry_t entry;
+	void **slot = NULL;
+	void *p = NULL;
+
+	for (;;) {
+		entry = swp_entry(type, curr);
+		struct address_space *mapping = swap_address_space(entry);
+		spin_lock_irq(&mapping->tree_lock);
+		if (!mapping->nrexceptional)
+			goto unlock;
+
+		radix_tree_for_each_slot(slot, &mapping->page_tree, &iter,
+					  curr) {
+			if (iter.index > end)
+				break;
+			p = radix_tree_deref_slot_protected(
+				slot, &mapping->tree_lock);
+			if (!radix_tree_exceptional_entry(p))
+				continue;
+			__radix_tree_replace(&mapping->page_tree, iter.node,
+					     slot, NULL, workingset_update_node,
+					     mapping);
+			mapping->nrexceptional--;
+			if (!mapping->nrexceptional)
+				break;
+		}
+unlock:
+		spin_unlock_irq(&mapping->tree_lock);
+
+		/* search the next swapcache until we meet end */
+		curr >>= SWAP_ADDRESS_SPACE_SHIFT;
+		curr++;
+		curr <<= SWAP_ADDRESS_SPACE_SHIFT;
+		if (curr > end)
+			break;
+	}
+}
+#endif
 
 /**
  * add_to_swap - allocate swap space for a page
  * @page: page we want to move to swap
  *
  * Allocate swap space for the page and add the page to the
- * swap cache.  Caller needs to hold the page lock. 
+ * swap cache.  Caller needs to hold the page lock.
  */
 int add_to_swap(struct page *page)
 {
@@ -230,8 +423,13 @@ int add_to_swap(struct page *page)
 	/*
 	 * Add it to the swap cache.
 	 */
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 	err = add_to_swap_cache(page, entry,
 			__GFP_HIGH|__GFP_NOMEMALLOC|__GFP_NOWARN);
+#else
+	err = add_to_swap_cache(page, entry,
+			__GFP_HIGH|__GFP_NOMEMALLOC|__GFP_NOWARN, NULL);
+#endif
 	/* -ENOMEM radix-tree allocation failure */
 	if (err)
 		/*
@@ -273,16 +471,20 @@ void delete_from_swap_cache(struct page *page)
 
 	address_space = swap_address_space(entry);
 	spin_lock_irq(&address_space->tree_lock);
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 	__delete_from_swap_cache(page);
+#else
+	__delete_from_swap_cache(page, NULL);
+#endif
 	spin_unlock_irq(&address_space->tree_lock);
 
 	put_swap_page(page, entry);
 	page_ref_sub(page, hpage_nr_pages(page));
 }
 
-/* 
- * If we are the only user, then try to free up the swap cache. 
- * 
+/*
+ * If we are the only user, then try to free up the swap cache.
+ *
  * Its ok to check for PageSwapCache without the page lock
  * here because we are going to recheck again inside
  * try_to_free_swap() _with_ the lock.
@@ -296,7 +498,7 @@ static inline void free_swap_cache(struct page *page)
 	}
 }
 
-/* 
+/*
  * Perform a free_page(), also freeing any swap cache associated with
  * this page if it is the last user of the page.
  */
@@ -368,6 +570,9 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 	struct page *found_page, *new_page = NULL;
 	struct address_space *swapper_space = swap_address_space(entry);
 	int err;
+#ifdef CONFIG_REFAULT_IO_VMSCAN
+	void *shadow = NULL;
+#endif
 	*new_page_allocated = false;
 
 	do {
@@ -403,7 +608,7 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		/*
 		 * call radix_tree_preload() while we can wait.
 		 */
-		err = radix_tree_maybe_preload(gfp_mask & GFP_KERNEL);
+		err = radix_tree_maybe_preload(gfp_mask & GFP_RECLAIM_MASK);
 		if (err)
 			break;
 
@@ -429,6 +634,7 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		/* May fail (-ENOMEM) if radix-tree node allocation failed. */
 		__SetPageLocked(new_page);
 		__SetPageSwapBacked(new_page);
+#ifndef CONFIG_REFAULT_IO_VMSCAN
 		err = __add_to_swap_cache(new_page, entry);
 		if (likely(!err)) {
 			radix_tree_preload_end();
@@ -440,6 +646,21 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			*new_page_allocated = true;
 			return new_page;
 		}
+#else
+		err = __add_to_swap_cache(new_page, entry, &shadow);
+		if (likely(!err)) {
+			radix_tree_preload_end();
+			/*
+			 * Initiate read into locked page and return.
+			 */
+			SetPageWorkingset(new_page);
+			if (shadow)
+				workingset_refault(new_page, shadow);
+			lru_cache_add_anon(new_page);
+			*new_page_allocated = true;
+			return new_page;
+		}
+#endif
 		radix_tree_preload_end();
 		__ClearPageLocked(new_page);
 		/*
@@ -524,10 +745,11 @@ static unsigned long swapin_nr_pages(unsigned long offset)
 		return 1;
 
 	hits = atomic_xchg(&swapin_readahead_hits, 0);
-	pages = __swapin_nr_pages(prev_offset, offset, hits, max_pages,
+	pages = __swapin_nr_pages(READ_ONCE(prev_offset), offset, hits,
+				  max_pages,
 				  atomic_read(&last_readahead_pages));
 	if (!hits)
-		prev_offset = offset;
+		WRITE_ONCE(prev_offset, offset);
 	atomic_set(&last_readahead_pages, pages);
 
 	return pages;
@@ -551,6 +773,10 @@ static unsigned long swapin_nr_pages(unsigned long offset)
  * the readahead.
  *
  * Caller must hold down_read on the vma->vm_mm if vma is not NULL.
+ * This is needed to ensure the VMA will not be freed in our back. In the case
+ * of the speculative page fault handler, this cannot happen, even if we don't
+ * hold the mmap_sem. Callees are assumed to take care of reading VMA's fields
+ * using READ_ONCE() to read consistent values.
  */
 struct page *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 			struct vm_area_struct *vma, unsigned long addr)
@@ -641,10 +867,17 @@ static inline void swap_ra_clamp_pfn(struct vm_area_struct *vma,
 				     unsigned long *start,
 				     unsigned long *end)
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	*start = max3(lpfn, PFN_DOWN(READ_ONCE(vma->vm_start)),
+		      PFN_DOWN(faddr & PMD_MASK));
+	*end = min3(rpfn, PFN_DOWN(READ_ONCE(vma->vm_end)),
+		    PFN_DOWN((faddr & PMD_MASK) + PMD_SIZE));
+#else
 	*start = max3(lpfn, PFN_DOWN(vma->vm_start),
 		      PFN_DOWN(faddr & PMD_MASK));
 	*end = min3(rpfn, PFN_DOWN(vma->vm_end),
 		    PFN_DOWN((faddr & PMD_MASK) + PMD_SIZE));
+#endif
 }
 
 struct page *swap_readahead_detect(struct vm_fault *vmf,

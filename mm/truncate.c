@@ -224,6 +224,10 @@ int invalidate_inode_page(struct page *page)
 		return 0;
 	if (page_mapped(page))
 		return 0;
+#if defined(CONFIG_TASK_PROTECT_LRU) || defined(CONFIG_MEMCG_PROTECT_LRU)
+	if (PageProtect(page))
+		return 0;
+#endif
 	return invalidate_complete_page(mapping, page);
 }
 

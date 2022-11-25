@@ -317,6 +317,8 @@ static noinline int vmalloc_fault(unsigned long address)
 	if (!(address >= VMALLOC_START && address < VMALLOC_END))
 		return -1;
 
+	WARN_ON_ONCE(in_nmi());
+
 	/*
 	 * Synchronize this task's top level page-table
 	 * with the 'reference' page table.
@@ -860,7 +862,7 @@ show_signal_msg(struct pt_regs *regs, unsigned long error_code,
 	if (!printk_ratelimit())
 		return;
 
-	printk("%s%s[%d]: segfault at %lx ip %px sp %px error %lx",
+	printk("%s%s[%d]: segfault at %lx ip %p sp %p error %lx",
 		task_pid_nr(tsk) > 1 ? KERN_INFO : KERN_EMERG,
 		tsk->comm, task_pid_nr(tsk), address,
 		(void *)regs->ip, (void *)regs->sp, error_code);

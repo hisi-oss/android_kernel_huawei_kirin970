@@ -31,6 +31,7 @@
 #define IOMMU_CACHE	(1 << 2) /* DMA cache coherency */
 #define IOMMU_NOEXEC	(1 << 3)
 #define IOMMU_MMIO	(1 << 4) /* e.g. things like MSI doorbells */
+
 /*
  * Where the bus hardware includes a privilege level as part of its access type
  * markings, and certain devices are capable of issuing transactions marked as
@@ -124,6 +125,8 @@ enum iommu_attr {
 	DOMAIN_ATTR_FSL_PAMU_ENABLE,
 	DOMAIN_ATTR_FSL_PAMUV1,
 	DOMAIN_ATTR_NESTING,	/* two stages of translation */
+	DOMAIN_ATTR_PGD,	/* Page table */
+	DOMAIN_ATTR_TTBR,
 	DOMAIN_ATTR_MAX,
 };
 
@@ -204,6 +207,8 @@ struct iommu_ops {
 	size_t (*map_sg)(struct iommu_domain *domain, unsigned long iova,
 			 struct scatterlist *sg, unsigned int nents, int prot);
 	void (*flush_iotlb_all)(struct iommu_domain *domain);
+	void (*flush_tlb)(struct device *dev, struct iommu_domain *domain);
+	int (*dev_flush_tlb)(struct iommu_domain *domain, unsigned int ssid);
 	void (*iotlb_range_add)(struct iommu_domain *domain,
 				unsigned long iova, size_t size);
 	void (*iotlb_sync)(struct iommu_domain *domain);
@@ -289,6 +294,9 @@ static inline struct iommu_device *dev_to_iommu_device(struct device *dev)
 extern int bus_set_iommu(struct bus_type *bus, const struct iommu_ops *ops);
 extern bool iommu_present(struct bus_type *bus);
 extern bool iommu_capable(struct bus_type *bus, enum iommu_cap cap);
+extern struct iommu_domain *iommu_fwspec_domain_alloc(
+				struct iommu_fwspec *iommu_fwspec, unsigned type);
+extern size_t iommu_pgsize(struct iommu_domain *domain, unsigned long addr_merge, size_t size);
 extern struct iommu_domain *iommu_domain_alloc(struct bus_type *bus);
 extern struct iommu_group *iommu_group_get_by_id(int id);
 extern void iommu_domain_free(struct iommu_domain *domain);
@@ -297,6 +305,8 @@ extern int iommu_attach_device(struct iommu_domain *domain,
 extern void iommu_detach_device(struct iommu_domain *domain,
 				struct device *dev);
 extern struct iommu_domain *iommu_get_domain_for_dev(struct device *dev);
+extern size_t iommu_pgsize(struct iommu_domain *domain,
+			   unsigned long addr_merge, size_t size);
 extern int iommu_map(struct iommu_domain *domain, unsigned long iova,
 		     phys_addr_t paddr, size_t size, int prot);
 extern size_t iommu_unmap(struct iommu_domain *domain, unsigned long iova,

@@ -352,15 +352,26 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 #define VM_FAULT_BADMAP		0x010000
 #define VM_FAULT_BADACCESS	0x020000
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static int __do_page_fault(struct vm_area_struct *vma, unsigned long addr,
+			   unsigned int mm_flags, unsigned long vm_flags,
+			   struct task_struct *tsk)
+#else
 static int __do_page_fault(struct mm_struct *mm, unsigned long addr,
 			   unsigned int mm_flags, unsigned long vm_flags,
 			   struct task_struct *tsk)
+#endif
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	int fault = VM_FAULT_BADMAP;
+
+#else
 	struct vm_area_struct *vma;
 	int fault;
 
 	vma = find_vma(mm, addr);
 	fault = VM_FAULT_BADMAP;
+#endif
 	if (unlikely(!vma))
 		goto out;
 	if (unlikely(vma->vm_start > addr))
@@ -400,8 +411,11 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	int fault, sig, code, major = 0;
-	unsigned long vm_flags = VM_READ | VM_WRITE;
+	unsigned long vm_flags = VM_READ | VM_WRITE | VM_EXEC;
 	unsigned int mm_flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	struct vm_area_struct *vma = NULL;
+#endif
 
 	if (notify_page_fault(regs, esr))
 		return 0;
@@ -440,6 +454,15 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, addr);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	/*
+	 * let's try a speculative page fault without grabbing the
+	 * mmap_sem.
+	 */
+	fault = handle_speculative_fault(mm, addr, mm_flags, vm_flags, &vma);
+	if (fault != VM_FAULT_RETRY)
+		goto done;
+#endif
 	/*
 	 * As per x86, we may deadlock here. However, since the kernel only
 	 * validly references user space from well defined areas of the code,
@@ -462,7 +485,14 @@ retry:
 #endif
 	}
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	if (!vma || !can_reuse_spf_vma(vma, addr))
+		vma = find_vma(mm, addr);
+
+	fault = __do_page_fault(vma, addr, mm_flags, vm_flags, tsk);
+#else
 	fault = __do_page_fault(mm, addr, mm_flags, vm_flags, tsk);
+#endif
 	major |= fault & VM_FAULT_MAJOR;
 
 	if (fault & VM_FAULT_RETRY) {
@@ -485,11 +515,30 @@ retry:
 		if (mm_flags & FAULT_FLAG_ALLOW_RETRY) {
 			mm_flags &= ~FAULT_FLAG_ALLOW_RETRY;
 			mm_flags |= FAULT_FLAG_TRIED;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+			/*
+			 * Do not try to reuse this vma and fetch it
+			 * again since we will release the mmap_sem.
+			 */
+			vma = NULL;
+#endif
 			goto retry;
 		}
 	}
 	up_read(&mm->mmap_sem);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+done:
+#endif
+
+#ifdef CONFIG_FILE_MAP
+#ifdef CONFIG_CGROUP_IOLIMIT_IN_FILE_PAGEFAULT
+	if (task_in_pagefault_delay_clear(current)) {
+		io_read_bandwidth_control(PAGE_SIZE);
+		task_clear_in_pagefault_delay_clear(current);
+	}
+#endif
+#endif
 	/*
 	 * Handle the "normal" (no error) case first.
 	 */
@@ -643,6 +692,11 @@ static int do_sea(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 	return ret;
 }
 
+#ifdef CONFIG_TLB_CONFLICT_WORKAROUND
+extern int do_tlb_conflict(unsigned long addr, unsigned int esr,
+			struct pt_regs *regs);
+#endif
+
 static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGBUS,  0,		"ttbr address size fault"	},
 	{ do_bad,		SIGBUS,  0,		"level 1 address size fault"	},
@@ -692,7 +746,11 @@ static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGBUS,  0,		"unknown 45"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 46"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 47"			},
+#ifdef CONFIG_TLB_CONFLICT_WORKAROUND
+	{ do_tlb_conflict,	SIGBUS,  0,		"tlb conflict"			},
+#else
 	{ do_bad,		SIGBUS,  0,		"TLB conflict abort"		},
+#endif
 	{ do_bad,		SIGBUS,  0,		"unknown 49"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 50"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 51"			},
@@ -883,7 +941,7 @@ int cpu_enable_pan(void *__unused)
 	 */
 	WARN_ON_ONCE(in_interrupt());
 
-	config_sctlr_el1(SCTLR_EL1_SPAN, 0);
+	sysreg_clear_set(sctlr_el1, SCTLR_EL1_SPAN, 0);
 	asm(SET_PSTATE_PAN(1));
 	return 0;
 }

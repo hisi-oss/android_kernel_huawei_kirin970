@@ -108,6 +108,7 @@
 #define DWC3_GHWPARAMS7		0xc15c
 #define DWC3_GDBGFIFOSPACE	0xc160
 #define DWC3_GDBGLTSSM		0xc164
+#define DWC3_GDBGLSPMUX_DEV 0xc170
 #define DWC3_GPRTBIMAP_HS0	0xc180
 #define DWC3_GPRTBIMAP_HS1	0xc184
 #define DWC3_GPRTBIMAP_FS0	0xc188
@@ -116,6 +117,8 @@
 
 #define DWC3_VER_NUMBER		0xc1a0
 #define DWC3_VER_TYPE		0xc1a4
+
+#define DWC3_GDBGLSPMUX_DEV_ANALYZER_SET(rv, av)    (((rv) &~(0xff << 16)) |((av) << 16))
 
 #define DWC3_GUSB2PHYCFG(n)	(0xc200 + ((n) * 0x04))
 #define DWC3_GUSB2I2CCTL(n)	(0xc240 + ((n) * 0x04))
@@ -133,6 +136,8 @@
 #define DWC3_GEVNTCOUNT(n)	(0xc40c + ((n) * 0x10))
 
 #define DWC3_GHWPARAMS8		0xc600
+#define DWC31_GUCTL2	0xc608
+#define DWC3_GUCTL3		0xc60c
 #define DWC3_GFLADJ		0xc630
 
 /* Device Registers */
@@ -158,6 +163,16 @@
 #define DWC3_OEVT		0xcc08
 #define DWC3_OEVTEN		0xcc0C
 #define DWC3_OSTS		0xcc10
+
+/* Link Registers */
+#define DWC3_LU1LFPSTXTIM(n)	(0xd004 + ((n) * 0x80))
+#define DWC3_LSKIPFREQ(n)	(0xd020 + ((n) * 0x80))
+#define DWC3_LLUCTL(n)		(0xd024 + ((n) * 0x80))
+#define DWC3_LSCDTIM1(n)	(0xd02c + ((n) * 0x80))
+#define DWC3_LSCDTIM2(n)	(0xd030 + ((n) * 0x80))
+#define DWC3_LLINKERRINJ(n)	(0xd048 + ((n) * 0x80))
+#define DWC3_LINK_GDBGLTSSM(n)	(0xd050 + ((n) * 0x80))
+
 
 /* Bit fields */
 
@@ -191,6 +206,7 @@
 #define DWC3_GCTL_CLK_MASK	(3)
 
 #define DWC3_GCTL_PRTCAP(n)	(((n) & (3 << 12)) >> 12)
+#define DWC3_GCTL_PRTCAP_MASK (3 << 12)
 #define DWC3_GCTL_PRTCAPDIR(n)	((n) << 12)
 #define DWC3_GCTL_PRTCAP_HOST	1
 #define DWC3_GCTL_PRTCAP_DEVICE	2
@@ -206,9 +222,19 @@
 #define DWC3_GCTL_DSBLCLKGTNG		BIT(0)
 
 /* Global User Control 1 Register */
+#define DWC3_GUCTL1_FILTER_SE0_FSLS_EOP	BIT(29)
 #define DWC3_GUCTL1_TX_IPGAP_LINECHECK_DIS	BIT(28)
 #define DWC3_GUCTL1_DEV_L1_EXIT_BY_HW	BIT(24)
-
+#define DWC3_GUCTL1_RESERVED26		BIT(26)
+#define DWC3_GUCTL1_HW_LPM_CAP_DISABLE		BIT(13)
+#define DWC3_GUCTL1_HW_LPM_HLE_DISABLE		BIT(14)
+#define DWC3_GUCTL1_DISREFCLKGTNG_BIT		BIT(11)
+#define DWC3_GUCTL1_LOA_FILTER_EN		BIT(0)
+/* Global User Control Register */
+#define DWC3_GUCTL_DTOUT(n)			((n) << 0)
+#define DWC3_GUCTL_DTOUT_MASK			DWC3_GUCTL_DTOUT(0x7FF)
+#define DWC3_GUCTL_USBHSTINIMMRETRYEN		BIT(14)
+#define DWC3_GUCTL_ENOVERLAPCHK	BIT(13)
 /* Global USB2 PHY Configuration Register */
 #define DWC3_GUSB2PHYCFG_PHYSOFTRST	BIT(31)
 #define DWC3_GUSB2PHYCFG_U2_FREECLK_EXISTS	BIT(30)
@@ -234,6 +260,7 @@
 
 /* Global USB3 PIPE Control Register */
 #define DWC3_GUSB3PIPECTL_PHYSOFTRST	BIT(31)
+#define DWC3_GUSB3PIPECTL_HSTPRTCMPl	BIT(30)
 #define DWC3_GUSB3PIPECTL_U2SSINP3OK	BIT(29)
 #define DWC3_GUSB3PIPECTL_DISRXDETINP3	BIT(28)
 #define DWC3_GUSB3PIPECTL_UX_EXIT_PX	BIT(27)
@@ -308,6 +335,17 @@
 
 /* Global User Control Register 2 */
 #define DWC3_GUCTL2_RST_ACTBITLATER		BIT(14)
+
+#define DWC3_GRXTHRCFG_USBRXPKTCNTSEL		BIT(26)
+
+#define DWC31_GUCTL2_SVC_OPP_PER_HS(n)		((n) << 5)
+#define DWC31_GUCTL2_SVC_OPP_PER_HS_MASK	DWC31_GUCTL2_SVC_OPP_PER_HS(3)
+
+
+/* Global User Control Register 3 */
+#define DWC3_GUCTL3_SVC_OPP_PER_HS_SEP(n)	((n) << 9)
+#define DWC3_GUCTL3_SVC_OPP_PER_HS_SEP_MASK	DWC3_GUCTL3_SVC_OPP_PER_HS_SEP(0xF)
+#define DWC3_GUCTL3_SPLITDISABLE	BIT(14)
 
 /* Device Configuration Register */
 #define DWC3_DCFG_DEVADDR(addr)	((addr) << 3)
@@ -476,6 +514,13 @@
 #define DWC3_DEV_IMOD_COUNT_MASK	(0xffff << 16)
 #define DWC3_DEV_IMOD_INTERVAL_SHIFT	0
 #define DWC3_DEV_IMOD_INTERVAL_MASK	(0xffff << 0)
+
+/* LLUCTL Register */
+#define DWC3_LLUCTL_SUPPORT_P4_PG		BIT(29)
+#define DWC_LLUCTL_PENDING_HP_TIMER_US_MASK	(0x1f << 16)
+#define DWC_LLUCTL_PENDING_HP_TIMER_US(val)	(val << 16)
+#define DWC_LLUCTL_ENABLE_HP_TIMER	BIT(16)
+
 
 /* Structures */
 
@@ -807,7 +852,6 @@ struct dwc3_scratchpad_array {
  * @usb3_generic_phy: pointer to USB3 PHY
  * @phys_ready: flag to indicate that PHYs are ready
  * @ulpi: pointer to ulpi interface
- * @ulpi_ready: flag to indicate that ULPI is initialized
  * @isoch_delay: wValue from Set Isochronous Delay request;
  * @u2sel: parameter from Set SEL request.
  * @u2pel: parameter from Set SEL request.
@@ -908,7 +952,6 @@ struct dwc3 {
 	bool			phys_ready;
 
 	struct ulpi		*ulpi;
-	bool			ulpi_ready;
 
 	void __iomem		*regs;
 	size_t			regs_size;
@@ -983,6 +1026,7 @@ struct dwc3 {
 	struct dwc3_hwparams	hwparams;
 	struct dentry		*root;
 	struct debugfs_regset32	*regset;
+	u8			cp_test;
 
 	u8			test_mode;
 	u8			test_mode_nr;
@@ -991,8 +1035,17 @@ struct dwc3 {
 
 	const char		*hsphy_interface;
 
+	struct tasklet_struct	bh;
+
 	unsigned		connected:1;
 	unsigned		delayed_status:1;
+
+	/*
+	 * the delayed status may come before notready interrupt,
+	 * in this case, don't wait for delayed status
+	 */
+	unsigned		status_queued:1;
+
 	unsigned		ep0_bounced:1;
 	unsigned		ep0_expect_in:1;
 	unsigned		has_hibernation:1;
@@ -1016,6 +1069,7 @@ struct dwc3 {
 	unsigned		rx_detect_poll_quirk:1;
 	unsigned		dis_u3_susphy_quirk:1;
 	unsigned		dis_u2_susphy_quirk:1;
+	unsigned		dis_u1u2_quirk:1;
 	unsigned		dis_enblslpm_quirk:1;
 	unsigned		dis_rxdet_inp3_quirk:1;
 	unsigned		dis_u2_freeclk_exists_quirk:1;
@@ -1024,6 +1078,24 @@ struct dwc3 {
 
 	unsigned		tx_de_emphasis_quirk:1;
 	unsigned		tx_de_emphasis:2;
+	unsigned		gadget_pullup:1;
+	unsigned		pcd_suspended:1;
+	unsigned		dis_split_quirk:1;
+	unsigned		gctl_reset_quirk:1;
+	unsigned		dis_pipe_clk_quirk:1;
+	unsigned		en_host_u2_susphy_quirk:1;
+	unsigned		dis_dcfg_lpm:1;
+	unsigned		pullup_ulpi_reset_phy_quirk:1;
+	unsigned		filter_se0_fsls_quirk:1;
+	unsigned		loa_filter_en_quirk:1;
+	unsigned		support_s3_wakeup:1;
+	unsigned		enable_p4_gate:1;
+	unsigned		clear_svc_opp_per_hs:1;
+	unsigned		disable_rx_thres:1;
+	unsigned		set_svc_opp_per_hs_sep:1;
+	unsigned		adjust_dtout:1;
+	unsigned		force_disable_host_lpm:1;
+	unsigned		enable_hst_imm_retry:1;
 
 	u16			imod_interval;
 };
@@ -1079,6 +1151,9 @@ struct dwc3_event_depevt {
 #define DEPEVT_STATUS_SHORT	BIT(1)
 #define DEPEVT_STATUS_IOC	BIT(2)
 #define DEPEVT_STATUS_LST	BIT(3)
+
+/* Within XferInProgress */
+#define DEPEVT_STATUS_MISSEDISOC	(1 << 3)
 
 /* Stream event only */
 #define DEPEVT_STREAMEVT_FOUND		1
@@ -1184,12 +1259,18 @@ struct dwc3_gadget_ep_cmd_params {
 /* prototypes */
 void dwc3_set_mode(struct dwc3 *dwc, u32 mode);
 u32 dwc3_core_fifo_space(struct dwc3_ep *dep, u8 type);
+int dwc3_core_init(struct dwc3 *dwc, int in_atomic);
+int dwc3_event_buffers_setup(struct dwc3 *dwc);
+void dwc3_event_buffers_cleanup(struct dwc3 *dwc);
 
 /* check whether we are on the DWC_usb3 core */
 static inline bool dwc3_is_usb3(struct dwc3 *dwc)
 {
 	return !(dwc->revision & DWC3_REVISION_IS_DWC31);
 }
+
+int dwc3_event_buffers_setup(struct dwc3 *dwc);
+void dwc3_event_buffers_cleanup(struct dwc3 *dwc);
 
 /* check whether we are on the DWC_usb31 core */
 static inline bool dwc3_is_usb31(struct dwc3 *dwc)
@@ -1209,10 +1290,12 @@ static inline void dwc3_host_exit(struct dwc3 *dwc)
 { }
 #endif
 
+extern struct atomic_notifier_head device_event_nh;
+
 #if IS_ENABLED(CONFIG_USB_DWC3_GADGET) || IS_ENABLED(CONFIG_USB_DWC3_DUAL_ROLE)
 int dwc3_gadget_init(struct dwc3 *dwc);
 void dwc3_gadget_exit(struct dwc3 *dwc);
-int dwc3_gadget_set_test_mode(struct dwc3 *dwc, int mode);
+int dwc3_gadget_set_test_mode(struct dwc3 *dwc, unsigned int mode);
 int dwc3_gadget_get_link_state(struct dwc3 *dwc);
 int dwc3_gadget_set_link_state(struct dwc3 *dwc, enum dwc3_link_state state);
 int dwc3_send_gadget_ep_cmd(struct dwc3_ep *dep, unsigned cmd,

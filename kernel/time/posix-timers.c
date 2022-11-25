@@ -298,6 +298,9 @@ static void common_hrtimer_rearm(struct k_itimer *timr)
 {
 	struct hrtimer *timer = &timr->it.real.timer;
 
+	if (!timr->it_interval)
+		return;
+
 	timr->it_overrun += hrtimer_forward(timer, timer->base->get_time(),
 					    timr->it_interval);
 	hrtimer_restart(timer);
@@ -323,7 +326,7 @@ void posixtimer_rearm(struct siginfo *info)
 	if (!timr)
 		return;
 
-	if (timr->it_interval && timr->it_requeue_pending == info->si_sys_private) {
+	if (timr->it_requeue_pending == info->si_sys_private) {
 		timr->kclock->timer_rearm(timr);
 
 		timr->it_active = 1;
@@ -1349,6 +1352,7 @@ static const struct k_clock * const posix_clocks[] = {
 	[CLOCK_REALTIME_ALARM]		= &alarm_clock,
 	[CLOCK_BOOTTIME_ALARM]		= &alarm_clock,
 	[CLOCK_TAI]			= &clock_tai,
+	[CLOCK_POWEROFF_ALARM]			= &alarm_clock,
 };
 
 static const struct k_clock *clockid_to_kclock(const clockid_t id)

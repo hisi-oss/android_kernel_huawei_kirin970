@@ -23,6 +23,7 @@
 #include <linux/module.h>
 #include <linux/mount.h>
 #include <linux/srcu.h>
+#include <linux/wait.h>
 
 #include <linux/fsnotify_backend.h>
 #include "fsnotify.h"
@@ -90,12 +91,16 @@ void fsnotify_unmount_inodes(struct super_block *sb)
 
 		iput_inode = inode;
 
+		cond_resched();
 		spin_lock(&sb->s_inode_list_lock);
 	}
 	spin_unlock(&sb->s_inode_list_lock);
 
 	if (iput_inode)
 		iput(iput_inode);
+        /* Wait for outstanding inode references from connectors */
+        wait_event(sb->s_fsnotify_inode_refs_waitq,
+		!atomic_long_read(&sb->s_fsnotify_inode_refs));
 }
 
 /*

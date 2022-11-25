@@ -12,6 +12,9 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/mm_types.h>
+#ifdef CONFIG_HISI_CMA_RECORD_DEBUG
+#include <linux/hisi/hisi_cma_debug.h>
+#endif
 
 #include "cma.h"
 
@@ -58,7 +61,7 @@ static int cma_maxchunk_get(void *data, u64 *val)
 	mutex_lock(&cma->lock);
 	for (;;) {
 		start = find_next_zero_bit(cma->bitmap, bitmap_maxno, end);
-		if (start >= cma->count)
+		if (start >= bitmap_maxno)
 			break;
 		end = find_next_bit(cma->bitmap, bitmap_maxno, start);
 		maxchunk = max(end - start, maxchunk);
@@ -139,7 +142,7 @@ static int cma_alloc_mem(struct cma *cma, int count)
 	if (!mem)
 		return -ENOMEM;
 
-	p = cma_alloc(cma, count, 0, GFP_KERNEL);
+	p = cma_alloc(cma, count, 0, false);
 	if (!p) {
 		kfree(mem);
 		return -ENOMEM;
@@ -201,6 +204,10 @@ static int __init cma_debugfs_init(void)
 
 	for (i = 0; i < cma_area_count; i++)
 		cma_debugfs_add_one(&cma_areas[i], i);
+
+#ifdef CONFIG_HISI_CMA_RECORD_DEBUG
+	hisi_cma_debugfs_init();
+#endif
 
 	return 0;
 }

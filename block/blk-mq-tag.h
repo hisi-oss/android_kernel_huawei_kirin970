@@ -8,14 +8,22 @@
  * Tag address space map.
  */
 struct blk_mq_tags {
-	unsigned int nr_tags;
+	unsigned int nr_tags; /* Total tags */
 	unsigned int nr_reserved_tags;
-
+#ifdef CONFIG_MAS_BLK
+	unsigned int nr_high_prio_tags;
+	unsigned int tags_id_offset;
+	unsigned int reserved_tags_id_offset;
+	unsigned int high_prio_tags_id_offset;
+	struct blk_mq_tag_set *set;
+#endif
 	atomic_t active_queues;
 
 	struct sbitmap_queue bitmap_tags;
 	struct sbitmap_queue breserved_tags;
-
+#ifdef CONFIG_MAS_BLK
+	struct sbitmap_queue highprio_tags;
+#endif
 	struct request **rqs;
 	struct request **static_rqs;
 	struct list_head page_list;

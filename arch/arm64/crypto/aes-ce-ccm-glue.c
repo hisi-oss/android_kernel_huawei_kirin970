@@ -47,6 +47,52 @@ asmlinkage void ce_aes_ccm_final(u8 mac[], u8 const ctr[], u32 const rk[],
 
 asmlinkage void __aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __ce_aes_ccm_auth_data(u8 mac[], u8 const in[], u32 abytes,
+				     u32 *macp, u32 const rk[], u32 rounds)
+{
+	ce_aes_ccm_auth_data(mac,in,abytes,macp,rk,rounds);
+}
+#define ce_aes_ccm_auth_data __ce_aes_ccm_auth_data
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __ce_aes_ccm_encrypt(u8 out[], u8 const in[], u32 cbytes,
+				   u32 const rk[], u32 rounds, u8 mac[],
+				   u8 ctr[])
+{
+	ce_aes_ccm_encrypt(out, in, cbytes, rk, rounds, mac, ctr);
+}
+#define ce_aes_ccm_encrypt __ce_aes_ccm_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __ce_aes_ccm_decrypt(u8 out[], u8 const in[], u32 cbytes,
+				   u32 const rk[], u32 rounds, u8 mac[],
+				   u8 ctr[])
+{
+	ce_aes_ccm_decrypt(out, in, cbytes, rk, rounds, mac, ctr);
+}
+#define ce_aes_ccm_decrypt __ce_aes_ccm_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __ce_aes_ccm_final(u8 mac[], u8 const ctr[], u32 const rk[],
+				 u32 rounds)
+{
+	ce_aes_ccm_final(mac, ctr, rk, rounds);
+}
+#define ce_aes_ccm_final __ce_aes_ccm_final
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void ___aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds)
+{
+	__aes_arm64_encrypt(rk, out, in, rounds);
+}
+#define __aes_arm64_encrypt ___aes_arm64_encrypt
+#endif
+
 static int ccm_setkey(struct crypto_aead *tfm, const u8 *in_key,
 		      unsigned int key_len)
 {

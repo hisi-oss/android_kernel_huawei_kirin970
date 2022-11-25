@@ -626,7 +626,7 @@ static int f_midi_do_transmit(struct f_midi *midi, struct usb_ep *ep)
 	 * until a) usb requests have been completed or b) snd_rawmidi_write()
 	 * times out.
 	 */
-	if (req->length > 0)
+	if (req->length > 0) /*[false alarm]:it is a false alarm*/
 		return 0;
 
 	for (i = midi->in_last_port; i < midi->in_ports; ++i) {
@@ -1103,7 +1103,7 @@ static ssize_t f_midi_opts_##name##_store(struct config_item *item,	\
 	u32 num;							\
 									\
 	mutex_lock(&opts->lock);					\
-	if (opts->refcnt) {						\
+	if (opts->refcnt > 1) {						\
 		ret = -EBUSY;						\
 		goto end;						\
 	}								\
@@ -1158,7 +1158,7 @@ static ssize_t f_midi_opts_id_store(struct config_item *item,
 	char *c;
 
 	mutex_lock(&opts->lock);
-	if (opts->refcnt) {
+	if (opts->refcnt > 1) {
 		ret = -EBUSY;
 		goto end;
 	}
@@ -1199,13 +1199,21 @@ static struct config_item_type midi_func_type = {
 static void f_midi_free_inst(struct usb_function_instance *f)
 {
 	struct f_midi_opts *opts;
+	bool free = false;
 
 	opts = container_of(f, struct f_midi_opts, func_inst);
 
-	if (opts->id_allocated)
-		kfree(opts->id);
+	mutex_lock(&opts->lock);
+	if (!--opts->refcnt) {
+		free = true;
+	}
+	mutex_unlock(&opts->lock);
 
-	kfree(opts);
+	if (free) {
+		if (opts->id_allocated)
+			kfree(opts->id);
+		kfree(opts);
+	}
 }
 
 #ifdef CONFIG_USB_CONFIGFS_UEVENT
@@ -1216,7 +1224,7 @@ static ssize_t alsa_show(struct device *dev,
 	struct usb_function_instance *fi_midi = dev_get_drvdata(dev);
 	struct f_midi *midi;
 
-	if (!fi_midi->f)
+	if (fi_midi && !fi_midi->f)
 		dev_warn(dev, "f_midi: function not set\n");
 
 	if (fi_midi && fi_midi->f) {
@@ -1283,6 +1291,7 @@ static struct usb_function_instance *f_midi_alloc_inst(void)
 	opts->qlen = 32;
 	opts->in_ports = 1;
 	opts->out_ports = 1;
+	opts->refcnt = 1;
 
 	if (create_alsa_device(&opts->func_inst)) {
 		kfree(opts);
@@ -1315,6 +1324,9 @@ static void f_midi_free(struct usb_function *f)
 
 static void f_midi_rmidi_free(struct snd_rawmidi *rmidi)
 {
+	struct f_midi *midi = rmidi->private_data;
+
+	midi->rmidi = NULL;
 	f_midi_free(rmidi->private_data);
 }
 

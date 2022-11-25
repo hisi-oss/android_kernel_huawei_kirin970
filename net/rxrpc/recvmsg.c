@@ -588,7 +588,6 @@ error_requeue_call:
 	}
 error_no_call:
 	release_sock(&rx->sk);
-error_trace:
 	trace_rxrpc_recvmsg(call, rxrpc_recvmsg_return, 0, 0, 0, ret);
 	return ret;
 
@@ -597,7 +596,7 @@ wait_interrupted:
 wait_error:
 	finish_wait(sk_sleep(&rx->sk), &wait);
 	call = NULL;
-	goto error_trace;
+	goto error_no_call;
 }
 
 /**

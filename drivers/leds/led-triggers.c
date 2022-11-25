@@ -183,7 +183,7 @@ void led_trigger_rename_static(const char *name, struct led_trigger *trig)
 	down_write(&triggers_list_lock);
 	/* this assumes that trig->name was originaly allocated to
 	 * non constant storage */
-	strcpy((char *)trig->name, name);
+	strcpy((char *)trig->name, name); //lint !e421
 	up_write(&triggers_list_lock);
 }
 EXPORT_SYMBOL_GPL(led_trigger_rename_static);
@@ -361,6 +361,6 @@ void led_trigger_unregister_simple(struct led_trigger *trig)
 {
 	if (trig)
 		led_trigger_unregister(trig);
-	kfree(trig);
+	kfree(trig); //lint !e668
 }
 EXPORT_SYMBOL_GPL(led_trigger_unregister_simple);

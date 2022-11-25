@@ -58,9 +58,15 @@
 #include <linux/trace_events.h>
 #include <linux/suspend.h>
 #include <linux/ftrace.h>
-
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/mntn_record_sp.h>
+#endif
 #include "tree.h"
 #include "rcu.h"
+
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/rdr_hisi_ap_hook.h>
+#endif
 
 #ifdef MODULE_PARAM_PREFIX
 #undef MODULE_PARAM_PREFIX
@@ -1393,8 +1399,12 @@ static void rcu_dump_cpu_stacks(struct rcu_state *rsp)
 		raw_spin_lock_irqsave_rcu_node(rnp, flags);
 		for_each_leaf_node_possible_cpu(rnp, cpu)
 			if (rnp->qsmask & leaf_node_cpu_bit(rnp, cpu))
-				if (!trigger_single_cpu_backtrace(cpu))
+				if (!trigger_single_cpu_backtrace(cpu)) {
 					dump_cpu_task(cpu);
+#ifdef CONFIG_HISI_BB
+					mntn_show_stack_othercpus(cpu);
+#endif
+				}
 		raw_spin_unlock_irqrestore_rcu_node(rnp, flags);
 	}
 }
@@ -2780,15 +2790,6 @@ void rcu_check_callbacks(int user)
 		rcu_bh_qs();
 	}
 	rcu_preempt_check_callbacks();
-	/* The load-acquire pairs with the store-release setting to true. */
-	if (smp_load_acquire(this_cpu_ptr(&rcu_dynticks.rcu_urgent_qs))) {
-		/* Idle and userspace execution already are quiescent states. */
-		if (!rcu_is_cpu_rrupt_from_idle() && !user) {
-			set_tsk_need_resched(current);
-			set_preempt_need_resched();
-		}
-		__this_cpu_write(rcu_dynticks.rcu_urgent_qs, false);
-	}
 	if (rcu_pending())
 		invoke_rcu_core();
 	if (user)
@@ -2938,13 +2939,22 @@ __rcu_process_callbacks(struct rcu_state *rsp)
 static __latent_entropy void rcu_process_callbacks(struct softirq_action *unused)
 {
 	struct rcu_state *rsp;
-
-	if (cpu_is_offline(smp_processor_id()))
+#ifdef CONFIG_HISI_BB
+	softirq_hook(HK_RCU_SOFTIRQ, (u64)rcu_process_callbacks, 0);
+#endif
+	if (cpu_is_offline(smp_processor_id())) {
+#ifdef CONFIG_HISI_BB
+		softirq_hook(HK_RCU_SOFTIRQ, (u64)rcu_process_callbacks, 1);
+#endif
 		return;
+	}
 	trace_rcu_utilization(TPS("Start RCU core"));
 	for_each_rcu_flavor(rsp)
 		__rcu_process_callbacks(rsp);
 	trace_rcu_utilization(TPS("End RCU core"));
+#ifdef CONFIG_HISI_BB
+	softirq_hook(HK_RCU_SOFTIRQ, (u64)rcu_process_callbacks, 1);
+#endif
 }
 
 /*
@@ -4193,6 +4203,8 @@ static void __init rcu_dump_rcu_node_tree(struct rcu_state *rsp)
 	pr_cont("\n");
 }
 
+struct workqueue_struct *rcu_gp_wq;
+
 void __init rcu_init(void)
 {
 	int cpu;
@@ -4220,6 +4232,10 @@ void __init rcu_init(void)
 		if (IS_ENABLED(CONFIG_TREE_SRCU))
 			srcu_online_cpu(cpu);
 	}
+
+	/* Create workqueue for expedited GPs and for Tree SRCU. */
+	rcu_gp_wq = alloc_workqueue("rcu_gp", WQ_MEM_RECLAIM, 0);
+	WARN_ON(!rcu_gp_wq);
 }
 
 #include "tree_exp.h"

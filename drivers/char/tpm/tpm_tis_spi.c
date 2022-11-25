@@ -41,6 +41,11 @@
 #include "tpm.h"
 #include "tpm_tis_core.h"
 
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+#include <linux/regulator/consumer.h>
+#include "tpm-huawei.h"
+#endif
+
 #define MAX_SPI_FRAMESIZE 64
 
 struct tpm_tis_spi_phy {
@@ -188,27 +193,66 @@ static const struct tpm_tis_phy_ops tpm_spi_phy_ops = {
 static int tpm_tis_spi_probe(struct spi_device *dev)
 {
 	struct tpm_tis_spi_phy *phy;
-	int irq;
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+	int ret;
 
+	dev->supply = devm_regulator_get(&dev->dev, "ldo4");
+	if (IS_ERR(dev->supply)) {
+		ret = PTR_ERR(dev->supply);
+		if (ret != -EPROBE_DEFER)
+			dev_err(&dev->dev, "Failed to get regulator: %d\n",
+				ret);
+		return ret;
+	}
+
+	regulator_set_voltage(dev->supply, 1800000, 1800000);
+
+	ret = regulator_enable(dev->supply);
+	if (ret < 0) {
+		dev_err(&dev->dev, "Failed to enable regulator: %d\n",
+			ret);
+		return ret;
+	}
+
+	tpm_msleep(2);
+#endif
 	phy = devm_kzalloc(&dev->dev, sizeof(struct tpm_tis_spi_phy),
 			   GFP_KERNEL);
-	if (!phy)
+	if (!phy) {
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+		goto err_mem;
+#endif
 		return -ENOMEM;
+	}
 
 	phy->spi_device = dev;
 
 	phy->iobuf = devm_kmalloc(&dev->dev, MAX_SPI_FRAMESIZE, GFP_KERNEL);
-	if (!phy->iobuf)
+	if (!phy->iobuf) {
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+		goto err_mem;
+#endif
 		return -ENOMEM;
+	}
 
-	/* If the SPI device has an IRQ then use that */
-	if (dev->irq > 0)
-		irq = dev->irq;
-	else
-		irq = -1;
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+	ret = tpm_reset(dev);
+	if (ret < 0) {
+		dev_err(&dev->dev, "Failed to reset tpm\n");
+		return ret;
+	}
+#endif
 
-	return tpm_tis_core_init(&dev->dev, &phy->priv, irq, &tpm_spi_phy_ops,
+	return tpm_tis_core_init(&dev->dev, &phy->priv, -1, &tpm_spi_phy_ops,
 				 NULL);
+
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+err_mem:
+	ret = regulator_disable(dev->supply);
+	if (ret < 0)
+		dev_warn(&dev->dev, "Failed to disable supply: %d\n", ret);
+	return -ENOMEM;
+#endif
 }
 
 static SIMPLE_DEV_PM_OPS(tpm_tis_pm, tpm_pm_suspend, tpm_tis_resume);
@@ -217,6 +261,10 @@ static int tpm_tis_spi_remove(struct spi_device *dev)
 {
 	struct tpm_chip *chip = spi_get_drvdata(dev);
 
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+	if (regulator_disable(dev->supply))
+		dev_warn(&dev->dev, "Failed to disable supply\n");
+#endif
 	tpm_chip_unregister(chip);
 	tpm_tis_remove(chip);
 	return 0;
@@ -231,6 +279,7 @@ MODULE_DEVICE_TABLE(spi, tpm_tis_spi_id);
 static const struct of_device_id of_tis_spi_match[] = {
 	{ .compatible = "st,st33htpm-spi", },
 	{ .compatible = "infineon,slb9670", },
+	{ .compatible = "nationz,z32h330tc", },
 	{ .compatible = "tcg,tpm_tis-spi", },
 	{}
 };

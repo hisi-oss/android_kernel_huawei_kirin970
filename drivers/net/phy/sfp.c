@@ -114,7 +114,6 @@ struct sfp {
 
 	struct gpio_desc *gpio[GPIO_MAX];
 
-	bool attached;
 	unsigned int state;
 	struct delayed_work poll;
 	struct delayed_work timeout;
@@ -501,7 +500,7 @@ static void sfp_sm_event(struct sfp *sfp, unsigned int event)
 	 */
 	switch (sfp->sm_mod_state) {
 	default:
-		if (event == SFP_E_INSERT && sfp->attached) {
+		if (event == SFP_E_INSERT) {
 			sfp_module_tx_disable(sfp);
 			sfp_sm_ins_next(sfp, SFP_MOD_PROBE, T_PROBE_INIT);
 		}
@@ -629,19 +628,6 @@ static void sfp_sm_event(struct sfp *sfp, unsigned int event)
 	mutex_unlock(&sfp->sm_mutex);
 }
 
-static void sfp_attach(struct sfp *sfp)
-{
-	sfp->attached = true;
-	if (sfp->state & SFP_F_PRESENT)
-		sfp_sm_event(sfp, SFP_E_INSERT);
-}
-
-static void sfp_detach(struct sfp *sfp)
-{
-	sfp->attached = false;
-	sfp_sm_event(sfp, SFP_E_REMOVE);
-}
-
 static void sfp_start(struct sfp *sfp)
 {
 	sfp_sm_event(sfp, SFP_E_DEV_UP);
@@ -701,8 +687,6 @@ static int sfp_module_eeprom(struct sfp *sfp, struct ethtool_eeprom *ee,
 }
 
 static const struct sfp_socket_ops sfp_module_ops = {
-	.attach = sfp_attach,
-	.detach = sfp_detach,
 	.start = sfp_start,
 	.stop = sfp_stop,
 	.module_info = sfp_module_info,
@@ -845,6 +829,10 @@ static int sfp_probe(struct platform_device *pdev)
 		sfp->set_state = sfp_gpio_set_state;
 	}
 
+	sfp->sfp_bus = sfp_register_socket(sfp->dev, sfp, &sfp_module_ops);
+	if (!sfp->sfp_bus)
+		return -ENOMEM;
+
 	/* Get the initial state, and always signal TX disable,
 	 * since the network interface will not be up.
 	 */
@@ -855,6 +843,10 @@ static int sfp_probe(struct platform_device *pdev)
 		sfp->state |= SFP_F_RATE_SELECT;
 	sfp_set_state(sfp, sfp->state);
 	sfp_module_tx_disable(sfp);
+	rtnl_lock();
+	if (sfp->state & SFP_F_PRESENT)
+		sfp_sm_event(sfp, SFP_E_INSERT);
+	rtnl_unlock();
 
 	for (i = 0; i < GPIO_MAX; i++) {
 		if (gpio_flags[i] != GPIOD_IN || !sfp->gpio[i])

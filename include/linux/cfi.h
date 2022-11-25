@@ -6,6 +6,9 @@
 #ifdef CONFIG_CFI_CLANG
 #ifdef CONFIG_MODULES
 
+#define SHADOW_ORDER    1
+#define SHADOW_PAGES    (1 << SHADOW_ORDER)
+
 typedef void (*cfi_check_fn)(uint64_t, void *, void *);
 
 /* Compiler-generated function in each module, and the kernel */

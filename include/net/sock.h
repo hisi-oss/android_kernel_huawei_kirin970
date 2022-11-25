@@ -229,6 +229,20 @@ struct sock_common {
 		u32		skc_tw_snd_nxt; /* struct tcp_timewait_sock */
 	};
 	/* public: */
+    #ifdef CONFIG_HW_DPIMARK_MODULE
+	unsigned int    skc_hwdpi_mark;
+    #endif
+#ifdef CONFIG_HW_NETQOS_SCHED
+	int             skc_netqos_level;
+	unsigned long   skc_netqos_time;
+	unsigned long   skc_netqos_ttime;
+	unsigned int    skc_netqos_tx;
+	unsigned int    skc_netqos_rx;
+#endif
+#ifdef CONFIG_HW_NETWORK_SLICE
+	int skc_slice_reported;
+	int skc_slice_binded;
+#endif
 };
 
 /**
@@ -267,6 +281,7 @@ struct sock_common {
   *	@sk_gso_type: GSO type (e.g. %SKB_GSO_TCPV4)
   *	@sk_gso_max_size: Maximum GSO segment size to build
   *	@sk_gso_max_segs: Maximum number of GSO segments
+  *	@sk_pacing_shift: scaling factor for TCP Small Queues
   *	@sk_lingertime: %SO_LINGER l_linger setting
   *	@sk_backlog: always used with the per-socket spinlock held
   *	@sk_callback_lock: used with the callbacks in the end of this struct
@@ -351,6 +366,18 @@ struct sock {
 #define sk_incoming_cpu		__sk_common.skc_incoming_cpu
 #define sk_flags		__sk_common.skc_flags
 #define sk_rxhash		__sk_common.skc_rxhash
+#define sk_hwdpi_mark   __sk_common.skc_hwdpi_mark
+#ifdef CONFIG_HW_NETQOS_SCHED
+#define sk_netqos_level		__sk_common.skc_netqos_level
+#define sk_netqos_time		__sk_common.skc_netqos_time
+#define sk_netqos_ttime		__sk_common.skc_netqos_ttime
+#define sk_netqos_tx		__sk_common.skc_netqos_tx
+#define sk_netqos_rx		__sk_common.skc_netqos_rx
+#endif
+#ifdef CONFIG_HW_NETWORK_SLICE
+#define sk_slice_reported	__sk_common.skc_slice_reported
+#define sk_slice_binded	__sk_common.skc_slice_binded
+#endif
 
 	socket_lock_t		sk_lock;
 	atomic_t		sk_drops;
@@ -386,6 +413,23 @@ struct sock {
 		struct socket_wq __rcu	*sk_wq;
 		struct socket_wq	*sk_wq_raw;
 	};
+
+#ifdef CONFIG_HUAWEI_BASTET
+	struct bastet_sock *bastet;
+	struct bastet_reconn *reconn;
+	int fg_Spec;
+	int fg_Step;
+	bool prio_channel;
+	uint8_t discard_duration; /* bit0~bit1 indication unit:10ms,40ms,100ms,400ms;bit2~bit7 indication gear */
+#endif
+#if defined(CONFIG_HUAWEI_BASTET) || defined(CONFIG_HUAWEI_XENGINE)
+	uint8_t acc_state;
+#endif
+
+#ifdef CONFIG_HW_WIFIPRO
+	int wifipro_is_google_sock;
+	char wifipro_dev_name[IFNAMSIZ];
+#endif
 #ifdef CONFIG_XFRM
 	struct xfrm_policy __rcu *sk_policy[2];
 #endif
@@ -446,6 +490,7 @@ struct sock {
 				sk_type      : 16;
 #define SK_PROTOCOL_MAX U8_MAX
 	u16			sk_gso_max_segs;
+	u8			sk_pacing_shift;
 	unsigned long	        sk_lingertime;
 	struct proto		*sk_prot_creator;
 	rwlock_t		sk_callback_lock;
@@ -481,6 +526,40 @@ struct sock {
 	void                    (*sk_destruct)(struct sock *sk);
 	struct sock_reuseport __rcu	*sk_reuseport_cb;
 	struct rcu_head		sk_rcu;
+
+#ifdef CONFIG_HW_DPIMARK_MODULE
+	unsigned long	sk_born_stamp;
+#endif
+#ifdef CONFIG_HUAWEI_XENGINE
+	int			hicom_flag;
+	u8	snd_pkt_cnt;
+	u8	is_mp_flow:1,
+		is_download_flow:1,
+		is_mp_flow_bind:1;
+#endif
+#ifdef CONFIG_HW_CHR_TCP_SMALL_WIN_MONITOR
+	unsigned int win_cnt;
+	unsigned int mime_type;
+	unsigned long small_win_stamp;
+	bool win_flag;
+#endif
+#ifdef CONFIG_CGROUP_BPF
+	char		sk_process_name[TASK_COMM_LEN];
+#endif
+
+#ifdef CONFIG_APP_ACCELERATOR
+	bool start_acc_flag;
+	u32 packet_num;
+#endif
+
+#ifdef CONFIG_HUAWEI_KSTATE
+	pid_t		sk_pid;
+#endif
+
+#ifdef CONFIG_HUAWEI_TRACK_SOCKET
+	int	track_flag;
+	int	track_index;
+#endif
 };
 
 enum sk_pacing {
@@ -693,6 +772,11 @@ static inline void __sk_nulls_add_node_rcu(struct sock *sk, struct hlist_nulls_h
 	hlist_nulls_add_head_rcu(&sk->sk_nulls_node, list);
 }
 
+static inline void __sk_nulls_add_node_tail_rcu(struct sock *sk, struct hlist_nulls_head *list)
+{
+	hlist_nulls_add_tail_rcu(&sk->sk_nulls_node, list);
+}
+
 static inline void sk_nulls_add_node_rcu(struct sock *sk, struct hlist_nulls_head *list)
 {
 	sock_hold(sk);
@@ -781,6 +865,9 @@ enum sock_flags {
 	SOCK_FILTER_LOCKED, /* Filter cannot be changed anymore */
 	SOCK_SELECT_ERR_QUEUE, /* Wake select on error queue */
 	SOCK_RCU_FREE, /* wait rcu grace period in sk_destruct() */
+#ifdef CONFIG_MPTCP
+	SOCK_MPTCP, /* MPTCP set on this socket */
+#endif
 };
 
 #define SK_FLAGS_TIMESTAMP ((1UL << SOCK_TIMESTAMP) | (1UL << SOCK_TIMESTAMPING_RX_SOFTWARE))
@@ -916,8 +1003,8 @@ static inline void sk_incoming_cpu_update(struct sock *sk)
 {
 	int cpu = raw_smp_processor_id();
 
-	if (unlikely(sk->sk_incoming_cpu != cpu))
-		sk->sk_incoming_cpu = cpu;
+	if (unlikely(READ_ONCE(sk->sk_incoming_cpu) != cpu))
+		WRITE_ONCE(sk->sk_incoming_cpu, cpu);
 }
 
 static inline void sock_rps_record_flow_hash(__u32 hash)
@@ -1081,7 +1168,9 @@ struct proto {
 	void			(*unhash)(struct sock *sk);
 	void			(*rehash)(struct sock *sk);
 	int			(*get_port)(struct sock *sk, unsigned short snum);
-
+#ifdef CONFIG_MPTCP
+	void			(*clear_sk)(struct sock *sk, int size);
+#endif
 	/* Keeping track of sockets in use */
 #ifdef CONFIG_PROC_FS
 	unsigned int		inuse_idx;
@@ -1462,7 +1551,6 @@ static inline void lock_sock(struct sock *sk)
 	lock_sock_nested(sk, 0);
 }
 
-void __release_sock(struct sock *sk);
 void release_sock(struct sock *sk);
 
 /* BH context may only use the following locking interface. */
@@ -2131,18 +2219,27 @@ struct sk_buff *sk_stream_alloc_skb(struct sock *sk, int size, gfp_t gfp,
  * sk_page_frag - return an appropriate page_frag
  * @sk: socket
  *
- * If socket allocation mode allows current thread to sleep, it means its
- * safe to use the per task page_frag instead of the per socket one.
+ * Use the per task page_frag instead of the per socket one for
+ * optimization when we know that we're in the normal context and owns
+ * everything that's associated with %current.
+ *
+ * gfpflags_allow_blocking() isn't enough here as direct reclaim may nest
+ * inside other socket operations and end up recursing into sk_page_frag()
+ * while it's already in use.
  */
 static inline struct page_frag *sk_page_frag(struct sock *sk)
 {
-	if (gfpflags_allow_blocking(sk->sk_allocation))
+	if (gfpflags_normal_context(sk->sk_allocation))
 		return &current->task_frag;
 
 	return &sk->sk_frag;
 }
 
 bool sk_page_frag_refill(struct sock *sk, struct page_frag *pfrag);
+
+int sk_alloc_sg(struct sock *sk, int len, struct scatterlist *sg,
+		int sg_start, int *sg_curr, unsigned int *sg_size,
+		int first_coalesce);
 
 /*
  *	Default write policy as shown to user space via poll/select/SIGIO
@@ -2224,7 +2321,7 @@ static inline ktime_t sock_read_timestamp(struct sock *sk)
 
 	return kt;
 #else
-	return sk->sk_stamp;
+	return READ_ONCE(sk->sk_stamp);
 #endif
 }
 
@@ -2235,7 +2332,7 @@ static inline void sock_write_timestamp(struct sock *sk, ktime_t kt)
 	sk->sk_stamp = kt;
 	write_sequnlock(&sk->sk_stamp_seq);
 #else
-	sk->sk_stamp = kt;
+	WRITE_ONCE(sk->sk_stamp, kt);
 #endif
 }
 
@@ -2418,5 +2515,16 @@ extern int sysctl_optmem_max;
 
 extern __u32 sysctl_wmem_default;
 extern __u32 sysctl_rmem_default;
+
+/* Default TCP Small queue budget is ~1 ms of data (1sec >> 10)
+ * Some wifi drivers need to tweak it to get more chunks.
+ * They can use this helper from their ndo_start_xmit()
+ */
+static inline void sk_pacing_shift_update(struct sock *sk, int val)
+{
+	if (!sk || !sk_fullsock(sk) || sk->sk_pacing_shift == val)
+		return;
+	sk->sk_pacing_shift = val;
+}
 
 #endif	/* _SOCK_H */

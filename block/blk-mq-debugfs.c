@@ -439,6 +439,9 @@ static void blk_mq_debugfs_tags_show(struct seq_file *m,
 {
 	seq_printf(m, "nr_tags=%u\n", tags->nr_tags);
 	seq_printf(m, "nr_reserved_tags=%u\n", tags->nr_reserved_tags);
+#ifdef CONFIG_MAS_BLK
+	seq_printf(m, "nr_high_prio_tags=%u\n", tags->nr_high_prio_tags);
+#endif
 	seq_printf(m, "active_queues=%d\n",
 		   atomic_read(&tags->active_queues));
 
@@ -449,6 +452,12 @@ static void blk_mq_debugfs_tags_show(struct seq_file *m,
 		seq_puts(m, "\nbreserved_tags:\n");
 		sbitmap_queue_show(&tags->breserved_tags, m);
 	}
+#ifdef CONFIG_MAS_BLK
+	if (tags->nr_high_prio_tags) {
+		seq_puts(m, "\nbhighprio_tags:\n");
+		sbitmap_queue_show(&tags->highprio_tags, m);
+	}
+#endif
 }
 
 static int hctx_tags_show(void *data, struct seq_file *m)
@@ -477,8 +486,13 @@ static int hctx_tags_bitmap_show(void *data, struct seq_file *m)
 	res = mutex_lock_interruptible(&q->sysfs_lock);
 	if (res)
 		goto out;
-	if (hctx->tags)
+	if (hctx->tags) {
 		sbitmap_bitmap_show(&hctx->tags->bitmap_tags.sb, m);
+#ifdef CONFIG_MAS_BLK
+		sbitmap_bitmap_show(&hctx->tags->breserved_tags.sb, m);
+		sbitmap_bitmap_show(&hctx->tags->highprio_tags.sb, m);
+#endif
+	}
 	mutex_unlock(&q->sysfs_lock);
 
 out:

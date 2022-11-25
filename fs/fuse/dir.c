@@ -275,6 +275,11 @@ static void fuse_dentry_canonical_path(const struct path *path, struct path *can
 	int err;
 	char *path_name;
 
+	// Bypass fuse_dentry_canonical_path procedure for mdfs
+	// because it's designed for stacked filesystems.
+	if (fc->pass_through)
+		goto default_path;
+
 	req = fuse_get_req(fc, 1);
 	err = PTR_ERR(req);
 	if (IS_ERR(req))
@@ -454,7 +459,7 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	FUSE_ARGS(args);
 	struct fuse_forget_link *forget;
 	struct fuse_create_in inarg;
-	struct fuse_open_out outopen;
+	struct fuse_wrap_open_out outopen; /* for path_through */
 	struct fuse_entry_out outentry;
 	struct fuse_file *ff;
 
@@ -490,8 +495,9 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	args.out.numargs = 2;
 	args.out.args[0].size = sizeof(outentry);
 	args.out.args[0].value = &outentry;
-	args.out.args[1].size = sizeof(outopen);
-	args.out.args[1].value = &outopen;
+	args.out.args[1].size = sizeof(outopen.outarg);
+	args.out.args[1].value = &(outopen.outarg);
+	outopen.wrap_file = &ff->wrap_file;
 	err = fuse_simple_request(fc, &args);
 	if (err)
 		goto out_free_ff;
@@ -500,9 +506,9 @@ static int fuse_create_open(struct inode *dir, struct dentry *entry,
 	if (!S_ISREG(outentry.attr.mode) || invalid_nodeid(outentry.nodeid))
 		goto out_free_ff;
 
-	ff->fh = outopen.fh;
+	ff->fh = outopen.outarg.fh;
 	ff->nodeid = outentry.nodeid;
-	ff->open_flags = outopen.open_flags;
+	ff->open_flags = outopen.outarg.open_flags;
 	inode = fuse_iget(dir->i_sb, outentry.nodeid, outentry.generation,
 			  &outentry.attr, entry_attr_timeout(&outentry), 0);
 	if (!inode) {
@@ -876,7 +882,8 @@ static int fuse_link(struct dentry *entry, struct inode *newdir,
 
 		spin_lock(&fc->lock);
 		fi->attr_version = ++fc->attr_version;
-		inc_nlink(inode);
+		if (likely(inode->i_nlink < UINT_MAX))
+			inc_nlink(inode);
 		spin_unlock(&fc->lock);
 		fuse_invalidate_attr(inode);
 		fuse_update_ctime(inode);
@@ -1695,6 +1702,19 @@ int fuse_do_setattr(struct dentry *dentry, struct iattr *attr,
 
 	if (attr->ia_valid & ATTR_SIZE)
 		is_truncate = true;
+
+	/* Flush dirty data/metadata before non-truncate SETATTR */
+	if (is_wb && S_ISREG(inode->i_mode) &&
+	    attr->ia_valid &
+			(ATTR_MODE | ATTR_UID | ATTR_GID | ATTR_MTIME_SET |
+			 ATTR_TIMES_SET)) {
+		err = write_inode_now(inode, true);
+		if (err)
+			return err;
+
+		fuse_set_nowrite(inode);
+		fuse_release_nowrite(inode);
+	}
 
 	if (is_truncate) {
 		fuse_set_nowrite(inode);

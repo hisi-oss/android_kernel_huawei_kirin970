@@ -10,6 +10,10 @@
 
 #include <linux/completion.h>
 #include <linux/types.h>
+#include <linux/fs.h>
+#ifdef CONFIG_HUAWEI_DSM_IOMT_EMMC_HOST
+#include <linux/iomt_host/dsm_iomt_host.h>
+#endif
 
 struct mmc_data;
 struct mmc_request;
@@ -109,6 +113,8 @@ struct mmc_command {
  *              actively failing requests
  */
 
+/*do not use the system timer to check busy*/
+#define MMC_TIMEOUT_INVALID (0xFFFFFFFF)
 	unsigned int		busy_timeout;	/* busy detect timeout in ms */
 	/* Set this flag only for blocking sanitize request */
 	bool			sanitize_busy;
@@ -147,11 +153,13 @@ struct mmc_data {
 };
 
 struct mmc_host;
+struct mmc_ctx;
 struct mmc_request {
 	struct mmc_command	*sbc;		/* SET_BLOCK_COUNT for multiblock */
 	struct mmc_command	*cmd;
 	struct mmc_data		*data;
 	struct mmc_command	*stop;
+	struct mmc_command	*task_mgmt;
 
 	struct completion	completion;
 	struct completion	cmd_completion;
@@ -164,19 +172,100 @@ struct mmc_request {
 	void			(*recovery_notifier)(struct mmc_request *);
 	struct mmc_host		*host;
 
+#ifdef CONFIG_HUAWEI_DSM_IOMT_EMMC_HOST
+	struct iomt_timestamp iomt_start_time;
+#endif
+
 	/* Allow other commands during this ongoing data transfer or busy wait */
 	bool			cap_cmd_during_tfr;
-
+	struct mmc_cmdq_req	*cmdq_req;
+	struct completion	cmdq_completion;
+	struct request		*req; /* associated block request */
 	int			tag;
 };
 
 struct mmc_card;
+struct mmc_cmdq_req;
 
+#ifdef CONFIG_ZODIAC_MMC
+extern void mmc_wait_cmdq_empty(struct mmc_card *);
+extern int mmc_cmdq_start_req(struct mmc_host *host,
+			      struct mmc_cmdq_req *cmdq_req);
+extern void mmc_blk_cmdq_req_done(struct mmc_request *mrq);
+extern int mmc_prep_request(struct request_queue *q, struct request *req);
+extern void mmc_queue_setup_discard(struct request_queue *q,
+				    struct mmc_card *card);
+extern struct scatterlist *mmc_alloc_sg(int sg_len, gfp_t gfp);
+extern int mmc_init_request(struct request_queue *q, struct request *req, gfp_t gfp);
+extern void mmc_exit_request(struct request_queue *q, struct request *req);
+#endif
 void mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq);
 int mmc_wait_for_cmd(struct mmc_host *host, struct mmc_command *cmd,
 		int retries);
 
+extern int mmc_switch(struct mmc_card *, u8, u8, u8, unsigned int);
+#ifdef CONFIG_ZODIAC_MMC
+extern int __mmc_switch_cmdq_mode(struct mmc_command *cmd, u8 set, u8 index,
+					u8 value, unsigned int timeout_ms,
+					bool use_busy_signal, bool ignore_timeout);
+extern int mmc_cmdq_halt(struct mmc_host *host, bool enable);
+extern void mmc_cmdq_post_req(struct mmc_host *host, struct mmc_request *mrq,
+				int err);
+extern int mmc_start_cmdq_request(struct mmc_host *host,
+				   struct mmc_request *mrq);
+extern int mmc_send_tuning(struct mmc_host *host, u32 opcode, int *cmd_error);
+extern unsigned int mmc_erase_timeout(struct mmc_card *card,
+				      unsigned int arg,
+				      unsigned int qty);
+int mmc_cmdq_hw_reset(struct mmc_host *host);
+#endif
 int mmc_hw_reset(struct mmc_host *host);
+#ifdef CONFIG_ZODIAC_MMC
+extern int mmc_sd_reset(struct mmc_host *host);
+
+extern int __mmc_claim_host(struct mmc_host *host, struct mmc_ctx *ctx, atomic_t *abort);
+extern void mmc_release_host(struct mmc_host *host);
+extern int mmc_try_claim_host(struct mmc_host *host);
+
+extern int mmc_blk_cmdq_hangup(struct mmc_card *card);
+extern void mmc_blk_cmdq_restore(struct mmc_card *card);
+#endif
+
+#ifdef CONFIG_SD_SDIO_CRC_RETUNING
+extern int mmc_retuning(struct mmc_host *host);
+#endif
+
+#ifdef CONFIG_ZODIAC_MMC
+extern int mmc_get_card_zodiac(struct mmc_card *card, bool use_irq);
+extern int mmc_flush_cache_direct(struct mmc_card *card);
+extern void mmc_put_card_irq_safe(struct mmc_card *card);
+#endif
+
+extern int mmc_erase(struct mmc_card *card, unsigned int from, unsigned int nr,
+		unsigned int arg);
+extern int mmc_can_erase(struct mmc_card *card);
+extern int mmc_can_trim(struct mmc_card *card);
+extern int mmc_can_discard(struct mmc_card *card);
+extern int mmc_can_sanitize(struct mmc_card *card);
+extern int mmc_can_secure_erase_trim(struct mmc_card *card);
+extern int mmc_erase_group_aligned(struct mmc_card *card, unsigned int from,
+			unsigned int nr);
+extern unsigned int mmc_calc_max_discard(struct mmc_card *card);
+
+extern int mmc_set_blocklen(struct mmc_card *card, unsigned int blocklen);
+extern int mmc_set_blockcount(struct mmc_card *card, unsigned int blockcount,
+			bool is_rel_write);
+
 void mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card);
+/**
+ *	mmc_claim_host - exclusively claim a host
+ *	@host: mmc host to claim
+ *
+ *	Claim a host for a set of operations.
+ */
+static inline void mmc_claim_host(struct mmc_host *host)
+{
+	__mmc_claim_host(host, NULL, NULL);
+}
 
 #endif /* LINUX_MMC_CORE_H */

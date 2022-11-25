@@ -1752,8 +1752,7 @@ int ipoib_dev_init(struct net_device *dev, struct ib_device *ca, int port)
 		goto out_free_pd;
 	}
 
-	ret = ipoib_neigh_hash_init(priv);
-	if (ret) {
+	if (ipoib_neigh_hash_init(priv) < 0) {
 		pr_warn("%s failed to init neigh hash\n", dev->name);
 		goto out_dev_uninit;
 	}

@@ -34,6 +34,15 @@ struct rt_mutex_waiter {
 	struct pid		*deadlock_task_pid;
 	struct rt_mutex		*deadlock_lock;
 #endif
+#ifdef CONFIG_HW_FUTEX_PI
+	int major_only;
+#ifdef CONFIG_HW_QOS_THREAD
+	int qos;
+#endif
+#ifdef CONFIG_HUAWEI_SCHED_VIP
+	unsigned int vip_prio;
+#endif
+#endif
 	int prio;
 	u64 deadline;
 };
@@ -132,8 +141,7 @@ enum rtmutex_chainwalk {
 extern struct task_struct *rt_mutex_next_owner(struct rt_mutex *lock);
 extern void rt_mutex_init_proxy_locked(struct rt_mutex *lock,
 				       struct task_struct *proxy_owner);
-extern void rt_mutex_proxy_unlock(struct rt_mutex *lock,
-				  struct task_struct *proxy_owner);
+extern void rt_mutex_proxy_unlock(struct rt_mutex *lock);
 extern void rt_mutex_init_waiter(struct rt_mutex_waiter *waiter);
 extern int __rt_mutex_start_proxy_lock(struct rt_mutex *lock,
 				     struct rt_mutex_waiter *waiter,

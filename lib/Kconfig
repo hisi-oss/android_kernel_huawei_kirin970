@@ -243,10 +243,22 @@ config LZO_DECOMPRESS
 config LZ4_COMPRESS
 	tristate
 
+config LZ4K_COMPRESS
+	tristate
+
+config LZ4M_COMPRESS
+	tristate
+
 config LZ4HC_COMPRESS
 	tristate
 
 config LZ4_DECOMPRESS
+	tristate
+
+config LZ4K_DECOMPRESS
+	tristate
+
+config LZ4M_DECOMPRESS
 	tristate
 
 config ZSTD_COMPRESS
@@ -256,6 +268,12 @@ config ZSTD_COMPRESS
 config ZSTD_DECOMPRESS
 	select XXHASH
 	tristate
+
+config LZ4_SPEEDUP
+	bool "enable it to speed up lz4 algorithm by compiling optimization"
+	default n
+	help
+	  Say 'Y' to speedup lz4 algorithm by compiling optimization.
 
 source "lib/xz/Kconfig"
 
@@ -586,4 +604,9 @@ config PRIME_NUMBERS
 config STRING_SELFTEST
 	bool "Test string functions"
 
+config HISI_SECUREC
+	bool "hisi secure libc"
+	default n
+	help
+	  Say 'Y' hisilicon secure libc support.
 endmenu

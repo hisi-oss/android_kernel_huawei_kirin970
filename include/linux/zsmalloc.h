@@ -41,6 +41,34 @@ struct zs_pool_stats {
 
 struct zs_pool;
 
+#ifdef CONFIG_ZS_MALLOC_EXT
+
+typedef size_t (ext_size_parse_fn) (void *);
+typedef struct page *(ext_zsmalloc_fn) (void *, gfp_t);
+
+bool is_ext_pool(struct zs_pool *pool);
+extern void zs_pool_enable_ext(struct zs_pool *pool, bool enable,
+				ext_size_parse_fn *parse_fn);
+
+extern void zs_pool_ext_malloc_register(struct zs_pool *pool,
+						ext_zsmalloc_fn *fn);
+
+#else
+
+typedef size_t (ext_size_parse_fn) (void *);
+typedef struct page *(ext_zsmalloc_fn) (void *, gfp_t);
+
+static inline bool is_ext_pool(struct zs_pool *pool)
+{
+	return false;
+}
+static inline void zs_pool_enable_ext(struct zs_pool *pool,
+			bool enable, ext_size_parse_fn parse_fn) {}
+
+static inline void zs_pool_ext_malloc_register(
+		struct zs_pool *pool, ext_zsmalloc_fn fn) {}
+#endif
+
 struct zs_pool *zs_create_pool(const char *name);
 void zs_destroy_pool(struct zs_pool *pool);
 

@@ -179,11 +179,15 @@ static inline void io_pgtable_tlb_flush_all(struct io_pgtable *iop)
 static inline void io_pgtable_tlb_add_flush(struct io_pgtable *iop,
 		unsigned long iova, size_t size, size_t granule, bool leaf)
 {
+	if (!iop->cfg.tlb->tlb_add_flush)
+		return;
 	iop->cfg.tlb->tlb_add_flush(iova, size, granule, leaf, iop->cookie);
 }
 
 static inline void io_pgtable_tlb_sync(struct io_pgtable *iop)
 {
+	if (!iop->cfg.tlb->tlb_sync)
+		return;
 	iop->cfg.tlb->tlb_sync(iop->cookie);
 }
 
@@ -204,5 +208,6 @@ extern struct io_pgtable_init_fns io_pgtable_arm_32_lpae_s2_init_fns;
 extern struct io_pgtable_init_fns io_pgtable_arm_64_lpae_s1_init_fns;
 extern struct io_pgtable_init_fns io_pgtable_arm_64_lpae_s2_init_fns;
 extern struct io_pgtable_init_fns io_pgtable_arm_v7s_init_fns;
+extern void *arm_get_pgd_from_ops(struct io_pgtable_ops *ops);
 
 #endif /* __IO_PGTABLE_H */

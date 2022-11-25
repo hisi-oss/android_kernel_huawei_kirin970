@@ -27,8 +27,19 @@
 #include <linux/pid_namespace.h>
 #include <linux/refcount.h>
 
+#define OPT_META_UPDATE_LIMITED_NUMBER 64
+
+/** We use the fh to store the fd */
+#define FH_SHIFT_TO_FD 32
+
+/** The mask for fh shift to fd */
+#define FH_TO_FD_MASK 0xFFFFFFFF
+
 /** Max number of pages that can be used in a single read request */
-#define FUSE_MAX_PAGES_PER_REQ 32
+#define FUSE_DEFAULT_MAX_PAGES_PER_REQ 32
+
+/** Maximum of max_pages received in init_out */
+#define FUSE_MAX_MAX_PAGES 256
 
 /** Bias for fi->writectr, meaning new writepages must not be sent */
 #define FUSE_NOWRITE INT_MIN
@@ -119,9 +130,36 @@ enum {
 	FUSE_I_SIZE_UNSTABLE,
 };
 
-struct fuse_conn;
+struct fuse_offset_size_data {
+	uint64_t offset;
+	uint64_t size;
+};
+
+struct fuse_opt_offset_size {
+	u64 fh;
+	uint64_t index;
+	struct fuse_offset_size_data data[OPT_META_UPDATE_LIMITED_NUMBER];
+};
 
 /** FUSE specific file data */
+struct fuse_wrap_file {
+	/** The list entry for the file */
+	struct list_head entry;
+
+	/** The file wrapped */
+	struct file *file;
+};
+
+struct fuse_wrap_open_out {
+	/** The open out  */
+	struct fuse_open_out outarg;
+
+	/** The file descriptor of the file */
+	struct fuse_wrap_file *wrap_file;
+};
+
+struct fuse_conn;
+
 struct fuse_file {
 	/** Fuse connection for this file */
 	struct fuse_conn *fc;
@@ -155,6 +193,12 @@ struct fuse_file {
 
 	/** Has flock been performed on this file? */
 	bool flock:1;
+
+	struct fuse_wrap_file wrap_file;
+
+	struct mutex meta_update_mutex;
+
+	struct fuse_opt_offset_size meta_update;
 };
 
 /** One input argument of a request */
@@ -475,6 +519,9 @@ struct fuse_conn {
 	/** Maximum write size */
 	unsigned max_write;
 
+	/** Maxmum number of pages that can be used in a single request */
+	unsigned int max_pages;
+
 	/** Input queue */
 	struct fuse_iqueue iq;
 
@@ -657,6 +704,8 @@ struct fuse_conn {
 	/** Version counter for attribute changes */
 	u64 attr_version;
 
+	bool pass_through;
+
 	/** Called on final put */
 	void (*release)(struct fuse_conn *);
 
@@ -668,6 +717,10 @@ struct fuse_conn {
 
 	/** List of device instances belonging to this connection */
 	struct list_head devices;
+
+	spinlock_t passthrough_files_lock;
+
+	struct list_head passthrough_files;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
@@ -983,5 +1036,20 @@ extern const struct xattr_handler *fuse_acl_xattr_handlers[];
 struct posix_acl;
 struct posix_acl *fuse_get_acl(struct inode *inode, int type);
 int fuse_set_acl(struct inode *inode, struct posix_acl *acl, int type);
+
+void delete_passthrough_file(struct fuse_conn *fc,
+	struct fuse_wrap_file *wrap_file);
+
+void cleanup_passthrough_files(struct fuse_conn *fc);
+
+void fuse_pass_through_open_out_args(struct fuse_conn *fc, struct fuse_req *req);
+
+int fuse_flush_update_offset_size(
+	struct fuse_file *ff, struct inode *inode);
+
+ssize_t fuse_pass_through_rw_iter(
+	struct kiocb *iocb, struct iov_iter *direction, int flag);
+
+bool fuse_pass_through_enabled(const char *name);
 
 #endif /* _FS_FUSE_I_H */

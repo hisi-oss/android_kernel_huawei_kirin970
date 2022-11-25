@@ -649,6 +649,10 @@ back_from_confirm:
 			      ulen, transhdrlen, &ipc6,
 			      &fl6, (struct rt6_info *)dst,
 			      msg->msg_flags, &sockc_unused);
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (!err)
+		alloc_skb_with_frags_stats_inc(L2TP_IP6_SENDMSG_COUNT);
+#endif
 	if (err)
 		ip6_flush_pending_frames(sk);
 	else if (!(msg->msg_flags & MSG_MORE))
@@ -683,6 +687,9 @@ static int l2tp_ip6_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	if (flags & MSG_OOB)
 		goto out;
 
+	if (addr_len)
+		*addr_len = sizeof(*lsa);
+
 	if (flags & MSG_ERRQUEUE)
 		return ipv6_recv_error(sk, msg, len, addr_len);
 
@@ -712,7 +719,6 @@ static int l2tp_ip6_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		lsa->l2tp_conn_id = 0;
 		if (ipv6_addr_type(&lsa->l2tp_addr) & IPV6_ADDR_LINKLOCAL)
 			lsa->l2tp_scope_id = inet6_iif(skb);
-		*addr_len = sizeof(*lsa);
 	}
 
 	if (np->rxopt.all)

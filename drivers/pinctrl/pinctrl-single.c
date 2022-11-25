@@ -269,8 +269,24 @@ static void pcs_pin_dbg_show(struct pinctrl_dev *pctldev,
 	unsigned val, mux_bytes;
 	unsigned long offset;
 	size_t pa;
-
+#if defined CONFIG_HISI_PINCRTL_INFO
+	struct pcs_gpiofunc_range *frange = NULL;
+	struct list_head *pos = NULL;
+	struct list_head *tmp = NULL;
+#endif
 	pcs = pinctrl_dev_get_drvdata(pctldev);
+#if defined CONFIG_HISI_PINCRTL_INFO
+	list_for_each_safe(pos, tmp, &pcs->gpiofuncs) {
+		frange = list_entry(pos, struct pcs_gpiofunc_range, node); /*lint !e826 */
+		if (pin >= frange->offset + frange->npins
+			|| pin < frange->offset)
+			continue;
+		mux_bytes = pcs->width / BITS_PER_BYTE;
+		val = (unsigned)pcs->read(pcs->base + pin * mux_bytes); /*lint !e124 */
+		seq_printf(s, "%08x %s " , val, DRIVER_NAME);
+		break;
+	}
+#else
 
 	mux_bytes = pcs->width / BITS_PER_BYTE;
 	offset = pin * mux_bytes;
@@ -278,6 +294,7 @@ static void pcs_pin_dbg_show(struct pinctrl_dev *pctldev,
 	pa = pcs->res->start + offset;
 
 	seq_printf(s, "%zx %08x %s ", pa, val, DRIVER_NAME);
+#endif
 }
 
 static void pcs_dt_free_map(struct pinctrl_dev *pctldev,
@@ -725,38 +742,44 @@ static int pcs_allocate_pin_table(struct pcs_device *pcs)
 /**
  * pcs_add_function() - adds a new function to the function list
  * @pcs: pcs driver instance
- * @np: device node of the mux entry
+ * @fcn: new function allocated
  * @name: name of the function
  * @vals: array of mux register value pairs used by the function
  * @nvals: number of mux register value pairs
  * @pgnames: array of pingroup names for the function
  * @npgnames: number of pingroup names
+ *
+ * Caller must take care of locking.
  */
-static struct pcs_function *pcs_add_function(struct pcs_device *pcs,
-					struct device_node *np,
-					const char *name,
-					struct pcs_func_vals *vals,
-					unsigned nvals,
-					const char **pgnames,
-					unsigned npgnames)
+static int pcs_add_function(struct pcs_device *pcs,
+			    struct pcs_function **fcn,
+			    const char *name,
+			    struct pcs_func_vals *vals,
+			    unsigned int nvals,
+			    const char **pgnames,
+			    unsigned int npgnames)
 {
 	struct pcs_function *function;
-	int res;
+	int selector;
 
 	function = devm_kzalloc(pcs->dev, sizeof(*function), GFP_KERNEL);
 	if (!function)
-		return NULL;
+		return -ENOMEM;
 
 	function->vals = vals;
 	function->nvals = nvals;
 
-	res = pinmux_generic_add_function(pcs->pctl, name,
-					  pgnames, npgnames,
-					  function);
-	if (res)
-		return NULL;
+	selector = pinmux_generic_add_function(pcs->pctl, name,
+					       pgnames, npgnames,
+					       function);
+	if (selector < 0) {
+		devm_kfree(pcs->dev, function);
+		*fcn = NULL;
+	} else {
+		*fcn = function;
+	}
 
-	return function;
+	return selector;
 }
 
 /**
@@ -888,7 +911,7 @@ static int pcs_parse_pinconf(struct pcs_device *pcs, struct device_node *np,
 
 	/* If pinconf isn't supported, don't parse properties in below. */
 	if (!PCS_HAS_PINCONF)
-		return 0;
+		return -ENOTSUPP;
 
 	/* cacluate how much properties are supported in current node */
 	for (i = 0; i < ARRAY_SIZE(prop2); i++) {
@@ -900,7 +923,7 @@ static int pcs_parse_pinconf(struct pcs_device *pcs, struct device_node *np,
 			nconfs++;
 	}
 	if (!nconfs)
-		return 0;
+		return -ENOTSUPP;
 
 	func->conf = devm_kzalloc(pcs->dev,
 				  sizeof(struct pcs_conf_vals) * nconfs,
@@ -957,8 +980,8 @@ static int pcs_parse_one_pinctrl_entry(struct pcs_device *pcs,
 {
 	const char *name = "pinctrl-single,pins";
 	struct pcs_func_vals *vals;
-	int rows, *pins, found = 0, res = -ENOMEM, i;
-	struct pcs_function *function;
+	int rows, *pins, found = 0, res = -ENOMEM, i, fsel, gsel;
+	struct pcs_function *function = NULL;
 
 	rows = pinctrl_count_index_with_args(np, name);
 	if (rows <= 0) {
@@ -1008,37 +1031,46 @@ static int pcs_parse_one_pinctrl_entry(struct pcs_device *pcs,
 	}
 
 	pgnames[0] = np->name;
-	function = pcs_add_function(pcs, np, np->name, vals, found, pgnames, 1);
-	if (!function) {
-		res = -ENOMEM;
+	mutex_lock(&pcs->mutex);
+	fsel = pcs_add_function(pcs, &function, np->name, vals, found,
+				pgnames, 1);
+	if (fsel < 0) {
+		res = fsel;
 		goto free_pins;
 	}
 
-	res = pinctrl_generic_add_group(pcs->pctl, np->name, pins, found, pcs);
-	if (res < 0)
+	gsel = pinctrl_generic_add_group(pcs->pctl, np->name, pins, found, pcs);
+	if (gsel < 0) {
+		res = gsel;
 		goto free_function;
+	}
 
 	(*map)->type = PIN_MAP_TYPE_MUX_GROUP;
 	(*map)->data.mux.group = np->name;
 	(*map)->data.mux.function = np->name;
 
-	if (PCS_HAS_PINCONF) {
+	if (PCS_HAS_PINCONF && function) {
 		res = pcs_parse_pinconf(pcs, np, function, map);
-		if (res)
+		if (res == 0)
+			*num_maps = 2;
+		else if (res == -ENOTSUPP)
+			*num_maps = 1;
+		else
 			goto free_pingroups;
-		*num_maps = 2;
 	} else {
 		*num_maps = 1;
 	}
+	mutex_unlock(&pcs->mutex);
+
 	return 0;
 
 free_pingroups:
-	pinctrl_generic_remove_last_group(pcs->pctl);
+	pinctrl_generic_remove_group(pcs->pctl, gsel);
 	*num_maps = 1;
 free_function:
-	pinmux_generic_remove_last_function(pcs->pctl);
-
+	pinmux_generic_remove_function(pcs->pctl, fsel);
 free_pins:
+	mutex_unlock(&pcs->mutex);
 	devm_kfree(pcs->dev, pins);
 
 free_vals:
@@ -1055,9 +1087,9 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 {
 	const char *name = "pinctrl-single,bits";
 	struct pcs_func_vals *vals;
-	int rows, *pins, found = 0, res = -ENOMEM, i;
+	int rows, *pins, found = 0, res = -ENOMEM, i, fsel, gsel;
 	int npins_in_row;
-	struct pcs_function *function;
+	struct pcs_function *function = NULL;
 
 	rows = pinctrl_count_index_with_args(np, name);
 	if (rows <= 0) {
@@ -1142,15 +1174,19 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 	}
 
 	pgnames[0] = np->name;
-	function = pcs_add_function(pcs, np, np->name, vals, found, pgnames, 1);
-	if (!function) {
-		res = -ENOMEM;
+	mutex_lock(&pcs->mutex);
+	fsel = pcs_add_function(pcs, &function, np->name, vals, found,
+				pgnames, 1);
+	if (fsel < 0) {
+		res = fsel;
 		goto free_pins;
 	}
 
-	res = pinctrl_generic_add_group(pcs->pctl, np->name, pins, found, pcs);
-	if (res < 0)
+	gsel = pinctrl_generic_add_group(pcs->pctl, np->name, pins, found, pcs);
+	if (gsel < 0) {
+		res = gsel;
 		goto free_function;
+	}
 
 	(*map)->type = PIN_MAP_TYPE_MUX_GROUP;
 	(*map)->data.mux.group = np->name;
@@ -1162,14 +1198,17 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 	}
 
 	*num_maps = 1;
+	mutex_unlock(&pcs->mutex);
+
 	return 0;
 
 free_pingroups:
-	pinctrl_generic_remove_last_group(pcs->pctl);
+	pinctrl_generic_remove_group(pcs->pctl, gsel);
 	*num_maps = 1;
 free_function:
-	pinmux_generic_remove_last_function(pcs->pctl);
+	pinmux_generic_remove_function(pcs->pctl, fsel);
 free_pins:
+	mutex_unlock(&pcs->mutex);
 	devm_kfree(pcs->dev, pins);
 
 free_vals:
@@ -1846,7 +1885,16 @@ static struct platform_driver pcs_driver = {
 #endif
 };
 
-module_platform_driver(pcs_driver);
+static int __init pinctrl_single_init(void)
+{
+	return platform_driver_register(&pcs_driver);
+}
+static void __exit pinctrl_single_exit(void)
+{
+	platform_driver_unregister(&pcs_driver);
+}
+arch_initcall(pinctrl_single_init);
+module_exit(pinctrl_single_exit);
 
 MODULE_AUTHOR("Tony Lindgren <tony@atomide.com>");
 MODULE_DESCRIPTION("One-register-per-pin type device tree based pinctrl driver");

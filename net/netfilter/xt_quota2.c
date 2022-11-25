@@ -296,8 +296,8 @@ static void quota_mt2_destroy(const struct xt_mtdtor_param *par)
 	}
 
 	list_del(&e->list);
-	remove_proc_entry(e->name, proc_xt_quota);
 	spin_unlock_bh(&counter_list_lock);
+	remove_proc_entry(e->name, proc_xt_quota);
 	kfree(e);
 }
 
@@ -319,7 +319,7 @@ quota_mt2(const struct sk_buff *skb, struct xt_action_param *par)
 		}
 		ret = true;
 	} else {
-		if (e->quota >= skb->len) {
+		if (e->quota > skb->len) {
 			if (!(q->flags & XT_QUOTA_NO_CHANGE))
 				e->quota -= (q->flags & XT_QUOTA_PACKET) ? 1 : skb->len;
 			ret = !ret;

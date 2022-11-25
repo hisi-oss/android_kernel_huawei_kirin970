@@ -71,6 +71,9 @@ struct capacity_state {
 	unsigned long cap;	/* compute capacity */
 	unsigned long frequency;/* frequency */
 	unsigned long power;	/* power consumption at this compute capacity */
+#ifdef CONFIG_HISI_EAS_SCHED
+	unsigned long idle_power; /* idle(wfi) power at this compute capcity */
+#endif
 };
 
 struct idle_state {

@@ -52,6 +52,9 @@ struct thermal_instance {
 	struct list_head tz_node; /* node in tz->thermal_instances */
 	struct list_head cdev_node; /* node in cdev->thermal_instances */
 	unsigned int weight; /* The weight of the cooling device */
+#ifdef CONFIG_IPA_THERMAL
+	bool is_soc_cdev;
+#endif
 };
 
 #define to_thermal_zone(_dev) \
@@ -123,6 +126,10 @@ void thermal_gov_power_allocator_unregister(void);
 static inline int thermal_gov_power_allocator_register(void) { return 0; }
 static inline void thermal_gov_power_allocator_unregister(void) {}
 #endif /* CONFIG_THERMAL_GOV_POWER_ALLOCATOR */
+
+#ifdef CONFIG_IPA_THERMAL
+void update_pid_value(struct thermal_zone_device *);
+#endif
 
 /* device tree support */
 #ifdef CONFIG_THERMAL_OF

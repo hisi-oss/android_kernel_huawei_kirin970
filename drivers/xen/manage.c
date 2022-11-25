@@ -283,11 +283,9 @@ static void sysrq_handler(struct xenbus_watch *watch, const char *path,
 		/*
 		 * The Xenstore watch fires directly after registering it and
 		 * after a suspend/resume cycle. So ENOENT is no error but
-		 * might happen in those cases. ERANGE is observed when we get
-		 * an empty value (''), this happens when we acknowledge the
-		 * request by writing '\0' below.
+		 * might happen in those cases.
 		 */
-		if (err != -ENOENT && err != -ERANGE)
+		if (err != -ENOENT)
 			pr_err("Error %d reading sysrq code in control/sysrq\n",
 			       err);
 		xenbus_transaction_end(xbt, 1);

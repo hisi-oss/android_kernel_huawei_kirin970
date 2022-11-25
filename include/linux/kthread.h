@@ -199,4 +199,9 @@ bool kthread_cancel_delayed_work_sync(struct kthread_delayed_work *work);
 
 void kthread_destroy_worker(struct kthread_worker *worker);
 
+#ifdef CONFIG_ARCH_HISI
+bool smpboot_creating_threads(void);
+void set_smpboot_creating_threads(bool value);
+#endif
+
 #endif /* _LINUX_KTHREAD_H */

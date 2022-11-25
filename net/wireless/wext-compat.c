@@ -823,6 +823,7 @@ static int cfg80211_wext_giwfreq(struct net_device *dev,
 	}
 }
 
+#define MAX_INT_HW 0x7fff
 static int cfg80211_wext_siwtxpower(struct net_device *dev,
 				    struct iw_request_info *info,
 				    union iwreq_data *data, char *extra)
@@ -872,6 +873,8 @@ static int cfg80211_wext_siwtxpower(struct net_device *dev,
 		return 0;
 	}
 
+	if (dbm >= MAX_INT_HW)
+		return -EINVAL;
 	return rdev_set_tx_power(rdev, wdev, type, DBM_TO_MBM(dbm));
 }
 
@@ -1474,7 +1477,11 @@ static const iw_handler cfg80211_handlers[] = {
 	[IW_IOCTL_IDX(SIOCGIWFREQ)]	= (iw_handler) cfg80211_wext_giwfreq,
 	[IW_IOCTL_IDX(SIOCSIWMODE)]	= (iw_handler) cfg80211_wext_siwmode,
 	[IW_IOCTL_IDX(SIOCGIWMODE)]	= (iw_handler) cfg80211_wext_giwmode,
+#ifndef CONFIG_HW_WIFI
 	[IW_IOCTL_IDX(SIOCGIWRANGE)]	= (iw_handler) cfg80211_wext_giwrange,
+#else
+	[IW_IOCTL_IDX(SIOCGIWRANGE)]	= NULL,
+#endif
 	[IW_IOCTL_IDX(SIOCSIWAP)]	= (iw_handler) cfg80211_wext_siwap,
 	[IW_IOCTL_IDX(SIOCGIWAP)]	= (iw_handler) cfg80211_wext_giwap,
 	[IW_IOCTL_IDX(SIOCSIWMLME)]	= (iw_handler) cfg80211_wext_siwmlme,

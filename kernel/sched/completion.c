@@ -46,6 +46,27 @@ void complete(struct completion *x)
 }
 EXPORT_SYMBOL(complete);
 
+#ifdef CONFIG_ARCH_HISI
+void complete_smpboot(struct completion *x)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	do_raw_spin_lock(spinlock_check(&x->wait.lock));
+
+	/*
+	 * Perform commit of crossrelease here.
+	 */
+	complete_release_commit(x);
+
+	if (x->done != UINT_MAX)
+		x->done++;
+	__wake_up_locked(&x->wait, TASK_NORMAL, 1);
+	do_raw_spin_unlock(spinlock_check(&x->wait.lock));
+	local_irq_restore(flags);
+}
+#endif
+
 /**
  * complete_all: - signals all threads waiting on this completion
  * @x:  holds the state of this particular completion
@@ -72,6 +93,20 @@ void complete_all(struct completion *x)
 	spin_unlock_irqrestore(&x->wait.lock, flags);
 }
 EXPORT_SYMBOL(complete_all);
+
+#ifdef CONFIG_ARCH_HISI
+void complete_all_smpboot(struct completion *x)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	do_raw_spin_lock(spinlock_check(&x->wait.lock));
+	x->done = UINT_MAX;
+	__wake_up_locked(&x->wait, TASK_NORMAL, 0);
+	do_raw_spin_unlock(spinlock_check(&x->wait.lock));
+	local_irq_restore(flags);
+}
+#endif
 
 static inline long __sched
 do_wait_for_common(struct completion *x,

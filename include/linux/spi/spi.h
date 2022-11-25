@@ -171,7 +171,14 @@ struct spi_device {
 
 	/* the statistics */
 	struct spi_statistics	statistics;
+#if defined CONFIG_HISI_SPI
+	u64			start;
+#endif
 
+#ifdef CONFIG_HUAWEI_ARMPC_TPM
+	/* the regulator of this spi device */
+	struct regulator *supply;
+#endif
 	/*
 	 * likely need more hooks for more protocol options affecting how
 	 * the controller talks to each chip, like:
@@ -579,6 +586,10 @@ struct spi_controller {
 	void			*dummy_tx;
 
 	int (*fw_translate_cs)(struct spi_controller *ctlr, unsigned cs);
+#if defined CONFIG_HISI_SPI
+	struct mutex		msg_mutex;
+	void (*show_err_info)(struct spi_controller *ctlr);
+#endif
 };
 
 static inline void *spi_controller_get_devdata(struct spi_controller *ctlr)
@@ -1378,4 +1389,10 @@ spi_transfer_is_last(struct spi_controller *ctlr, struct spi_transfer *xfer)
 	devm_spi_register_controller(_dev, _ctlr)
 #define spi_unregister_master(_ctlr)	spi_unregister_controller(_ctlr)
 
+#if defined CONFIG_HISI_SPI
+void disable_spi(struct spi_controller *ctlr);
+int pl022_runtime_suspend(struct device *dev);
+int pl022_runtime_resume(struct device *dev);
+void spi_show_err_info(struct spi_device *spi);
+#endif
 #endif /* __LINUX_SPI_H */

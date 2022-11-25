@@ -983,6 +983,27 @@
  *	configured PMK for the authenticator address identified by
  *	&NL80211_ATTR_MAC.
  *
+ * @NL80211_CMD_EXTERNAL_AUTH: This interface is exclusively defined for host
+ *	drivers that do not define separate commands for authentication and
+ *	association, but rely on user space for the authentication to happen.
+ *	This interface acts both as the event request (driver to user space)
+ *	to trigger the authentication and command response (userspace to
+ *	driver) to indicate the authentication status.
+ *
+ *	User space uses the %NL80211_CMD_CONNECT command to the host driver to
+ *	trigger a connection. The host driver selects a BSS and further uses
+ *	this interface to offload only the authentication part to the user
+ *	space. Authentication frames are passed between the driver and user
+ *	space through the %NL80211_CMD_FRAME interface. Host driver proceeds
+ *	further with the association after getting successful authentication
+ *	status. User space indicates the authentication status through
+ *	%NL80211_ATTR_STATUS_CODE attribute in %NL80211_CMD_EXTERNAL_AUTH
+ *	command interface.
+ *
+ *	Host driver reports this status on an authentication failure to the
+ *	user space through the connect result as the user space would have
+ *	initiated the connection through the connect request.
+ *
  * @NL80211_CMD_MAX: highest used command number
  * @__NL80211_CMD_AFTER_LAST: internal use
  */
@@ -1185,6 +1206,28 @@ enum nl80211_commands {
 	NL80211_CMD_SET_PMK,
 	NL80211_CMD_DEL_PMK,
 
+	NL80211_CMD_PORT_AUTHORIZED,
+
+	NL80211_CMD_RELOAD_REGDB,
+
+	NL80211_CMD_EXTERNAL_AUTH,
+
+	NL80211_CMD_STA_OPMODE_CHANGED,
+
+	NL80211_CMD_CONTROL_PORT_FRAME,
+
+#ifdef CONFIG_HW_VOWIFI
+	NL80211_CMD_VOWIFI = 201,
+#endif
+#ifdef CONFIG_HW_ABS
+	NL80211_CMD_ANT = 202,
+#endif
+#if (defined(CONFIG_HW_WIFI_MSS) || defined(CONFIG_HW_WIFI_RSSI))
+	NL80211_CMD_VDR_COMMON = 203,
+#endif
+#ifdef CONFIG_HW_GET_P2P_TX_RATE
+	NL80211_CMD_GET_P2P_TX_RATE = 204,
+#endif /* CONFIG_HW_GET_P2P_TX_RATE */
 	/* add new commands above here */
 
 	/* used to define NL80211_CMD_MAX below */
@@ -2139,6 +2182,17 @@ enum nl80211_commands {
  *	the driver or is not needed (because roaming used the Fast Transition
  *	protocol).
  *
+ * @NL80211_ATTR_EXTERNAL_AUTH_ACTION: Identify the requested external
+ *     authentication operation (u32 attribute with an
+ *     &enum nl80211_external_auth_action value). This is used with the
+ *     %NL80211_CMD_EXTERNAL_AUTH request event.
+ * @NL80211_ATTR_EXTERNAL_AUTH_SUPPORT: Flag attribute indicating that the user
+ *     space supports external authentication. This attribute shall be used
+ *     only with %NL80211_CMD_CONNECT request. The driver may offload
+ *     authentication processing to user space if this capability is indicated
+ *     in NL80211_CMD_CONNECT requests from the user space.
+ *
+ *
  * @NUM_NL80211_ATTR: total number of nl80211_attrs available
  * @NL80211_ATTR_MAX: highest attribute number currently defined
  * @__NL80211_ATTR_AFTER_LAST: internal use
@@ -2565,6 +2619,25 @@ enum nl80211_attrs {
 	NL80211_ATTR_PMKR0_NAME,
 	NL80211_ATTR_PORT_AUTHORIZED,
 
+	NL80211_ATTR_EXTERNAL_AUTH_ACTION,
+	NL80211_ATTR_EXTERNAL_AUTH_SUPPORT,
+
+	NL80211_ATTR_NSS,
+	NL80211_ATTR_ACK_SIGNAL,
+
+	NL80211_ATTR_CONTROL_PORT_OVER_NL80211,
+
+	NL80211_ATTR_TXQ_STATS,
+	NL80211_ATTR_TXQ_LIMIT,
+	NL80211_ATTR_TXQ_MEMORY_LIMIT,
+	NL80211_ATTR_TXQ_QUANTUM,
+
+	NL80211_ATTR_HE_CAPABILITY,
+
+	/* because of disagreement with nl80211_copy.h in wpa_supplicant code,
+	this private attributes is defined as a larger number, you should
+	add new attributes below in order to not conflict with this one */
+	NL80211_ATTR_DFS_OFFLOAD_SUPPORT = 351,
 	/* add attributes here, update the policy in nl80211.c */
 
 	__NL80211_ATTR_AFTER_LAST,
@@ -2925,6 +2998,10 @@ enum nl80211_sta_info {
 	NL80211_STA_INFO_TID_STATS,
 	NL80211_STA_INFO_RX_DURATION,
 	NL80211_STA_INFO_PAD,
+	NL80211_STA_INFO_NOISE,
+	NL80211_STA_INFO_SNR,
+	NL80211_STA_INFO_CNAHLOAD,
+	NL80211_STA_INFO_UL_DELAY,
 
 	/* keep last */
 	__NL80211_STA_INFO_AFTER_LAST,
@@ -3923,6 +4000,9 @@ enum nl80211_auth_type {
 	NL80211_AUTHTYPE_FILS_SK,
 	NL80211_AUTHTYPE_FILS_SK_PFS,
 	NL80211_AUTHTYPE_FILS_PK,
+#ifdef CONFIG_CONNECTIVITY_HI110X
+	NL80211_AUTHTYPE_TBPEKE,
+#endif
 
 	/* keep last */
 	__NL80211_AUTHTYPE_NUM,
@@ -3949,15 +4029,20 @@ enum nl80211_key_type {
  * enum nl80211_mfp - Management frame protection state
  * @NL80211_MFP_NO: Management frame protection not used
  * @NL80211_MFP_REQUIRED: Management frame protection required
+ * @NL80211_MFP_OPTIONAL: Management frame protection is optional
  */
 enum nl80211_mfp {
 	NL80211_MFP_NO,
 	NL80211_MFP_REQUIRED,
+	NL80211_MFP_OPTIONAL,
 };
 
 enum nl80211_wpa_versions {
 	NL80211_WPA_VERSION_1 = 1 << 0,
 	NL80211_WPA_VERSION_2 = 1 << 1,
+#if defined(CONFIG_BCMDHD) || defined(CONFIG_CONNECTIVITY_HI110X)
+	NL80211_WAPI_VERSION_1 = 1 << 2,
+#endif
 };
 
 /**
@@ -5417,6 +5502,17 @@ enum nl80211_nan_match_attributes {
 	/* keep last */
 	NUM_NL80211_NAN_MATCH_ATTR,
 	NL80211_NAN_MATCH_ATTR_MAX = NUM_NL80211_NAN_MATCH_ATTR - 1
+};
+
+/**
+ * nl80211_external_auth_action - Action to perform with external
+ *     authentication request. Used by NL80211_ATTR_EXTERNAL_AUTH_ACTION.
+ * @NL80211_EXTERNAL_AUTH_START: Start the authentication.
+ * @NL80211_EXTERNAL_AUTH_ABORT: Abort the ongoing authentication.
+ */
+enum nl80211_external_auth_action {
+	NL80211_EXTERNAL_AUTH_START,
+	NL80211_EXTERNAL_AUTH_ABORT,
 };
 
 #endif /* __LINUX_NL80211_H */

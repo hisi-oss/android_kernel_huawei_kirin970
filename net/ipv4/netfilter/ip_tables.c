@@ -30,7 +30,9 @@
 #include <linux/netfilter_ipv4/ip_tables.h>
 #include <net/netfilter/nf_log.h>
 #include "../../netfilter/xt_repldata.h"
-
+#ifdef CONFIG_DOZE_FILTER
+#include <huawei_platform/power/wifi_filter/wifi_filter.h>
+#endif
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
 MODULE_DESCRIPTION("IPv4 packet filter");
@@ -323,6 +325,10 @@ ipt_do_table(struct sk_buff *skb,
 				/* Pop from stack? */
 				if (v != XT_RETURN) {
 					verdict = (unsigned int)(-v) - 1;
+					#ifdef CONFIG_DOZE_FILTER
+					if (verdict == NF_DROP)
+						get_filter_info(skb, state, hook, private, e);
+					#endif
 					break;
 				}
 				if (stackidx == 0) {
@@ -1431,6 +1437,8 @@ translate_compat_table(struct net *net,
 	newinfo = xt_alloc_table_info(size);
 	if (!newinfo)
 		goto out_unlock;
+
+	memset(newinfo->entries, 0, size);
 
 	newinfo->number = compatr->num_entries;
 	for (i = 0; i < NF_INET_NUMHOOKS; i++) {

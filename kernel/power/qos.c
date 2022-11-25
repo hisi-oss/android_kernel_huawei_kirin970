@@ -121,6 +121,157 @@ static struct pm_qos_object memory_bandwidth_pm_qos = {
 	.name = "memory_bandwidth",
 };
 
+#ifdef CONFIG_DEVFREQ_GOV_PM_QOS
+static BLOCKING_NOTIFIER_HEAD(memory_latency_notifier);
+static struct pm_qos_constraints memory_latency_constraints = {
+	.list = PLIST_HEAD_INIT(memory_latency_constraints.list),
+	.target_value = PM_QOS_MEMORY_LATENCY_DEFAULT_VALUE,
+	.default_value = PM_QOS_MEMORY_LATENCY_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_MEMORY_LATENCY_DEFAULT_VALUE,
+	.type = PM_QOS_MAX,
+	.notifiers = &memory_latency_notifier,
+};
+static struct pm_qos_object memory_latency_pm_qos = {
+	.constraints = &memory_latency_constraints,
+	.name = "memory_latency",
+};
+
+static BLOCKING_NOTIFIER_HEAD(memory_throughput_notifier);
+static struct pm_qos_constraints memory_tput_constraints = {
+	.list = PLIST_HEAD_INIT(memory_tput_constraints.list),
+	.target_value = PM_QOS_MEMORY_THROUGHPUT_DEFAULT_VALUE,
+	.default_value = PM_QOS_MEMORY_THROUGHPUT_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_MEMORY_THROUGHPUT_DEFAULT_VALUE,
+	.type = PM_QOS_SUM,
+	.notifiers = &memory_throughput_notifier,
+};
+static struct pm_qos_object memory_throughput_pm_qos = {
+	.constraints = &memory_tput_constraints,
+	.name = "memory_throughput",
+};
+
+static BLOCKING_NOTIFIER_HEAD(memory_throughput_up_threshold_notifier);
+static struct pm_qos_constraints memory_tput_up_th_constraints = {
+	.list = PLIST_HEAD_INIT(memory_tput_up_th_constraints.list),
+	.target_value = PM_QOS_MEMORY_THROUGHPUT_UP_THRESHOLD_DEFAULT_VALUE,
+	.default_value = PM_QOS_MEMORY_THROUGHPUT_UP_THRESHOLD_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_MEMORY_THROUGHPUT_UP_THRESHOLD_DEFAULT_VALUE,
+	.type = PM_QOS_MIN,
+	.notifiers = &memory_throughput_up_threshold_notifier,
+};
+static struct pm_qos_object memory_throughput_up_th_pm_qos = {
+	.constraints = &memory_tput_up_th_constraints,
+	.name = "memory_throughput_up_threshold",
+};
+
+#ifdef CONFIG_DEVFREQ_DMSS_LATENCY
+static BLOCKING_NOTIFIER_HEAD(dmss_latency_notifier);
+static struct pm_qos_constraints dmss_latency_constraints = {
+	.list = PLIST_HEAD_INIT(dmss_latency_constraints.list),
+	.target_value = PM_QOS_DMSS_LATENCY_DEFAULT_VALUE,
+	.default_value = PM_QOS_DMSS_LATENCY_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_DMSS_LATENCY_DEFAULT_VALUE,
+	.type = PM_QOS_MAX,
+	.notifiers = &dmss_latency_notifier,
+};
+static struct pm_qos_object dmss_latency_pm_qos = {
+	.constraints = &dmss_latency_constraints,
+	.name = "dmss_latency",
+};
+#endif
+#endif
+
+#ifdef CONFIG_LPCPU_FREQ_LINK
+static BLOCKING_NOTIFIER_HEAD(freq_link_level_notifier);
+static struct pm_qos_constraints freq_link_level_constraints = {
+	.list = PLIST_HEAD_INIT(freq_link_level_constraints.list),
+	.target_value = PM_QOS_FREQ_LINK_LEVEL_DEFAULT_VALUE,
+	.default_value = PM_QOS_FREQ_LINK_LEVEL_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_FREQ_LINK_LEVEL_DEFAULT_VALUE,
+	.type = PM_QOS_MIN,
+	.notifiers = &freq_link_level_notifier,
+};
+static struct pm_qos_object freq_link_level_pm_qos = {
+	.constraints = &freq_link_level_constraints,
+	.name = "acpuddr_link_governor_level",
+};
+#endif
+
+#ifdef CONFIG_ONSYS_AVS
+static BLOCKING_NOTIFIER_HEAD(onsys_avs_ctrl_notifier);
+static struct pm_qos_constraints onsys_avs_ctrl_constraints = {
+	.list = PLIST_HEAD_INIT(onsys_avs_ctrl_constraints.list),
+	.target_value = PM_QOS_ONSYS_AVS_LEVEL_DEFAULT_VALUE,
+	.default_value = PM_QOS_ONSYS_AVS_LEVEL_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_ONSYS_AVS_LEVEL_DEFAULT_VALUE,
+	.type = PM_QOS_MIN,
+	.notifiers = &onsys_avs_ctrl_notifier,
+};
+static struct pm_qos_object onsys_avs_ctrl_level_pm_qos = {
+	.constraints = &onsys_avs_ctrl_constraints,
+	.name = "onsys_avs_ctrl_level",
+};
+#endif
+
+#ifdef CONFIG_NPUFREQ_PM_QOS
+static BLOCKING_NOTIFIER_HEAD(hisi_npu_freq_dnlimit_notifier);
+static struct pm_qos_constraints hisi_npu_freq_dnlimit_constraints = {
+	.list = PLIST_HEAD_INIT(hisi_npu_freq_dnlimit_constraints.list),
+	.target_value = PM_QOS_NPU_FREQ_DNLIMIT_DEFAULT_VALUE,
+	.default_value = PM_QOS_NPU_FREQ_DNLIMIT_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_NPU_FREQ_DNLIMIT_DEFAULT_VALUE,
+	.type = PM_QOS_MAX,
+	.notifiers = &hisi_npu_freq_dnlimit_notifier,
+};
+static struct pm_qos_object hisi_npu_freq_dnlimit_pm_qos = {
+	.constraints = &hisi_npu_freq_dnlimit_constraints,
+	.name = "npu_freq_dnlimit",
+};
+
+static BLOCKING_NOTIFIER_HEAD(hisi_npu_freq_uplimit_notifier);
+static struct pm_qos_constraints hisi_npu_freq_uplimit_constraints = {
+	.list = PLIST_HEAD_INIT(hisi_npu_freq_uplimit_constraints.list),
+	.target_value = PM_QOS_NPU_FREQ_UPLIMIT_DEFAULT_VALUE,
+	.default_value = PM_QOS_NPU_FREQ_UPLIMIT_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_NPU_FREQ_UPLIMIT_DEFAULT_VALUE,
+	.type = PM_QOS_MIN,
+	.notifiers = &hisi_npu_freq_uplimit_notifier,
+};
+static struct pm_qos_object hisi_npu_freq_uplimit_pm_qos = {
+	.constraints = &hisi_npu_freq_uplimit_constraints,
+	.name = "npu_freq_uplimit",
+};
+#endif
+
+#ifdef CONFIG_GPUTOP_FREQ
+static BLOCKING_NOTIFIER_HEAD(hisi_gputop_freq_dnlimit_notifier);
+static struct pm_qos_constraints hisi_gputop_freq_dnlimit_constraints = {
+	.list = PLIST_HEAD_INIT(hisi_gputop_freq_dnlimit_constraints.list),
+	.target_value = PM_QOS_HISI_GPUTOP_FREQ_DNLIMIT_DEFAULT_VALUE,
+	.default_value = PM_QOS_HISI_GPUTOP_FREQ_DNLIMIT_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_HISI_GPUTOP_FREQ_DNLIMIT_DEFAULT_VALUE,
+	.type = PM_QOS_MAX,
+	.notifiers = &hisi_gputop_freq_dnlimit_notifier,
+};
+static struct pm_qos_object hisi_gputop_freq_dnlimit_pm_qos = {
+	.constraints = &hisi_gputop_freq_dnlimit_constraints,
+	.name = "gputop_freq_dnlimit",
+};
+
+static BLOCKING_NOTIFIER_HEAD(hisi_gputop_freq_uplimit_notifier);
+static struct pm_qos_constraints hisi_gputop_freq_uplimit_constraints = {
+	.list = PLIST_HEAD_INIT(hisi_gputop_freq_uplimit_constraints.list),
+	.target_value = PM_QOS_HISI_GPUTOP_FREQ_UPLIMIT_DEFAULT_VALUE,
+	.default_value = PM_QOS_HISI_GPUTOP_FREQ_UPLIMIT_DEFAULT_VALUE,
+	.no_constraint_value = PM_QOS_HISI_GPUTOP_FREQ_UPLIMIT_DEFAULT_VALUE,
+	.type = PM_QOS_MIN,
+	.notifiers = &hisi_gputop_freq_uplimit_notifier,
+};
+static struct pm_qos_object hisi_gputop_freq_uplimit_pm_qos = {
+	.constraints = &hisi_gputop_freq_uplimit_constraints,
+	.name = "gputop_freq_uplimit",
+};
+#endif
 
 static struct pm_qos_object *pm_qos_array[] = {
 	&null_pm_qos,
@@ -128,6 +279,28 @@ static struct pm_qos_object *pm_qos_array[] = {
 	&network_lat_pm_qos,
 	&network_throughput_pm_qos,
 	&memory_bandwidth_pm_qos,
+#ifdef CONFIG_DEVFREQ_GOV_PM_QOS
+	&memory_latency_pm_qos,
+	&memory_throughput_pm_qos,
+	&memory_throughput_up_th_pm_qos,
+#ifdef CONFIG_DEVFREQ_DMSS_LATENCY
+	&dmss_latency_pm_qos,
+#endif
+#endif
+#ifdef CONFIG_LPCPU_FREQ_LINK
+	&freq_link_level_pm_qos,
+#endif
+#ifdef CONFIG_ONSYS_AVS
+	&onsys_avs_ctrl_level_pm_qos,
+#endif
+#ifdef CONFIG_NPUFREQ_PM_QOS
+	&hisi_npu_freq_dnlimit_pm_qos,
+	&hisi_npu_freq_uplimit_pm_qos,
+#endif
+#ifdef CONFIG_GPUTOP_FREQ
+	&hisi_gputop_freq_dnlimit_pm_qos,
+	&hisi_gputop_freq_uplimit_pm_qos,
+#endif
 };
 
 static ssize_t pm_qos_power_write(struct file *filp, const char __user *buf,
@@ -259,6 +432,7 @@ static const struct file_operations pm_qos_debug_fops = {
 	.release        = single_release,
 };
 
+/*lint -e616 -e571*/
 /**
  * pm_qos_update_target - manages the constraints list and calls the notifiers
  *  if needed
@@ -321,6 +495,7 @@ int pm_qos_update_target(struct pm_qos_constraints *c, struct plist_node *node,
 	}
 	return ret;
 }
+/*lint +e616 +e571*/
 
 /**
  * pm_qos_flags_remove_req - Remove device PM QoS flags request.
@@ -339,6 +514,7 @@ static void pm_qos_flags_remove_req(struct pm_qos_flags *pqf,
 	pqf->effective_flags = val;
 }
 
+/*lint -e616*/
 /**
  * pm_qos_update_flags - Update a set of PM QoS flags.
  * @pqf: Set of flags to update.
@@ -385,6 +561,7 @@ bool pm_qos_update_flags(struct pm_qos_flags *pqf,
 	trace_pm_qos_update_flags(action, prev_value, curr_value);
 	return prev_value != curr_value;
 }
+/*lint +e616*/
 
 /**
  * pm_qos_request - returns current system wide qos expectation

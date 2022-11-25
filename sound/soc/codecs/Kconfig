@@ -217,6 +217,9 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_WM9705 if SND_SOC_AC97_BUS
 	select SND_SOC_WM9712 if SND_SOC_AC97_BUS
 	select SND_SOC_WM9713 if SND_SOC_AC97_BUS
+	select SND_SOC_HI6402
+	select SND_SOC_DA_COMBINE_V3
+	select SND_SOC_DA_COMBINE_V5
         help
           Normally ASoC codec drivers are only built if a machine driver which
           uses them is also built since they are only usable with a machine
@@ -1176,5 +1179,40 @@ config SND_SOC_NAU8825
 config SND_SOC_TPA6130A2
 	tristate "Texas Instruments TPA6130A2 headphone amplifier"
 	depends on I2C
+
+config SND_SOC_DA_COMBINE_V3
+	tristate "Support Sound SoC DA combine v3 Codec"
+	depends on DA_COMBINE_V3_CODEC
+
+config SND_SOC_DA_COMBINE_V5
+	tristate "Support Sound SoC DA combine v5 Codec"
+
+config SND_SOC_CODEC_HISSC
+	tristate "HI Soc Smartstar Codec support"
+
+source "sound/soc/codecs/hisi/fpga_test/Kconfig"
+
+config SND_SOC_DP_AUDIO
+	tristate "Support Sound SoC DP audio"
+
+# Supported au pa
+source "sound/soc/codecs/hisi/au_pa/Kconfig"
+
+config SND_SOC_CODEC_DA_SEPARATE_V2
+	tristate "HI Soc Smartstar Codec DA separate v2 support"
+
+config SND_SOC_HICODEC_DEBUG
+	bool "Hisi Codec debug support"
+
+config SND_SOC_ASP_CODEC
+	tristate "HI Soc Smartstar asp codec"
+
+config SND_SOC_ASP_CODEC_CODECLESS
+	tristate "HI Soc Smartstar asp codec for codecless support"
+
+# Supported da separate codecs
+source "sound/soc/codecs/hisi/da_separate/Kconfig"
+
+# Support codecless series audio codec
 
 endmenu

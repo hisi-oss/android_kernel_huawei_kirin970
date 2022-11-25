@@ -637,9 +637,11 @@ void edac_device_handle_ue(struct edac_device_ctl_info *edac_dev,
 				edac_dev->ctl_name, instance->name,
 				block ? block->name : "N/A", msg);
 
+#ifndef CONFIG_CPU_EDAC_ARM64
 	if (edac_device_get_panic_on_ue(edac_dev))
 		panic("EDAC %s: UE instance: %s block %s '%s'\n",
 			edac_dev->ctl_name, instance->name,
 			block ? block->name : "N/A", msg);
+#endif
 }
 EXPORT_SYMBOL_GPL(edac_device_handle_ue);

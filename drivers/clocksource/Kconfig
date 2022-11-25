@@ -366,7 +366,6 @@ config HISILICON_ERRATUM_161010101
 config ARM64_ERRATUM_858921
 	bool "Workaround for Cortex-A73 erratum 858921"
 	default y
-	select ARM_ARCH_TIMER_OOL_WORKAROUND
 	depends on ARM_ARCH_TIMER && ARM64
 	help
 	  This option enables a workaround applicable to Cortex-A73
@@ -386,6 +385,13 @@ config ARM_TIMER_SP804
 	depends on GENERIC_SCHED_CLOCK && CLKDEV_LOOKUP
 	select CLKSRC_MMIO
 	select TIMER_OF if OF
+
+config LPCPU_HITIMER
+	bool "Support for HITIMER"
+	default n
+	depends on ARM_TIMER_SP804
+	help
+	  This option enables HITIMER instead of Hrtimer SP804
 
 config CLKSRC_ARM_GLOBAL_TIMER_SCHED_CLOCK
 	bool

@@ -914,13 +914,6 @@ nfs4_sequence_process_interrupted(struct nfs_client *client,
 
 #endif	/* !CONFIG_NFS_V4_1 */
 
-static void nfs41_sequence_res_init(struct nfs4_sequence_res *res)
-{
-	res->sr_timestamp = jiffies;
-	res->sr_status_flags = 0;
-	res->sr_status = 1;
-}
-
 static
 void nfs4_sequence_attach_slot(struct nfs4_sequence_args *args,
 		struct nfs4_sequence_res *res,
@@ -932,6 +925,10 @@ void nfs4_sequence_attach_slot(struct nfs4_sequence_args *args,
 	args->sa_slot = slot;
 
 	res->sr_slot = slot;
+	res->sr_timestamp = jiffies;
+	res->sr_status_flags = 0;
+	res->sr_status = 1;
+
 }
 
 int nfs4_setup_sequence(struct nfs_client *client,
@@ -977,7 +974,6 @@ int nfs4_setup_sequence(struct nfs_client *client,
 
 	trace_nfs4_setup_sequence(session, args);
 out_start:
-	nfs41_sequence_res_init(res);
 	rpc_call_start(task);
 	return 0;
 
@@ -2537,15 +2533,11 @@ static void nfs41_check_delegation_stateid(struct nfs4_state *state)
 	}
 
 	nfs4_stateid_copy(&stateid, &delegation->stateid);
-	if (test_bit(NFS_DELEGATION_REVOKED, &delegation->flags)) {
+	if (test_bit(NFS_DELEGATION_REVOKED, &delegation->flags) ||
+		!test_and_clear_bit(NFS_DELEGATION_TEST_EXPIRED,
+			&delegation->flags)) {
 		rcu_read_unlock();
 		nfs_finish_clear_delegation_stateid(state, &stateid);
-		return;
-	}
-
-	if (!test_and_clear_bit(NFS_DELEGATION_TEST_EXPIRED,
-				&delegation->flags)) {
-		rcu_read_unlock();
 		return;
 	}
 
@@ -2746,8 +2738,7 @@ static int _nfs4_open_and_get_state(struct nfs4_opendata *opendata,
 			nfs4_schedule_stateid_recovery(server, state);
 	}
 out:
-	if (!opendata->cancelled)
-		nfs4_sequence_free_slot(&opendata->o_res.seq_res);
+	nfs4_sequence_free_slot(&opendata->o_res.seq_res);
 	return ret;
 }
 
@@ -7506,7 +7497,7 @@ static int nfs4_sp4_select_mode(struct nfs_client *clp,
 	}
 out:
 	clp->cl_sp4_flags = flags;
-	return ret;
+	return 0;
 }
 
 struct nfs41_exchange_id_data {

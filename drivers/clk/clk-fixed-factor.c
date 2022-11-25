@@ -13,7 +13,22 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#ifdef CONFIG_HISI_CLK
+#include <linux/clkdev.h>
+#endif
 
+#ifdef CONFIG_HISI_CLK_DEBUG
+#ifndef CONFIG_ARCH_HISI_CLK_EXTREME
+#include "hisi/debug/clk-debug.h"
+#else
+#include "hisi_extreme/debug/clk-debug.h"
+#endif
+#include <securec.h>
+#endif
+
+#ifdef CONFIG_HISI_CLK
+extern int is_fpga(void);
+#endif
 /*
  * DOC: basic fixed multiplier and divider clock that cannot gate
  *
@@ -62,10 +77,31 @@ static int clk_factor_set_rate(struct clk_hw *hw, unsigned long rate,
 	return 0;
 }
 
+#ifdef CONFIG_HISI_CLK_DEBUG
+static int hi3xxx_dumpfixed_factor(struct clk_hw *hw, char* buf, int buf_length, struct seq_file *s)
+{
+	int ret = 0;
+	struct clk_fixed_factor *fix = to_clk_fixed_factor(hw);
+	if(buf && !s && (buf_length > 0)) {
+		ret = snprintf_s(buf, buf_length, buf_length - 1, \
+			"[%s] : fixed div value = %d\n", __clk_get_name(hw->clk), fix->div);
+		if(ret == -1)
+			pr_err("%s snprintf_s failed!\n", __func__);
+	}
+	if(!buf && s) {
+		seq_printf(s, "    %-15s    %-15s    DIV-%d", "NONE", "fixed-factor", fix->div);
+	}
+	return 0;
+}
+#endif
+
 const struct clk_ops clk_fixed_factor_ops = {
 	.round_rate = clk_factor_round_rate,
 	.set_rate = clk_factor_set_rate,
 	.recalc_rate = clk_factor_recalc_rate,
+#ifdef CONFIG_HISI_CLK_DEBUG
+	.dump_reg = hi3xxx_dumpfixed_factor,
+#endif
 };
 EXPORT_SYMBOL_GPL(clk_fixed_factor_ops);
 
@@ -170,7 +206,23 @@ static struct clk *_of_fixed_factor_clk_setup(struct device_node *node)
 	}
 
 	of_property_read_string(node, "clock-output-names", &clk_name);
-	parent_name = of_clk_get_parent_name(node, 0);
+#ifdef CONFIG_HISI_CLK
+	if (is_fpga()) {
+		if (NULL != of_find_property(node, "clock-fpga", NULL)) {
+			if (of_property_read_string(node, "clock-fpga", &parent_name)) {
+				pr_err("[%s] %s node clock-fpga value is NULL!\n",
+					__func__, node->name);
+				return ERR_PTR(-EIO);
+			}
+		} else {
+			parent_name = of_clk_get_parent_name(node, 0);
+		}
+	} else {
+#endif
+		parent_name = of_clk_get_parent_name(node, 0);
+#ifdef CONFIG_HISI_CLK
+	}
+#endif
 
 	if (of_match_node(set_rate_parent_matches, node))
 		flags |= CLK_SET_RATE_PARENT;
@@ -193,6 +245,9 @@ static struct clk *_of_fixed_factor_clk_setup(struct device_node *node)
 		return ERR_PTR(ret);
 	}
 
+#ifdef CONFIG_HISI_CLK
+	clk_register_clkdev(clk, clk_name, NULL);
+#endif
 	return clk;
 }
 

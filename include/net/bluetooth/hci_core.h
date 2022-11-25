@@ -178,6 +178,9 @@ struct adv_info {
 
 #define HCI_MAX_SHORT_NAME_LENGTH	10
 
+/* Min encryption key size to match with SMP */
+#define HCI_MIN_ENC_KEY_SIZE		7
+
 /* Default LE RPA expiry time, 15 minutes */
 #define HCI_DEFAULT_RPA_TIMEOUT		(15 * 60)
 
@@ -511,6 +514,7 @@ struct hci_chan {
 	struct sk_buff_head data_q;
 	unsigned int	sent;
 	__u8		state;
+	bool		amp;
 };
 
 struct hci_conn_params {
@@ -1046,6 +1050,12 @@ int hci_get_conn_info(struct hci_dev *hdev, void __user *arg);
 int hci_get_auth_info(struct hci_dev *hdev, void __user *arg);
 int hci_inquiry(void __user *arg);
 
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+#define HCI_HISI_A2DP_STATE_PARAM_SIZE	3
+#define HCI_OP_SET_A2DP_ACTIVE_STATE	0xFC1E
+int hci_hisi_set_a2dp_state_cmd(struct hci_dev *hdev, u16 handle, u8 state);
+#endif
+
 struct bdaddr_list *hci_bdaddr_list_lookup(struct list_head *list,
 					   bdaddr_t *bdaddr, u8 type);
 int hci_bdaddr_list_add(struct list_head *list, bdaddr_t *bdaddr, u8 type);
@@ -1452,8 +1462,14 @@ void hci_mgmt_chan_unregister(struct hci_mgmt_chan *c);
 #define DISCOV_LE_SCAN_WIN		0x12
 #define DISCOV_LE_SCAN_INT		0x12
 #define DISCOV_LE_TIMEOUT		10240	/* msec */
+
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+#define DISCOV_INTERLEAVED_TIMEOUT	1000	/* msec */
+#define DISCOV_INTERLEAVED_INQUIRY_LEN	0x01
+#else
 #define DISCOV_INTERLEAVED_TIMEOUT	5120	/* msec */
 #define DISCOV_INTERLEAVED_INQUIRY_LEN	0x04
+#endif
 #define DISCOV_BREDR_INQUIRY_LEN	0x08
 #define DISCOV_LE_RESTART_DELAY		msecs_to_jiffies(200)	/* msec */
 
@@ -1535,6 +1551,14 @@ void hci_le_start_enc(struct hci_conn *conn, __le16 ediv, __le64 rand,
 
 void hci_copy_identity_address(struct hci_dev *hdev, bdaddr_t *bdaddr,
 			       u8 *bdaddr_type);
+
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+int hisi_hci_dev_do_open(struct hci_dev *hdev);
+/* Page scan period modes */
+#define HCI_PAGE_SCAN_REP_MODE_R0 0x00
+#define HCI_PAGE_SCAN_REP_MODE_R1 0x01
+#define HCI_PAGE_SCAN_REP_MODE_R2 0x02
+#endif
 
 #define SCO_AIRMODE_MASK       0x0003
 #define SCO_AIRMODE_CVSD       0x0000

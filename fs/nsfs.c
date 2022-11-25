@@ -48,7 +48,8 @@ static void nsfs_evict(struct inode *inode)
 {
 	struct ns_common *ns = inode->i_private;
 	clear_inode(inode);
-	ns->ops->put(ns);
+	if (ns && ns->ops && ns->ops->put)
+		ns->ops->put(ns);
 }
 
 static void *__ns_get_path(struct path *path, struct ns_common *ns)
@@ -66,7 +67,8 @@ static void *__ns_get_path(struct path *path, struct ns_common *ns)
 	if (!lockref_get_not_dead(&dentry->d_lockref))
 		goto slow;
 	rcu_read_unlock();
-	ns->ops->put(ns);
+	if (ns && ns->ops && ns->ops->put)
+		ns->ops->put(ns);
 got_it:
 	path->mnt = mntget(mnt);
 	path->dentry = dentry;
@@ -75,7 +77,8 @@ slow:
 	rcu_read_unlock();
 	inode = new_inode_pseudo(mnt->mnt_sb);
 	if (!inode) {
-		ns->ops->put(ns);
+		if (ns && ns->ops && ns->ops->put)
+			ns->ops->put(ns);
 		return ERR_PTR(-ENOMEM);
 	}
 	inode->i_ino = ns->inum;

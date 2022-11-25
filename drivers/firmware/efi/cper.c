@@ -641,24 +641,19 @@ EXPORT_SYMBOL_GPL(cper_estatus_check_header);
 int cper_estatus_check(const struct acpi_hest_generic_status *estatus)
 {
 	struct acpi_hest_generic_data *gdata;
-	unsigned int data_len, record_size;
+	unsigned int data_len, gedata_len;
 	int rc;
 
 	rc = cper_estatus_check_header(estatus);
 	if (rc)
 		return rc;
-
 	data_len = estatus->data_length;
 
 	apei_estatus_for_each_section(estatus, gdata) {
-		if (sizeof(struct acpi_hest_generic_data) > data_len)
+		gedata_len = acpi_hest_get_error_length(gdata);
+		if (gedata_len > data_len - acpi_hest_get_size(gdata))
 			return -EINVAL;
-
-		record_size = acpi_hest_get_record_size(gdata);
-		if (record_size > data_len)
-			return -EINVAL;
-
-		data_len -= record_size;
+		data_len -= acpi_hest_get_record_size(gdata);
 	}
 	if (data_len)
 		return -EINVAL;

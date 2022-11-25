@@ -440,11 +440,7 @@ def branch_type_table(*x):
 
 def sample_table(*x):
 	if branches:
-		for xx in x[0:15]:
-			sample_query.addBindValue(str(xx))
-		for xx in x[19:22]:
-			sample_query.addBindValue(str(xx))
-		do_query_(sample_query)
+		bind_exec(sample_query, 18, x)
 	else:
 		bind_exec(sample_query, 22, x)
 

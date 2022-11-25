@@ -20,6 +20,7 @@
 #include <linux/of.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/slab.h>
+#include <linux/hisi/hisi_usb_phy_chip.h>
 
 #include "core.h"
 #include "devicetree.h"
@@ -40,6 +41,13 @@ struct pinctrl_dt_map {
 static void dt_free_map(struct pinctrl_dev *pctldev,
 		     struct pinctrl_map *map, unsigned num_maps)
 {
+	int i;
+
+	for (i = 0; i < num_maps; ++i) {
+		kfree_const(map[i].dev_name);
+		map[i].dev_name = NULL;
+	}
+
 	if (pctldev) {
 		const struct pinctrl_ops *ops = pctldev->desc->pctlops;
 		if (ops->dt_free_map)
@@ -74,7 +82,13 @@ static int dt_remember_or_free_map(struct pinctrl *p, const char *statename,
 
 	/* Initialize common mapping table entry fields */
 	for (i = 0; i < num_maps; i++) {
-		map[i].dev_name = dev_name(p->dev);
+		const char *devname;
+
+		devname = kstrdup_const(dev_name(p->dev), GFP_KERNEL);
+		if (!devname)
+			goto err_free_map;
+
+		map[i].dev_name = devname;
 		map[i].name = statename;
 		if (pctldev)
 			map[i].ctrl_dev_name = dev_name(pctldev->dev);
@@ -82,10 +96,8 @@ static int dt_remember_or_free_map(struct pinctrl *p, const char *statename,
 
 	/* Remember the converted mapping table entries */
 	dt_map = kzalloc(sizeof(*dt_map), GFP_KERNEL);
-	if (!dt_map) {
-		dt_free_map(pctldev, map, num_maps);
-		return -ENOMEM;
-	}
+	if (!dt_map)
+		goto err_free_map;
 
 	dt_map->pctldev = pctldev;
 	dt_map->map = map;
@@ -93,6 +105,10 @@ static int dt_remember_or_free_map(struct pinctrl *p, const char *statename,
 	list_add_tail(&dt_map->node, &p->dt_maps);
 
 	return pinctrl_register_map(map, num_maps, false);
+
+err_free_map:
+	dt_free_map(pctldev, map, num_maps);
+	return -ENOMEM;
 }
 
 struct pinctrl_dev *of_pinctrl_get(struct device_node *np)
@@ -251,7 +267,23 @@ int pinctrl_dt_to_map(struct pinctrl *p, struct pinctrl_dev *pctldev)
 				ret = -EINVAL;
 				goto err;
 			}
-
+#ifdef CONFIG_GPIO_HI6502
+		if (strstr(np_config->name, "6502gpio") != NULL) {
+			if (phy_type == HISI_USB_PHY_CHIP) {
+				if (strstr(np_config->name, "t6502") != NULL) {
+					dev_err(p->dev, "config  %s t28 need cacel DT\n",
+						np_config->name);
+					continue;
+				}
+			} else if (phy_type == SNOPSYS_USB_PHY_CHIP) {
+				if (strstr(np_config->name, "s6502") != NULL) {
+					dev_err(p->dev, "config  %s s28 need cancel DT\n",
+						np_config->name);
+					continue;
+				}
+			}
+		}
+#endif
 			/* Parse the node */
 			ret = dt_to_map_one_config(p, pctldev, statename,
 						   np_config);

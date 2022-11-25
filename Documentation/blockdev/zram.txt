@@ -223,6 +223,8 @@ line of text and contains the following stats separated by whitespace:
                   No memory is allocated for such pages.
  pages_compacted  the number of pages freed during compaction
  huge_pages	  the number of incompressible pages
+ idle_pages       the number of idle pages
+ idle_fast_pages  the number of idle_fast pages
 
 File /sys/block/zram<id>/bd_stat
 
@@ -268,6 +270,11 @@ as idle.
 
 	"echo all > /sys/block/zramX/idle"
 
+To use idle_fast page writeback, first, user need to declare zram
+pages as idle_fast.
+
+	"echo fast > /sys/block/zramX/idle"
+
 From now on, any pages on zram are idle pages. The idle mark
 will be removed until someone request access of the block.
 IOW, unless there is access request, those pages are still idle pages.
@@ -275,6 +282,10 @@ IOW, unless there is access request, those pages are still idle pages.
 Admin can request writeback of those idle pages at right timing via
 
 	"echo idle > /sys/block/zramX/writeback"
+
+User need write "idle_fast" to use idle_fast writeback.
+
+	"echo idle_fast > /sys/block/zramX/writeback"
 
 With the command, zram writeback idle pages from memory to the storage.
 

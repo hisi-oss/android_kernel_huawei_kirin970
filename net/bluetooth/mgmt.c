@@ -2707,6 +2707,22 @@ static void le_pairing_complete_cb(struct hci_conn *conn, u8 status)
 	mgmt_pending_remove(cmd);
 }
 
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+static void set_a2dp_state(struct hci_dev *hdev, bdaddr_t *bdaddr,
+			   u8 status)
+{
+	struct hci_conn *conn = NULL;
+	__u16 handle;
+
+	conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK, bdaddr);
+	if (!conn)
+		return;
+
+	handle = conn->handle;
+	hci_hisi_set_a2dp_state_cmd(hdev, handle, status);
+}
+#endif
+
 static int pair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 		       u16 len)
 {
@@ -2722,6 +2738,24 @@ static int pair_device(struct sock *sk, struct hci_dev *hdev, void *data,
 	memset(&rp, 0, sizeof(rp));
 	bacpy(&rp.addr.bdaddr, &cp->addr.bdaddr);
 	rp.addr.type = cp->addr.type;
+
+#ifdef CONFIG_ARMPC_BLUEZ_DEVICE_HI110X
+	if (cp->io_cap > SMP_IO_KEYBOARD_DISPLAY) {
+		u8 accept = cp->io_cap;
+		const u8 state_flag = 0x06; // a2dp state 0x06 mean play from user bluez
+
+		hci_dev_lock(hdev);
+		if (cp->io_cap == state_flag)
+			accept = true;
+		else
+			accept = false;
+
+		set_a2dp_state(hdev, &cp->addr.bdaddr, accept);
+		mgmt_cmd_complete(sk, hdev->id, MGMT_OP_PAIR_DEVICE,
+				  MGMT_STATUS_ALREADY_PAIRED, &rp, sizeof(rp));
+		goto unlock;
+	}
+#endif
 
 	if (!bdaddr_type_is_valid(cp->addr.type))
 		return mgmt_cmd_complete(sk, hdev->id, MGMT_OP_PAIR_DEVICE,

@@ -33,6 +33,7 @@
 /* Code sharing between pci-quirks and xhci hcd */
 #include	"xhci-ext-caps.h"
 #include "pci-quirks.h"
+#include "xhci-local-mem.h"
 
 /* xHCI PCI Configuration Registers */
 #define XHCI_SBRN_OFFSET	(0x60)
@@ -718,7 +719,7 @@ struct xhci_ep_ctx {
  * 4 - TRB error
  * 5-7 - reserved
  */
-#define EP_STATE_MASK		(0xf)
+#define EP_STATE_MASK		(0x7)
 #define EP_STATE_DISABLED	0
 #define EP_STATE_RUNNING	1
 #define EP_STATE_HALTED		2
@@ -1633,7 +1634,7 @@ struct urb_priv {
  * (1K bytes * 8bytes/bit) / (4*32 bits) = 64 segment entries in the table,
  * meaning 64 ring segments.
  * Initial allocated size of the ERST, in number of entries */
-#define	ERST_NUM_SEGS	1
+#define	ERST_NUM_SEGS	2
 /* Initial allocated size of the ERST, in number of entries */
 #define	ERST_SIZE	64
 /* Initial number of event segment rings allocated */
@@ -1838,8 +1839,16 @@ struct xhci_hcd {
 #define XHCI_HW_LPM_DISABLE	BIT_ULL(29)
 #define XHCI_SUSPEND_DELAY	BIT_ULL(30)
 #define XHCI_INTEL_USB_ROLE_SW	BIT_ULL(31)
-#define XHCI_RESET_PLL_ON_DISCONNECT	BIT_ULL(34)
-#define XHCI_SNPS_BROKEN_SUSPEND    BIT_ULL(35)
+
+#define XHCI_SUPPORT_S3_WAKEUP          (1ULL << 57)
+#define XHCI_CTRL_NYET_ABNORMAL		(1ULL << 58)
+#ifdef CONFIG_USB_DWC3_NYET_ABNORMAL
+#define XHCI_DISABLE_LPM		(1ULL << 59)
+#define XHCI_NOT_SUP_SG			(1ULL << 60)
+#define XHCI_HCD_LOCAL_MEM		(1ULL << 61)
+#endif /* CONFIG_USB_DWC3_NYET_ABNORMAL */
+#define XHCI_WARM_RESET_AFTER_INIT	(1ULL << 62)
+#define XHCI_DELAY_CTRL_DATA_STAGE	(1ULL << 63)
 
 	unsigned int		num_active_eps;
 	unsigned int		limit_active_eps;
@@ -1870,6 +1879,17 @@ struct xhci_hcd {
 	u16			test_mode;
 /* Compliance Mode Timer Triggered every 2 seconds */
 #define COMP_MODE_RCVRY_MSECS 2000
+
+#ifdef CONFIG_HISI_DEBUG_FS
+	struct dentry		*debugfs_root;
+#endif
+	struct notifier_block host_event_nb;
+
+#ifdef CONFIG_USB_DWC3_NYET_ABNORMAL
+#define XHCI_DMA_POOL_NUM (9)
+	struct dma_pool		*pool[XHCI_DMA_POOL_NUM];
+	struct xhci_local_dma_manager dma_manager;
+#endif
 
 	/* platform-specific data -- must come last */
 	unsigned long		priv[0] __aligned(sizeof(s64));
@@ -1949,6 +1969,8 @@ char *xhci_get_slot_state(struct xhci_hcd *xhci,
 		struct xhci_container_ctx *ctx);
 void xhci_dbg_trace(struct xhci_hcd *xhci, void (*trace)(struct va_format *),
 			const char *fmt, ...);
+void xhci_dump_op_regs(struct xhci_hcd *xhc);
+void xhci_dump_portsc(struct xhci_hcd *xhc);
 
 /* xHCI memory management */
 void xhci_mem_cleanup(struct xhci_hcd *xhci);
@@ -2022,6 +2044,7 @@ int xhci_start(struct xhci_hcd *xhci);
 int xhci_reset(struct xhci_hcd *xhci);
 int xhci_run(struct usb_hcd *hcd);
 int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks);
+void xhci_shutdown(struct usb_hcd *hcd);
 void xhci_init_driver(struct hc_driver *drv,
 		      const struct xhci_driver_overrides *over);
 int xhci_disable_slot(struct xhci_hcd *xhci, u32 slot_id);

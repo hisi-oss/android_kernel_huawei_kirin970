@@ -16,6 +16,15 @@
 #include <linux/err.h>
 #include <linux/string.h>
 
+#ifdef CONFIG_HISI_CLK_DEBUG
+#ifndef CONFIG_ARCH_HISI_CLK_EXTREME
+#include "hisi/debug/clk-debug.h"
+#else
+#include "hisi_extreme/debug/clk-debug.h"
+#endif
+#include <securec.h>
+#endif
+
 /**
  * DOC: basic gatable clock which can gate and ungate it's ouput
  *
@@ -47,6 +56,12 @@ static void clk_gate_endisable(struct clk_hw *hw, int enable)
 	u32 reg;
 
 	set ^= enable;
+
+#ifdef CONFIG_HISI_CLK
+	#define CLK_GATE_ALWAYS_ON_MASK   0x4
+	if ((!set) && (gate->flags & CLK_GATE_ALWAYS_ON_MASK))
+		return;
+#endif
 
 	if (gate->lock)
 		spin_lock_irqsave(gate->lock, flags);
@@ -83,7 +98,9 @@ static int clk_gate_enable(struct clk_hw *hw)
 
 static void clk_gate_disable(struct clk_hw *hw)
 {
+#ifndef CONFIG_HISI_CLK_ALWAYS_ON
 	clk_gate_endisable(hw, 0);
+#endif
 }
 
 int clk_gate_is_enabled(struct clk_hw *hw)
@@ -103,10 +120,40 @@ int clk_gate_is_enabled(struct clk_hw *hw)
 }
 EXPORT_SYMBOL_GPL(clk_gate_is_enabled);
 
+#ifdef CONFIG_HISI_CLK_DEBUG
+static int hi3xxx_dumpgt(struct clk_hw *hw, char* buf, int buf_length, struct seq_file *s)
+{
+	u32 reg;
+	long unsigned int clk_base_addr = 0;
+	unsigned int clk_bit = 0;
+	int ret = 0;
+	struct clk_gate *gate = to_clk_gate(hw);
+
+	if (gate->reg && buf && !s && (buf_length > 0)) {
+		reg = clk_readl(gate->reg);
+		ret = snprintf_s(buf, buf_length, buf_length - 1, "[%s] : regAddress = 0x%pK, regval = 0x%x\n",  \
+			__clk_get_name(hw->clk), gate->reg, reg);
+		if(ret == -1)
+			pr_err("%s snprintf_s failed!\n", __func__);
+	}
+	if(gate->reg && !buf && s) {
+		clk_base_addr = (uintptr_t)gate->reg & CLK_ADDR_HIGH_MASK;
+		clk_bit = (uintptr_t)gate->reg & CLK_ADDR_LOW_MASK;
+		seq_printf(s, "    %-15s    %-15s    0x%03X    bit-%-u", hs_base_addr_transfer(clk_base_addr), \
+			"himask-gate", clk_bit, gate->bit_idx);
+
+	}
+	return 0;
+}
+#endif
+
 const struct clk_ops clk_gate_ops = {
 	.enable = clk_gate_enable,
 	.disable = clk_gate_disable,
 	.is_enabled = clk_gate_is_enabled,
+#ifdef CONFIG_HISI_CLK_DEBUG
+   .dump_reg = hi3xxx_dumpgt,
+#endif
 };
 EXPORT_SYMBOL_GPL(clk_gate_ops);
 
@@ -146,8 +193,8 @@ struct clk_hw *clk_hw_register_gate(struct device *dev, const char *name,
 	init.name = name;
 	init.ops = &clk_gate_ops;
 	init.flags = flags | CLK_IS_BASIC;
-	init.parent_names = parent_name ? &parent_name : NULL;
-	init.num_parents = parent_name ? 1 : 0;
+    init.parent_names = parent_name ? &parent_name : NULL;
+    init.num_parents = parent_name ? 1 : 0;
 
 	/* struct clk_gate assignments */
 	gate->reg = reg;

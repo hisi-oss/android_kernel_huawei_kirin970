@@ -53,9 +53,11 @@ static ssize_t brightness_store(struct device *dev,
 	ret = kstrtoul(buf, 10, &state);
 	if (ret)
 		goto unlock;
-
+    /*need to keep delay_on and delay_off dev node when led is off*/
+#ifndef CONFIG_HISI_LEDS_NODE_PERSIST
 	if (state == LED_OFF)
 		led_trigger_remove(led_cdev);
+#endif
 	led_set_brightness(led_cdev, state);
 
 	ret = size;
@@ -173,6 +175,7 @@ void led_classdev_suspend(struct led_classdev *led_cdev)
 {
 	led_cdev->flags |= LED_SUSPENDED;
 	led_set_brightness_nopm(led_cdev, 0);
+	flush_work(&led_cdev->set_brightness_work);
 }
 EXPORT_SYMBOL_GPL(led_classdev_suspend);
 

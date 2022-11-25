@@ -678,7 +678,7 @@ struct snd_kcontrol *snd_ctl_find_numid(struct snd_card *card, unsigned int numi
 	if (snd_BUG_ON(!card || !numid))
 		return NULL;
 	list_for_each_entry(kctl, &card->controls, list) {
-		if (kctl->id.numid <= numid && kctl->id.numid + kctl->count > numid)
+		if (kctl != NULL && kctl->id.numid <= numid && kctl->id.numid + kctl->count > numid)
 			return kctl;
 	}
 	return NULL;
@@ -1387,7 +1387,7 @@ static int snd_ctl_elem_add(struct snd_ctl_file *file,
 
  unlock:
 	up_write(&card->controls_rwsem);
-	return 0;
+	return err;
 }
 
 static int snd_ctl_elem_add_user(struct snd_ctl_file *file,
@@ -1467,8 +1467,9 @@ static int call_tlv_handler(struct snd_ctl_file *file, int op_flag,
 	if (kctl->tlv.c == NULL)
 		return -ENXIO;
 
-	/* When locked, this is unavailable. */
-	if (vd->owner != NULL && vd->owner != file)
+	/* Write and command operations are not allowed for locked element. */
+	if (op_flag != SNDRV_CTL_TLV_OP_READ &&
+	    vd->owner != NULL && vd->owner != file)
 		return -EPERM;
 
 	return kctl->tlv.c(kctl, op_flag, size, buf);

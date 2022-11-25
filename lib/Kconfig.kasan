@@ -6,6 +6,7 @@ if HAVE_ARCH_KASAN
 config KASAN
 	bool "KASan: runtime memory debugger"
 	depends on SLUB || (SLAB && !DEBUG_SLAB)
+	select SLUB_DEBUG if SLUB
 	select CONSTRUCTORS
 	select STACKDEPOT
 	help
@@ -58,7 +59,7 @@ endchoice
 
 config TEST_KASAN
 	tristate "Module for testing kasan for bug detection"
-	depends on m && KASAN
+	depends on KASAN
 	help
 	  This is a test module doing various nasty things like
 	  out of bounds accesses, use after free. It is useful for testing

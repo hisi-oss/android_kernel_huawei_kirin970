@@ -40,7 +40,7 @@ static phys_addr_t ion_carveout_allocate(struct ion_heap *heap,
 	unsigned long offset = gen_pool_alloc(carveout_heap->pool, size);
 
 	if (!offset)
-		return ION_CARVEOUT_ALLOCATE_FAIL;
+		return ION_CARVEOUT_ALLOCATE_FAIL;/*lint !e570*/
 
 	return offset;
 }
@@ -123,7 +123,7 @@ struct ion_heap *ion_carveout_heap_create(struct ion_platform_heap *heap_data)
 	page = pfn_to_page(PFN_DOWN(heap_data->base));
 	size = heap_data->size;
 
-	ret = ion_heap_pages_zero(page, size, pgprot_writecombine(PAGE_KERNEL));
+	ret = ion_heap_pages_zero(page, size, pgprot_writecombine(PAGE_KERNEL));/*lint !e446*/
 	if (ret)
 		return ERR_PTR(ret);
 

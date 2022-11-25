@@ -36,6 +36,43 @@ config QCOM_L3_PMU
 	   Adds the L3 cache PMU into the perf events subsystem for
 	   monitoring L3 cache events.
 
+config ARM_DSU_PMU
+	tristate "ARM DynamIQ Shared Unit (DSU) PMU"
+	depends on ARM64
+	  help
+	  Provides support for performance monitor unit in ARM DynamIQ Shared
+	  Unit (DSU). The DSU integrates one or more cores with an L3 memory
+	  system, control logic. The PMU allows counting various events related
+	  to DSU.
+
+config KARMA_PMU
+	depends on PERF_EVENTS && ARM64
+	bool "KARMA PMU framework"
+	default n
+	help
+	  Say y if you want to use KARMA performance monitors.
+
+config KARMA_PMU_DEBUG
+	depends on KARMA_PMU
+	bool "KARMA PMU debug"
+	default n
+	help
+	  Say y if you want to use KARMA PMU debug function.
+
+config NAMSTO_PMU
+	depends on PERF_EVENTS && NAMSTO
+	bool "NAMSTO PMU framework"
+	default n
+	help
+	    Say y if you want to use NAMSTO performance monitors.
+
+config NAMSTO_PMU_DEBUG
+	depends on NAMSTO_PMU
+	bool "NAMSTO PMU debug"
+	default n
+	help
+	  Say y if you want to use NAMSTO PMU debug function.
+
 config XGENE_PMU
         depends on ARCH_XGENE
         bool "APM X-Gene SoC PMU"

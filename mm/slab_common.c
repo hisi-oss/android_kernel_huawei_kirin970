@@ -20,7 +20,7 @@
 #include <asm/tlbflush.h>
 #include <asm/page.h>
 #include <linux/memcontrol.h>
-
+#include <linux/hisi/rdr_hisi_ap_hook.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/kmem.h>
 
@@ -205,7 +205,7 @@ static int update_memcg_params(struct kmem_cache *s, int new_array_size)
 		memcpy(new->entries, old->entries,
 		       memcg_nr_cache_ids * sizeof(void *));
 
-	rcu_assign_pointer(s->memcg_params.memcg_caches, new);
+	rcu_assign_pointer(s->memcg_params.memcg_caches, new); /*lint !e208*/
 	if (old)
 		call_rcu(&old->rcu, free_memcg_params);
 	return 0;
@@ -287,6 +287,11 @@ int slab_unmergeable(struct kmem_cache *s)
 	if (s->refcount < 0)
 		return 1;
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (s->flags & SLAB_HISI_NOTRACE)
+		return 1;
+#endif
+
 	return 0;
 }
 
@@ -309,6 +314,10 @@ struct kmem_cache *find_mergeable(size_t size, size_t align,
 	if (flags & SLAB_NEVER_MERGE)
 		return NULL;
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (flags & SLAB_HISI_NOTRACE)
+		return NULL;
+#endif
 	list_for_each_entry_reverse(s, &slab_root_caches, root_caches_node) {
 		if (slab_unmergeable(s))
 			continue;
@@ -917,13 +926,9 @@ struct kmem_cache *__init create_kmalloc_cache(const char *name, size_t size,
 	return s;
 }
 
-struct kmem_cache *kmalloc_caches[KMALLOC_SHIFT_HIGH + 1];
+struct kmem_cache *
+kmalloc_caches[NR_KMALLOC_TYPES][KMALLOC_SHIFT_HIGH + 1] __ro_after_init;
 EXPORT_SYMBOL(kmalloc_caches);
-
-#ifdef CONFIG_ZONE_DMA
-struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
-EXPORT_SYMBOL(kmalloc_dma_caches);
-#endif
 
 /*
  * Conversion table for small slabs sizes / 8 to the index in the
@@ -984,12 +989,7 @@ struct kmem_cache *kmalloc_slab(size_t size, gfp_t flags)
 		index = fls(size - 1);
 	}
 
-#ifdef CONFIG_ZONE_DMA
-	if (unlikely((flags & GFP_DMA)))
-		return kmalloc_dma_caches[index];
-
-#endif
-	return kmalloc_caches[index];
+	return kmalloc_caches[kmalloc_type(flags)][index];
 }
 
 /*
@@ -1003,15 +1003,15 @@ const struct kmalloc_info_struct kmalloc_info[] __initconst = {
 	{"kmalloc-16",             16},		{"kmalloc-32",             32},
 	{"kmalloc-64",             64},		{"kmalloc-128",           128},
 	{"kmalloc-256",           256},		{"kmalloc-512",           512},
-	{"kmalloc-1024",         1024},		{"kmalloc-2048",         2048},
-	{"kmalloc-4096",         4096},		{"kmalloc-8192",         8192},
-	{"kmalloc-16384",       16384},		{"kmalloc-32768",       32768},
-	{"kmalloc-65536",       65536},		{"kmalloc-131072",     131072},
-	{"kmalloc-262144",     262144},		{"kmalloc-524288",     524288},
-	{"kmalloc-1048576",   1048576},		{"kmalloc-2097152",   2097152},
-	{"kmalloc-4194304",   4194304},		{"kmalloc-8388608",   8388608},
-	{"kmalloc-16777216", 16777216},		{"kmalloc-33554432", 33554432},
-	{"kmalloc-67108864", 67108864}
+	{"kmalloc-1k",           1024},		{"kmalloc-2k",           2048},
+	{"kmalloc-4k",           4096},		{"kmalloc-8k",           8192},
+	{"kmalloc-16k",         16384},		{"kmalloc-32k",         32768},
+	{"kmalloc-64k",         65536},		{"kmalloc-128k",       131072},
+	{"kmalloc-256k",       262144},		{"kmalloc-512k",       524288},
+	{"kmalloc-1M",        1048576},		{"kmalloc-2M",        2097152},
+	{"kmalloc-4M",        4194304},		{"kmalloc-8M",        8388608},
+	{"kmalloc-16M",      16777216},		{"kmalloc-32M",      33554432},
+	{"kmalloc-64M",      67108864}
 };
 
 /*
@@ -1061,9 +1061,36 @@ void __init setup_kmalloc_cache_index_table(void)
 	}
 }
 
-static void __init new_kmalloc_cache(int idx, unsigned long flags)
+static const char *
+kmalloc_cache_name(const char *prefix, unsigned int size)
 {
-	kmalloc_caches[idx] = create_kmalloc_cache(kmalloc_info[idx].name,
+
+	static const char units[3] = "\0kM";
+	int idx = 0;
+
+	while (size >= 1024 && (size % 1024 == 0)) {
+		size /= 1024;
+		idx++;
+	}
+
+	return kasprintf(GFP_NOWAIT, "%s-%u%c", prefix, size, units[idx]);
+}
+
+static void __init
+new_kmalloc_cache(int idx, int type, unsigned long flags)
+{
+	const char *name;
+
+	if (type == KMALLOC_RECLAIM) {
+		flags |= SLAB_RECLAIM_ACCOUNT;
+		name = kmalloc_cache_name("kmalloc-rcl",
+						kmalloc_info[idx].size);
+		BUG_ON(!name);
+	} else {
+		name = kmalloc_info[idx].name;
+	}
+
+	kmalloc_caches[type][idx] = create_kmalloc_cache(name,
 					kmalloc_info[idx].size, flags);
 }
 
@@ -1074,21 +1101,25 @@ static void __init new_kmalloc_cache(int idx, unsigned long flags)
  */
 void __init create_kmalloc_caches(unsigned long flags)
 {
-	int i;
+	int i, type;
 
-	for (i = KMALLOC_SHIFT_LOW; i <= KMALLOC_SHIFT_HIGH; i++) {
-		if (!kmalloc_caches[i])
-			new_kmalloc_cache(i, flags);
+	for (type = KMALLOC_NORMAL; type <= KMALLOC_RECLAIM; type++) {
+		for (i = KMALLOC_SHIFT_LOW; i <= KMALLOC_SHIFT_HIGH; i++) {
+			if (!kmalloc_caches[type][i])
+				new_kmalloc_cache(i, type, flags);
 
-		/*
-		 * Caches that are not of the two-to-the-power-of size.
-		 * These have to be created immediately after the
-		 * earlier power of two caches
-		 */
-		if (KMALLOC_MIN_SIZE <= 32 && !kmalloc_caches[1] && i == 6)
-			new_kmalloc_cache(1, flags);
-		if (KMALLOC_MIN_SIZE <= 64 && !kmalloc_caches[2] && i == 7)
-			new_kmalloc_cache(2, flags);
+			/*
+			 * Caches that are not of the two-to-the-power-of size.
+			 * These have to be created immediately after the
+			 * earlier power of two caches
+			 */
+			if (KMALLOC_MIN_SIZE <= 32 && i == 6 &&
+					!kmalloc_caches[type][1])
+				new_kmalloc_cache(1, type, flags);
+			if (KMALLOC_MIN_SIZE <= 64 && i == 7 &&
+					!kmalloc_caches[type][2])
+				new_kmalloc_cache(2, type, flags);
+		}
 	}
 
 	/* Kmalloc array is now usable */
@@ -1096,16 +1127,15 @@ void __init create_kmalloc_caches(unsigned long flags)
 
 #ifdef CONFIG_ZONE_DMA
 	for (i = 0; i <= KMALLOC_SHIFT_HIGH; i++) {
-		struct kmem_cache *s = kmalloc_caches[i];
+		struct kmem_cache *s = kmalloc_caches[KMALLOC_NORMAL][i];
 
 		if (s) {
 			int size = kmalloc_size(i);
-			char *n = kasprintf(GFP_NOWAIT,
-				 "dma-kmalloc-%d", size);
+			const char *n = kmalloc_cache_name("dma-kmalloc", size);
 
 			BUG_ON(!n);
-			kmalloc_dma_caches[i] = create_kmalloc_cache(n,
-				size, SLAB_CACHE_DMA | flags);
+			kmalloc_caches[KMALLOC_DMA][i] = create_kmalloc_cache(
+				n, size, SLAB_CACHE_DMA | flags);
 		}
 	}
 #endif
@@ -1127,6 +1157,15 @@ void *kmalloc_order(size_t size, gfp_t flags, unsigned int order)
 	ret = page ? page_address(page) : NULL;
 	kmemleak_alloc(ret, size, 1, flags);
 	kasan_kmalloc_large(ret, size, flags);
+#if !defined(CONFIG_TRACING) && defined(CONFIG_HISI_PAGE_TRACE)
+	if (likely(ret)) {
+		unsigned int deta = 1U << order;
+
+		set_lslub_track(page, order, _RET_IP_);
+		mod_zone_page_state(page_zone(page),
+			NR_LSLAB_PAGES, (long)deta);
+	}
+#endif
 	return ret;
 }
 EXPORT_SYMBOL(kmalloc_order);
@@ -1135,7 +1174,19 @@ EXPORT_SYMBOL(kmalloc_order);
 void *kmalloc_order_trace(size_t size, gfp_t flags, unsigned int order)
 {
 	void *ret = kmalloc_order(size, flags, order);
+#ifdef CONFIG_HISI_PAGE_TRACE
+	if (likely(ret)) {
+		struct page *page = virt_to_page(ret);
+		unsigned int deta = 1U << order;
+
+		set_lslub_track(page, order, _RET_IP_);
+		mod_zone_page_state(page_zone(page),
+			NR_LSLAB_PAGES, (long)deta);
+	}
+#endif
 	trace_kmalloc(_RET_IP_, ret, size, PAGE_SIZE << order, flags);
+	kmalloc_trace_hook((unsigned char)MEM_ALLOC, _RET_IP_, (unsigned long long)ret,/*lint !e571*/
+                (unsigned long long)virt_to_phys(ret), (unsigned int)size);
 	return ret;
 }
 EXPORT_SYMBOL(kmalloc_order_trace);
@@ -1449,7 +1500,7 @@ void kzfree(const void *p)
 	if (unlikely(ZERO_OR_NULL_PTR(mem)))
 		return;
 	ks = ksize(mem);
-	memset(mem, 0, ks);
+	memzero_explicit(mem, ks);
 	kfree(mem);
 }
 EXPORT_SYMBOL(kzfree);

@@ -379,7 +379,7 @@ out:
 
 static int record_saved_cmdline(void)
 {
-	unsigned long long size;
+	unsigned int size;
 	char *path;
 	struct stat st;
 	int ret, err = 0;

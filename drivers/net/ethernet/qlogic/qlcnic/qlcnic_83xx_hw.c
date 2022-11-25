@@ -2134,8 +2134,7 @@ out:
 }
 
 void qlcnic_83xx_change_l2_filter(struct qlcnic_adapter *adapter, u64 *addr,
-				  u16 vlan_id,
-				  struct qlcnic_host_tx_ring *tx_ring)
+				  u16 vlan_id)
 {
 	u8 mac[ETH_ALEN];
 	memcpy(&mac, addr, ETH_ALEN);

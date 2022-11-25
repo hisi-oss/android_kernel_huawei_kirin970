@@ -379,8 +379,10 @@ static int _of_add_opp_table_v2(struct device *dev, struct device_node *opp_np)
 	opp_table = _managed_opp(opp_np);
 	if (opp_table) {
 		/* OPPs are already managed */
+		mutex_lock(&opp_table_lock);
 		if (!_add_opp_dev(dev, opp_table))
 			ret = -ENOMEM;
+		mutex_unlock(&opp_table_lock);
 		goto put_opp_table;
 	}
 

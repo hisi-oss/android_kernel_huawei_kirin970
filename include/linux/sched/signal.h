@@ -217,13 +217,24 @@ struct signal_struct {
 	short oom_score_adj;		/* OOM kill score adjustment */
 	short oom_score_adj_min;	/* OOM kill score adjustment min value.
 					 * Only settable by CAP_SYS_RESOURCE. */
+#ifdef CONFIG_HW_DIE_CATCH
+	unsigned short unexpected_die_catch_flags; /* Only settable by CAP_SYS_RESOURCE and task*/
+#endif
 	struct mm_struct *oom_mm;	/* recorded mm when the thread group got
 					 * killed by the oom killer */
 
 	struct mutex cred_guard_mutex;	/* guard against foreign influences on
 					 * credential calculations
 					 * (notably. ptrace) */
-} __randomize_layout;
+
+/*  if the process will die by SIGKILL,SIGTERM , it will send SIGABORT to notify userspace*/
+#define KILL_CATCH_FLAG     (0x1)
+/*  if the process will die by system call exit , it will print the log*/
+#define EXIT_CATCH_FLAG     (0x2)
+/*  if the process will die by system call exit , it will send SIGABORT to notify userspace*/
+#define EXIT_CATCH_ABORT_FLAG       (0x4)
+
+};
 
 /*
  * Bits in flags field of signal_struct.
@@ -377,19 +388,9 @@ static inline void set_restore_sigmask(void)
 	set_thread_flag(TIF_RESTORE_SIGMASK);
 	WARN_ON(!test_thread_flag(TIF_SIGPENDING));
 }
-
-static inline void clear_tsk_restore_sigmask(struct task_struct *tsk)
-{
-	clear_tsk_thread_flag(tsk, TIF_RESTORE_SIGMASK);
-}
-
 static inline void clear_restore_sigmask(void)
 {
 	clear_thread_flag(TIF_RESTORE_SIGMASK);
-}
-static inline bool test_tsk_restore_sigmask(struct task_struct *tsk)
-{
-	return test_tsk_thread_flag(tsk, TIF_RESTORE_SIGMASK);
 }
 static inline bool test_restore_sigmask(void)
 {
@@ -408,10 +409,6 @@ static inline void set_restore_sigmask(void)
 	current->restore_sigmask = true;
 	WARN_ON(!test_thread_flag(TIF_SIGPENDING));
 }
-static inline void clear_tsk_restore_sigmask(struct task_struct *tsk)
-{
-	tsk->restore_sigmask = false;
-}
 static inline void clear_restore_sigmask(void)
 {
 	current->restore_sigmask = false;
@@ -419,10 +416,6 @@ static inline void clear_restore_sigmask(void)
 static inline bool test_restore_sigmask(void)
 {
 	return current->restore_sigmask;
-}
-static inline bool test_tsk_restore_sigmask(struct task_struct *tsk)
-{
-	return tsk->restore_sigmask;
 }
 static inline bool test_and_clear_restore_sigmask(void)
 {

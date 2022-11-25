@@ -323,6 +323,12 @@ config ARM_SMMU_V3
 	  Say Y here if your system includes an IOMMU device implementing
 	  the ARM SMMUv3 architecture.
 
+config MM_TCU
+	bool "MM TCU Support"
+	depends on ARM_SMMU_V3
+	help
+	  Support MM TCU
+
 config S390_IOMMU
 	def_bool y if S390 && PCI
 	depends on S390 && PCI
@@ -380,5 +386,7 @@ config QCOM_IOMMU
 	select ARM_DMA_USE_IOMMU
 	help
 	  Support for IOMMU on certain Qualcomm SoCs.
+
+source "drivers/iommu/hisi/Kconfig"
 
 endif # IOMMU_SUPPORT

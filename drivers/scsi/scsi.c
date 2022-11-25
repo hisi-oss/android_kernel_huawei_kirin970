@@ -80,7 +80,16 @@
  * Note - the initial logging level can be set here to log events at boot time.
  * After the system is up, you may enable logging via the /proc interface.
  */
-unsigned int scsi_logging_level;
+#define LOGGING_LEVEL(name, level)                                             \
+	((level & ((1 << (SCSI_LOG_##name##_BITS)) - 1))                       \
+		<< (SCSI_LOG_##name##_SHIFT))
+#define UFS_SCSI_LOGGING_LEVEL                                                 \
+	(LOGGING_LEVEL(ERROR, 3) | LOGGING_LEVEL(TIMEOUT, 1) |                 \
+		LOGGING_LEVEL(SCAN, 1) | LOGGING_LEVEL(MLQUEUE, 1) |           \
+		LOGGING_LEVEL(MLCOMPLETE, 1) | LOGGING_LEVEL(LLQUEUE, 1) |     \
+		LOGGING_LEVEL(LLCOMPLETE, 1) | LOGGING_LEVEL(HLQUEUE, 1) |     \
+		LOGGING_LEVEL(HLCOMPLETE, 1) | LOGGING_LEVEL(IOCTL, 1))
+unsigned int scsi_logging_level = UFS_SCSI_LOGGING_LEVEL;
 #if defined(CONFIG_SCSI_LOGGING)
 EXPORT_SYMBOL(scsi_logging_level);
 #endif
@@ -773,6 +782,38 @@ struct scsi_device *scsi_device_lookup(struct Scsi_Host *shost,
 	return sdev;
 }
 EXPORT_SYMBOL(scsi_device_lookup);
+
+/**
+ * __set_quiesce_for_each_device - set all scsi device state to quiet
+ * @shost:	SCSI host pointer
+ *
+ * Description: this func will be called when shut down to forbid io req
+ * from block level;this func is added by hisi.
+ **/
+void __set_quiesce_for_each_device(struct Scsi_Host *shost)
+{
+	struct scsi_device *sdev;
+
+	__shost_for_each_device(sdev, shost)/*lint !e64 !e826*/
+		(void)scsi_device_quiesce(sdev);
+}
+EXPORT_SYMBOL(__set_quiesce_for_each_device);
+
+/**
+ * __clr_quiesce_for_each_device - clear all scsi device state to running
+ * @shost:?       SCSI host pointer
+ *
+ * Description: this func will be called when resume to allow io req
+ * from block level;this func is added by hisi.
+ **/
+void __clr_quiesce_for_each_device(struct Scsi_Host *shost)
+{
+	struct scsi_device *sdev;
+
+	__shost_for_each_device(sdev, shost)
+		(void)scsi_device_resume(sdev);
+}
+EXPORT_SYMBOL(__clr_quiesce_for_each_device);
 
 MODULE_DESCRIPTION("SCSI core");
 MODULE_LICENSE("GPL");

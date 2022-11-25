@@ -53,8 +53,21 @@ enum KTHREAD_BITS {
 	KTHREAD_IS_PER_CPU = 0,
 	KTHREAD_SHOULD_STOP,
 	KTHREAD_SHOULD_PARK,
-	KTHREAD_IS_PARKED,
 };
+
+#ifdef CONFIG_ARCH_HISI
+static bool _smpboot_create_threads = false;
+
+bool smpboot_creating_threads(void)
+{
+	return _smpboot_create_threads;
+}
+
+void set_smpboot_creating_threads(bool value)
+{
+	_smpboot_create_threads = value;
+}
+#endif
 
 static inline void set_kthread_struct(void *kthread)
 {
@@ -170,22 +183,103 @@ void *kthread_probe_data(struct task_struct *task)
 static void __kthread_parkme(struct kthread *self)
 {
 	for (;;) {
-		set_current_state(TASK_PARKED);
+		/*
+		 * TASK_PARKED is a special state; we must serialize against
+		 * possible pending wakeups to avoid store-store collisions on
+		 * task->state.
+		 *
+		 * Such a collision might possibly result in the task state
+		 * changin from TASK_PARKED and us failing the
+		 * wait_task_inactive() in kthread_park().
+		 */
+		set_special_state(TASK_PARKED);
 		if (!test_bit(KTHREAD_SHOULD_PARK, &self->flags))
 			break;
-		if (!test_and_set_bit(KTHREAD_IS_PARKED, &self->flags))
-			complete(&self->parked);
+
+		complete_all(&self->parked);
 		schedule();
 	}
-	clear_bit(KTHREAD_IS_PARKED, &self->flags);
 	__set_current_state(TASK_RUNNING);
 }
+
+#ifdef CONFIG_ARCH_HISI
+static void __kthread_parkme_smpboot(struct kthread *self)
+{
+	for (;;) {
+		/*
+		 * TASK_PARKED is a special state; we must serialize against
+		 * possible pending wakeups to avoid store-store collisions on
+		 * task->state.
+		 *
+		 * Such a collision might possibly result in the task state
+		 * changin from TASK_PARKED and us failing the
+		 * wait_task_inactive() in kthread_park().
+		 */
+		set_special_state(TASK_PARKED);
+		if (!test_bit(KTHREAD_SHOULD_PARK, &self->flags))
+			break;
+
+		complete_all_smpboot(&self->parked);
+		schedule();
+	}
+	__set_current_state(TASK_RUNNING);
+}
+#endif
 
 void kthread_parkme(void)
 {
 	__kthread_parkme(to_kthread(current));
 }
 EXPORT_SYMBOL_GPL(kthread_parkme);
+
+#ifdef CONFIG_ARCH_HISI
+static int kthread_smpboot(void *_create)
+{
+	/* Copy data: it's on kthread's stack */
+	struct kthread_create_info *create = _create;
+	int (*threadfn)(void *data) = create->threadfn;
+	void *data = create->data;
+	struct completion *done = NULL;
+	struct kthread *self = NULL;
+	int ret;
+
+	self = kmalloc(sizeof(*self), GFP_KERNEL);
+	set_kthread_struct(self);
+
+	/* If user was SIGKILLed, I release the structure. */
+	done = xchg(&create->done, NULL);
+	if (!done) {
+		kfree(create);
+		do_exit(-EINTR);
+	}
+
+	if (!self) {
+		create->result = ERR_PTR(-ENOMEM);
+		complete(done);
+		do_exit(-ENOMEM);
+	}
+
+	self->flags = 0;
+	self->data = data;
+	init_completion(&self->exited);
+	init_completion(&self->parked);
+	current->vfork_done = &self->exited;
+
+	/* OK, tell user we're spawned, wait for stop or wakeup */
+	__set_current_state(TASK_UNINTERRUPTIBLE);
+	create->result = current;
+	complete_smpboot(done);
+	schedule();
+
+	ret = -EINTR;
+	if (!test_bit(KTHREAD_SHOULD_STOP, &self->flags)) {
+		cgroup_kthread_ready();
+		__kthread_parkme_smpboot(self);
+		ret = threadfn(data);
+	}
+	do_exit(ret);
+}
+#endif
 
 static int kthread(void *_create)
 {
@@ -252,7 +346,12 @@ static void create_kthread(struct kthread_create_info *create)
 	current->pref_node_fork = create->node;
 #endif
 	/* We want our own signal handler (we take no signals by default). */
-	pid = kernel_thread(kthread, create, CLONE_FS | CLONE_FILES | SIGCHLD);
+#ifdef CONFIG_ARCH_HISI
+	if (unlikely(smpboot_creating_threads()))
+		pid = kernel_thread(kthread_smpboot, create, CLONE_FS | CLONE_FILES | SIGCHLD);
+	else
+#endif
+		pid = kernel_thread(kthread, create, CLONE_FS | CLONE_FILES | SIGCHLD);
 	if (pid < 0) {
 		/* If user was SIGKILLed, I release the structure. */
 		struct completion *done = xchg(&create->done, NULL);
@@ -450,22 +549,19 @@ void kthread_unpark(struct task_struct *k)
 {
 	struct kthread *kthread = to_kthread(k);
 
+	/*
+	 * Newly created kthread was parked when the CPU was offline.
+	 * The binding was lost and we need to set it again.
+	 */
+	if (test_bit(KTHREAD_IS_PER_CPU, &kthread->flags))
+		__kthread_bind(k, kthread->cpu, TASK_PARKED);
+
+	reinit_completion(&kthread->parked);
 	clear_bit(KTHREAD_SHOULD_PARK, &kthread->flags);
 	/*
-	 * We clear the IS_PARKED bit here as we don't wait
-	 * until the task has left the park code. So if we'd
-	 * park before that happens we'd see the IS_PARKED bit
-	 * which might be about to be cleared.
+	 * __kthread_parkme() will either see !SHOULD_PARK or get the wakeup.
 	 */
-	if (test_and_clear_bit(KTHREAD_IS_PARKED, &kthread->flags)) {
-		/*
-		 * Newly created kthread was parked when the CPU was offline.
-		 * The binding was lost and we need to set it again.
-		 */
-		if (test_bit(KTHREAD_IS_PER_CPU, &kthread->flags))
-			__kthread_bind(k, kthread->cpu, TASK_PARKED);
-		wake_up_state(k, TASK_PARKED);
-	}
+	wake_up_state(k, TASK_PARKED);
 }
 EXPORT_SYMBOL_GPL(kthread_unpark);
 
@@ -488,12 +584,19 @@ int kthread_park(struct task_struct *k)
 	if (WARN_ON(k->flags & PF_EXITING))
 		return -ENOSYS;
 
-	if (!test_bit(KTHREAD_IS_PARKED, &kthread->flags)) {
-		set_bit(KTHREAD_SHOULD_PARK, &kthread->flags);
-		if (k != current) {
-			wake_up_process(k);
-			wait_for_completion(&kthread->parked);
-		}
+	set_bit(KTHREAD_SHOULD_PARK, &kthread->flags);
+	if (k != current) {
+		wake_up_process(k);
+		/*
+		 * Wait for __kthread_parkme() to complete(), this means we
+		 * _will_ have TASK_PARKED and are about to call schedule().
+		 */
+		wait_for_completion(&kthread->parked);
+		/*
+		 * Now wait for that schedule() to complete and the task to
+		 * get scheduled out.
+		 */
+		WARN_ON_ONCE(!wait_task_inactive(k, TASK_PARKED));
 	}
 
 	return 0;
@@ -831,7 +934,8 @@ void kthread_delayed_work_timer_fn(unsigned long __data)
 	/* Move the work from worker->delayed_work_list. */
 	WARN_ON_ONCE(list_empty(&work->node));
 	list_del_init(&work->node);
-	kthread_insert_work(worker, work, &worker->work_list);
+	if (!work->canceling)
+		kthread_insert_work(worker, work, &worker->work_list);
 
 	spin_unlock(&worker->lock);
 }

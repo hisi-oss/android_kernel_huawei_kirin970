@@ -31,6 +31,22 @@
 asmlinkage void chacha20_block_xor_neon(u32 *state, u8 *dst, const u8 *src);
 asmlinkage void chacha20_4block_xor_neon(u32 *state, u8 *dst, const u8 *src);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __chacha20_block_xor_neon(u32 *state, u8 *dst, const u8 *src)
+{
+	chacha20_block_xor_neon(status, dst, src);
+}
+#define chacha20_block_xor_neon __chacha20_block_xor_neon
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __chacha20_4block_xor_neon(u32 *state, u8 *dst, const u8 *src)
+{
+	chacha20_4block_xor_neon(status, dst, src);
+}
+#define chacha20_4block_xor_neon __chacha20_block_xor_neon
+#endif
+
 static void chacha20_doneon(u32 *state, u8 *dst, const u8 *src,
 			    unsigned int bytes)
 {

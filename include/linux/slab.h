@@ -15,8 +15,10 @@
 #include <linux/gfp.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
-
-
+#include <linux/mm.h>
+#ifdef CONFIG_HISI_PAGE_TRACE
+#include <linux/hisi/mem_trace.h>
+#endif
 /*
  * Flags to pass to kmem_cache_create().
  * The ones marked DEBUG are only valid if CONFIG_DEBUG_SLAB is set.
@@ -28,6 +30,13 @@
 #define SLAB_CACHE_DMA		0x00004000UL	/* Use GFP_DMA memory */
 #define SLAB_STORE_USER		0x00010000UL	/* DEBUG: Store the last owner for bug hunting */
 #define SLAB_PANIC		0x00040000UL	/* Panic if kmem_cache_create() fails */
+#ifdef CONFIG_HW_SLUB_SANITIZE
+#define SLAB_CLEAR              0x00000200UL    /* Clear object when it is freed */
+#endif
+
+#ifdef CONFIG_HW_SLUB_DF
+#define SLAB_DOUBLEFREE_CHECK              0x00001000UL    /* Enable double free check dynamically */
+#endif
 /*
  * SLAB_TYPESAFE_BY_RCU - **WARNING** READ THIS!
  *
@@ -95,6 +104,13 @@
 #define SLAB_KASAN		0x00000000UL
 #endif
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+#define SLAB_HISI_NOTRACE     0x10000000UL
+#define SLAB_HISI_TRACE       0x20000000UL
+#else
+#define SLAB_HISI_NOTRACE     0x00000000UL
+#define SLAB_HISI_TRACE       0x00000000UL
+#endif
 /* The following flags affect the page allocator grouping pages by mobility */
 #define SLAB_RECLAIM_ACCOUNT	0x00020000UL		/* Objects are reclaimable */
 #define SLAB_TEMPORARY		SLAB_RECLAIM_ACCOUNT	/* Objects are short-lived */
@@ -267,11 +283,42 @@ static inline const char *__check_heap_object(const void *ptr,
 #define SLAB_OBJ_MIN_SIZE      (KMALLOC_MIN_SIZE < 16 ? \
                                (KMALLOC_MIN_SIZE) : 16)
 
-#ifndef CONFIG_SLOB
-extern struct kmem_cache *kmalloc_caches[KMALLOC_SHIFT_HIGH + 1];
+/*
+ * Whenever changing this, take care of that kmalloc_type() and
+ * create_kmalloc_caches() still work as intended.
+ */
+enum kmalloc_cache_type {
+	KMALLOC_NORMAL = 0,
+	KMALLOC_RECLAIM,
 #ifdef CONFIG_ZONE_DMA
-extern struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
+	KMALLOC_DMA,
 #endif
+	NR_KMALLOC_TYPES
+};
+
+#ifndef CONFIG_SLOB
+extern struct kmem_cache *
+kmalloc_caches[NR_KMALLOC_TYPES][KMALLOC_SHIFT_HIGH + 1];
+
+static __always_inline enum kmalloc_cache_type kmalloc_type(gfp_t flags)
+{
+	int is_dma = 0;
+	int type_dma = 0;
+	int is_reclaimable;
+
+#ifdef CONFIG_ZONE_DMA
+	is_dma = !!(flags & __GFP_DMA);
+	type_dma = is_dma * KMALLOC_DMA;
+#endif
+
+	is_reclaimable = !!(flags & __GFP_RECLAIMABLE);
+
+	/*
+	 * If an allocation is both __GFP_DMA and __GFP_RECLAIMABLE, return
+	 * KMALLOC_DMA and effectively ignore __GFP_RECLAIMABLE
+	 */
+	return type_dma + (is_reclaimable & !is_dma) * KMALLOC_RECLAIM;
+}
 
 /*
  * Figure out which kmalloc slab an allocation of a certain size
@@ -416,6 +463,7 @@ kmalloc_order_trace(size_t size, gfp_t flags, unsigned int order)
 static __always_inline void *kmalloc_large(size_t size, gfp_t flags)
 {
 	unsigned int order = get_order(size);
+
 	return kmalloc_order_trace(size, flags, order);
 }
 
@@ -476,18 +524,20 @@ static __always_inline void *kmalloc_large(size_t size, gfp_t flags)
 static __always_inline void *kmalloc(size_t size, gfp_t flags)
 {
 	if (__builtin_constant_p(size)) {
+#ifndef CONFIG_SLOB
+		unsigned int index;
+#endif
 		if (size > KMALLOC_MAX_CACHE_SIZE)
 			return kmalloc_large(size, flags);
 #ifndef CONFIG_SLOB
-		if (!(flags & GFP_DMA)) {
-			int index = kmalloc_index(size);
+		index = kmalloc_index(size);
 
-			if (!index)
-				return ZERO_SIZE_PTR;
+		if (!index)
+			return ZERO_SIZE_PTR;
 
-			return kmem_cache_alloc_trace(kmalloc_caches[index],
-					flags, size);
-		}
+		return kmem_cache_alloc_trace(
+				kmalloc_caches[kmalloc_type(flags)][index],
+				flags, size);
 #endif
 	}
 	return __kmalloc(size, flags);
@@ -517,13 +567,14 @@ static __always_inline void *kmalloc_node(size_t size, gfp_t flags, int node)
 {
 #ifndef CONFIG_SLOB
 	if (__builtin_constant_p(size) &&
-		size <= KMALLOC_MAX_CACHE_SIZE && !(flags & GFP_DMA)) {
+		size <= KMALLOC_MAX_CACHE_SIZE) {
 		int i = kmalloc_index(size);
 
 		if (!i)
 			return ZERO_SIZE_PTR;
 
-		return kmem_cache_alloc_node_trace(kmalloc_caches[i],
+		return kmem_cache_alloc_node_trace(
+				kmalloc_caches[kmalloc_type(flags)][i],
 						flags, node, size);
 	}
 #endif

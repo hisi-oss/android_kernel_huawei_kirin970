@@ -20,6 +20,9 @@
 #include <linux/uidgid.h>
 #include <linux/sched.h>
 #include <linux/sched/user.h>
+#ifdef CONFIG_HKIP_PROTECT_CRED
+#include <linux/hisi/prmem.h>
+#endif
 
 struct cred;
 struct inode;
@@ -31,7 +34,7 @@ struct group_info {
 	atomic_t	usage;
 	int		ngroups;
 	kgid_t		gid[0];
-} __randomize_layout;
+};
 
 /**
  * get_group_info - Get a reference to a group info structure
@@ -109,9 +112,22 @@ extern void groups_sort(struct group_info *);
  * same context as task->real_cred.
  */
 struct cred {
+/*
+ * Members that are frequently written are not in the protected range. We change
+ * these members into pointers which point to the corresponding rw members of
+ * struct cred_rw.
+ */
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	atomic_t	*usage;
+#else
 	atomic_t	usage;
+#endif
 #ifdef CONFIG_DEBUG_CREDENTIALS
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	atomic_t	*subscribers;	/* number of processes subscribed */
+#else
 	atomic_t	subscribers;	/* number of processes subscribed */
+#endif
 	void		*put_addr;
 	unsigned	magic;
 #define CRED_MAGIC	0x43736564
@@ -145,8 +161,13 @@ struct cred {
 	struct user_struct *user;	/* real user ID subscription */
 	struct user_namespace *user_ns; /* user_ns the caps and keyrings are relative to. */
 	struct group_info *group_info;	/* supplementary groups for euid/fsgid */
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	struct rcu_head *rcu;           /* RCU deletion hook */
+	struct task_struct *task;
+#else
 	struct rcu_head	rcu;		/* RCU deletion hook */
-} __randomize_layout;
+#endif
+};
 
 extern void __put_cred(struct cred *);
 extern void exit_creds(struct task_struct *);
@@ -157,7 +178,12 @@ extern struct cred *prepare_creds(void);
 extern struct cred *prepare_exec_creds(void);
 extern int commit_creds(struct cred *);
 extern void abort_creds(struct cred *);
+#ifdef CONFIG_HKIP_PROTECT_CRED
+extern const struct cred *hkip_override_creds(struct cred **cnew);
+#define override_creds(x) hkip_override_creds(&(x))
+#else
 extern const struct cred *override_creds(const struct cred *);
+#endif
 extern void revert_creds(const struct cred *);
 extern struct cred *prepare_kernel_cred(struct task_struct *);
 extern int change_create_files_as(struct cred *, struct inode *);
@@ -165,6 +191,76 @@ extern int set_security_override(struct cred *, u32);
 extern int set_security_override_from_ctx(struct cred *, const char *);
 extern int set_create_files_as(struct cred *, struct inode *);
 extern void __init cred_init(void);
+
+#ifdef CONFIG_HKIP_PROTECT_CRED
+
+/*
+ * struct cred_rw - unprotected subset of the fields of the cred structure
+ * @usage: refcounting for the parent cred structure
+ * @rcu: list head used for enqueuing jobs on the cred structure
+ * @cred_wr: back pointer to the parent cred structure
+ */
+struct cred_rw {
+	atomic_t usage;
+#ifdef CONFIG_DEBUG_CREDENTIALS
+	atomic_t subscribers;
+#endif
+	struct rcu_head rcu;
+	struct cred *cred_wr;
+};
+
+extern struct task_struct init_task;
+extern struct cred init_cred;
+
+/**
+ * validate_task_creds: consistency check of task->creds->task loops
+ * @t: pointer to the task structure
+ */
+#define validate_task_creds(t)						\
+do {									\
+	const struct task_struct *task = t;				\
+	struct cred *cred;						\
+	struct cred *real_cred;						\
+									\
+	WARN_ON(!task);							\
+	cred = (struct cred *)rcu_dereference_protected(task->cred, 1);	\
+	WARN_ON(!cred);							\
+	real_cred = (struct cred *)					\
+		rcu_dereference_protected(task->real_cred, 1);		\
+	WARN_ON(!real_cred);						\
+	if (likely(task != &init_task)) {				\
+		BUG_ON(!is_wr(real_cred, sizeof(struct cred)));		\
+		if (cred != real_cred)					\
+			BUG_ON(!is_wr(cred, sizeof(struct cred)));	\
+	} else {							\
+		BUG_ON(real_cred != &init_cred);			\
+		BUG_ON(cred != &init_cred);				\
+	}								\
+	BUG_ON(real_cred->task != task);				\
+	if (cred != real_cred)						\
+		BUG_ON(cred->task != task);				\
+} while (0)
+
+/**
+ * validate_cred_rw: consistency check of cred_rw->cred->cred_rw.rcu
+ * @c: pointer to the cred_rw structure
+ */
+#define validate_cred_rw(c)						\
+do {									\
+	struct cred_rw *cred_rw = c;					\
+									\
+	BUG_ON(!cred_rw->cred_wr);					\
+	if (likely(cred_rw->cred_wr != &init_cred))			\
+		BUG_ON(!is_rw(cred_rw, sizeof(struct cred_rw)));	\
+	BUG_ON(cred_rw->cred_wr->rcu != &cred_rw->rcu);			\
+} while (0)
+
+#else
+
+#define validate_task_creds(t)
+#define validate_cred_rw(c)
+
+#endif /* CONFIG_HKIP_PROTECT_CRED */
 
 /*
  * check for validity of credentials
@@ -222,7 +318,11 @@ static inline bool cap_ambient_invariant_ok(const struct cred *cred)
  */
 static inline struct cred *get_new_cred(struct cred *cred)
 {
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	atomic_inc(cred->usage);
+#else
 	atomic_inc(&cred->usage);
+#endif
 	return cred;
 }
 
@@ -262,7 +362,11 @@ static inline void put_cred(const struct cred *_cred)
 	struct cred *cred = (struct cred *) _cred;
 
 	validate_creds(cred);
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	if (atomic_dec_and_test((cred)->usage))
+#else
 	if (atomic_dec_and_test(&(cred)->usage))
+#endif
 		__put_cred(cred);
 }
 
@@ -273,7 +377,10 @@ static inline void put_cred(const struct cred *_cred)
  * since nobody else can modify it.
  */
 #define current_cred() \
-	rcu_dereference_protected(current->cred, 1)
+({									\
+	validate_task_creds(current);					\
+	rcu_dereference_protected(current->cred, 1);			\
+})
 
 /**
  * current_real_cred - Access the current task's objective credentials
@@ -282,7 +389,10 @@ static inline void put_cred(const struct cred *_cred)
  * since nobody else can modify it.
  */
 #define current_real_cred() \
-	rcu_dereference_protected(current->real_cred, 1)
+({									\
+	validate_task_creds(current);					\
+	rcu_dereference_protected(current->real_cred, 1);		\
+})
 
 /**
  * __task_cred - Access a task's objective credentials
@@ -295,7 +405,10 @@ static inline void put_cred(const struct cred *_cred)
  * rather get_task_cred() should be used instead.
  */
 #define __task_cred(task)	\
-	rcu_dereference((task)->real_cred)
+({									\
+	validate_task_creds(task);					\
+	rcu_dereference((task)->real_cred);				\
+})
 
 /**
  * get_current_cred - Get the current task's subjective credentials

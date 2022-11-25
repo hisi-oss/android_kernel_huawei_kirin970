@@ -54,7 +54,7 @@ struct ipmmu_vmsa_domain {
 	struct io_pgtable_ops *iop;
 
 	unsigned int context_id;
-	struct mutex mutex;			/* Protects mappings */
+	spinlock_t lock;			/* Protects mappings */
 };
 
 struct ipmmu_vmsa_iommu_priv {
@@ -424,9 +424,6 @@ static int ipmmu_domain_init_context(struct ipmmu_vmsa_domain *domain)
 
 static void ipmmu_domain_destroy_context(struct ipmmu_vmsa_domain *domain)
 {
-	if (!domain->mmu)
-		return;
-
 	/*
 	 * Disable the context. Flush the TLB as required when modifying the
 	 * context registers.
@@ -526,7 +523,7 @@ static struct iommu_domain *__ipmmu_domain_alloc(unsigned type)
 	if (!domain)
 		return NULL;
 
-	mutex_init(&domain->mutex);
+	spin_lock_init(&domain->lock);
 
 	return &domain->io_domain;
 }
@@ -551,6 +548,7 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 	struct iommu_fwspec *fwspec = dev->iommu_fwspec;
 	struct ipmmu_vmsa_device *mmu = priv->mmu;
 	struct ipmmu_vmsa_domain *domain = to_vmsa_domain(io_domain);
+	unsigned long flags;
 	unsigned int i;
 	int ret = 0;
 
@@ -559,7 +557,7 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 		return -ENXIO;
 	}
 
-	mutex_lock(&domain->mutex);
+	spin_lock_irqsave(&domain->lock, flags);
 
 	if (!domain->mmu) {
 		/* The domain hasn't been used yet, initialize it. */
@@ -576,7 +574,7 @@ static int ipmmu_attach_device(struct iommu_domain *io_domain,
 	} else
 		dev_info(dev, "Reusing IPMMU context %u\n", domain->context_id);
 
-	mutex_unlock(&domain->mutex);
+	spin_unlock_irqrestore(&domain->lock, flags);
 
 	if (ret < 0)
 		return ret;

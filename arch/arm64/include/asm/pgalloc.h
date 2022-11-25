@@ -23,6 +23,9 @@
 #include <asm/processor.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
+#ifdef CONFIG_HKIP_PRMEM
+#include <linux/hisi/prmem.h>
+#endif
 
 #define check_pgt_cache()		do { } while (0)
 
@@ -33,12 +36,22 @@
 
 static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(is_pmalloc((void *)addr, 1)))
+		return (pmd_t *)pmalloc_get_page_table_page();
+#endif
 	return (pmd_t *)__get_free_page(PGALLOC_GFP);
 }
 
 static inline void pmd_free(struct mm_struct *mm, pmd_t *pmd)
 {
 	BUG_ON((unsigned long)pmd & (PAGE_SIZE-1));
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(is_pmalloc_page_table_page((unsigned long)pmd))) {
+		pmalloc_put_page_table_page((unsigned long)pmd);
+		return;
+	}
+#endif
 	free_page((unsigned long)pmd);
 }
 
@@ -62,12 +75,22 @@ static inline void __pud_populate(pud_t *pud, phys_addr_t pmd, pudval_t prot)
 
 static inline pud_t *pud_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(is_pmalloc((void *)addr, 1)))
+		return (pud_t *)pmalloc_get_page_table_page();
+#endif
 	return (pud_t *)__get_free_page(PGALLOC_GFP);
 }
 
 static inline void pud_free(struct mm_struct *mm, pud_t *pud)
 {
 	BUG_ON((unsigned long)pud & (PAGE_SIZE-1));
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(is_pmalloc_page_table_page((unsigned long)pud))) {
+		pmalloc_put_page_table_page((unsigned long)pud);
+		return;
+	}
+#endif
 	free_page((unsigned long)pud);
 }
 
@@ -93,14 +116,41 @@ extern void pgd_free(struct mm_struct *mm, pgd_t *pgd);
 static inline pte_t *
 pte_alloc_one_kernel(struct mm_struct *mm, unsigned long addr)
 {
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(is_pmalloc((void *)addr, 1)))
+		return (pte_t *)pmalloc_get_page_table_page();
+#endif
 	return (pte_t *)__get_free_page(PGALLOC_GFP);
 }
+
+#ifdef CONFIG_HKIP_PRMEM
+static inline pgtable_t
+pmalloc_pte_alloc_one(struct mm_struct *mm, unsigned long addr)
+{
+	struct page *pte = NULL;
+	void *p = NULL;
+
+	p = (void *)pmalloc_get_page_table_page();
+	if (unlikely(p == NULL))
+		return NULL;
+	pte = virt_to_page(p);
+	if (!pgtable_page_ctor(pte)) {
+		pmalloc_put_page_table_page((unsigned long)p);
+		return NULL;
+	}
+	return pte;
+}
+#endif
 
 static inline pgtable_t
 pte_alloc_one(struct mm_struct *mm, unsigned long addr)
 {
 	struct page *pte;
 
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(is_pmalloc((void *)addr, 1)))
+		return pmalloc_pte_alloc_one(mm, addr);
+#endif
 	pte = alloc_pages(PGALLOC_GFP, 0);
 	if (!pte)
 		return NULL;
@@ -116,13 +166,31 @@ pte_alloc_one(struct mm_struct *mm, unsigned long addr)
  */
 static inline void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
 {
+#ifdef CONFIG_HKIP_PRMEM
+	if (unlikely(pte &&
+		     is_pmalloc_page_table_page((unsigned long)pte))) {
+		pmalloc_put_page_table_page((unsigned long)pte);
+		return;
+	}
+#endif
 	if (pte)
 		free_page((unsigned long)pte);
 }
 
 static inline void pte_free(struct mm_struct *mm, pgtable_t pte)
 {
+#ifdef CONFIG_HKIP_PRMEM
+	unsigned long addr;
+#endif
+
 	pgtable_page_dtor(pte);
+#ifdef CONFIG_HKIP_PRMEM
+	addr = (unsigned long)page_to_virt(pte);
+	if (unlikely(is_pmalloc_page_table_page(addr))) {
+		pmalloc_put_page_table_page(addr);
+		return;
+	}
+#endif
 	__free_page(pte);
 }
 

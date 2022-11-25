@@ -1884,10 +1884,8 @@ static int abort_rpl(struct c4iw_dev *dev, struct sk_buff *skb)
 	}
 	mutex_unlock(&ep->com.mutex);
 
-	if (release) {
-		close_complete_upcall(ep, -ECONNRESET);
+	if (release)
 		release_ep_resources(ep);
-	}
 	c4iw_put_ep(&ep->com);
 	return 0;
 }
@@ -3586,6 +3584,7 @@ int c4iw_ep_disconnect(struct c4iw_ep *ep, int abrupt, gfp_t gfp)
 	if (close) {
 		if (abrupt) {
 			set_bit(EP_DISC_ABORT, &ep->com.history);
+			close_complete_upcall(ep, -ECONNRESET);
 			ret = send_abort(ep);
 		} else {
 			set_bit(EP_DISC_CLOSE, &ep->com.history);
@@ -3753,7 +3752,11 @@ static void build_cpl_pass_accept_req(struct sk_buff *skb, int stid , u8 tos)
 	 */
 	memset(&tmp_opt, 0, sizeof(tmp_opt));
 	tcp_clear_options(&tmp_opt);
+#ifdef CONFIG_MPTCP
+	tcp_parse_options(&init_net, skb, &tmp_opt, NULL, 0, NULL, NULL);
+#else
 	tcp_parse_options(&init_net, skb, &tmp_opt, 0, NULL);
+#endif
 
 	req = __skb_push(skb, sizeof(*req));
 	memset(req, 0, sizeof(*req));

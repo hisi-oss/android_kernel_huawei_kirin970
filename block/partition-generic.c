@@ -19,12 +19,18 @@
 #include <linux/genhd.h>
 #include <linux/blktrace_api.h>
 
+#ifdef CONFIG_FSCK_BOOST
+#include <linux/fsck_boost.h>
+#endif
+
+#include "blk.h"
+
 #include "partitions/check.h"
 
 #ifdef CONFIG_BLK_DEV_MD
 extern void md_autodetect_dev(dev_t dev);
 #endif
- 
+
 /*
  * disk_name() is used by partition check code and the genhd driver.
  * It formats the devicename of the indicated disk into
@@ -393,6 +399,10 @@ struct hd_struct *add_partition(struct gendisk *disk, int partno,
 	/* everything is up and running, commence */
 	rcu_assign_pointer(ptbl->part[partno], p);
 
+#ifdef CONFIG_FSCK_BOOST
+	fsck_boost_start(disk, info, partno, len);
+#endif
+
 	/* suppress uevent if the disk suppresses it */
 	if (!dev_get_uevent_suppress(ddev))
 		kobject_uevent(&pdev->kobj, KOBJ_ADD);
@@ -536,6 +546,9 @@ rescan:
 		}
 		return -EIO;
 	}
+#ifdef CONFIG_MAS_BLK
+	mas_blk_check_partition_done(disk, true);
+#endif
 	/*
 	 * If any partition code tried to read beyond EOD, try
 	 * unlocking native capacity even if partition table is

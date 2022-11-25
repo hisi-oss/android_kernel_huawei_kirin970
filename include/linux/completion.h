@@ -149,5 +149,9 @@ extern bool completion_done(struct completion *x);
 
 extern void complete(struct completion *);
 extern void complete_all(struct completion *);
+#ifdef CONFIG_ARCH_HISI
+extern void complete_smpboot(struct completion *);
+extern void complete_all_smpboot(struct completion *);
+#endif
 
 #endif

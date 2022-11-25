@@ -34,6 +34,10 @@
 #include "avc_ss.h"
 #include "classmap.h"
 
+#ifdef CONFIG_SECURITY_SELINUX_TRACE_LOG
+#include "selinux_avc_trace.h"
+#endif
+
 #define AVC_CACHE_SLOTS			512
 #define AVC_DEF_CACHE_THRESHOLD		512
 #define AVC_CACHE_RECLAIM		16
@@ -148,11 +152,18 @@ static void avc_dump_query(struct audit_buffer *ab, u32 ssid, u32 tsid, u16 tcla
 	int rc;
 	char *scontext;
 	u32 scontext_len;
+#ifdef CONFIG_SECURITY_SELINUX_TRACE_LOG
+	int match;
+	match = avc_getcontext();
+#endif
 
 	rc = security_sid_to_context(ssid, &scontext, &scontext_len);
 	if (rc)
 		audit_log_format(ab, "ssid=%d", ssid);
 	else {
+#ifdef CONFIG_SECURITY_SELINUX_TRACE_LOG
+		match = match && !strcmp(scontext, avc_scontext);
+#endif
 		audit_log_format(ab, "scontext=%s", scontext);
 		kfree(scontext);
 	}
@@ -161,12 +172,23 @@ static void avc_dump_query(struct audit_buffer *ab, u32 ssid, u32 tsid, u16 tcla
 	if (rc)
 		audit_log_format(ab, " tsid=%d", tsid);
 	else {
+#ifdef CONFIG_SECURITY_SELINUX_TRACE_LOG
+		match = match && !strcmp(scontext, avc_tcontext);
+#endif
 		audit_log_format(ab, " tcontext=%s", scontext);
 		kfree(scontext);
 	}
 
 	BUG_ON(!tclass || tclass >= ARRAY_SIZE(secclass_map));
 	audit_log_format(ab, " tclass=%s", secclass_map[tclass-1].name);
+
+#ifdef CONFIG_SECURITY_SELINUX_TRACE_LOG
+	match = match && !strcmp(secclass_map[tclass - 1].name, avc_tclass);
+	if (match) {
+		pr_info("========== SELinux avc trace log ==========");
+		force_sig(SIGABRT, current);
+	}
+#endif
 }
 
 /**
@@ -675,7 +697,7 @@ static struct avc_node *avc_insert(u32 ssid, u32 tsid, u16 tclass,
 		avc_node_populate(node, ssid, tsid, tclass, avd);
 		rc = avc_xperms_populate(node, xp_node);
 		if (rc) {
-			kmem_cache_free(avc_node_cachep, node);
+			avc_node_kill(node);
 			return NULL;
 		}
 		head = &avc_cache.slots[hvalue];
@@ -863,7 +885,7 @@ static int avc_update_node(u32 event, u32 perms, u8 driver, u8 xperm, u32 ssid,
 	if (orig->ae.xp_node) {
 		rc = avc_xperms_populate(node, orig->ae.xp_node);
 		if (rc) {
-			kmem_cache_free(avc_node_cachep, node);
+			avc_node_kill(node);
 			goto out_unlock;
 		}
 	}

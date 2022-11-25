@@ -236,11 +236,14 @@ struct scsi_varlen_cdb_hdr {
 #define UNIT_ATTENTION      0x06
 #define DATA_PROTECT        0x07
 #define BLANK_CHECK         0x08
+#if defined(CONFIG_MAS_ORDER_PRESERVE) || defined(CONFIG_MAS_UNISTORE_PRESERVE)
+#define VENDOR_SPEC         0x09
+#endif
 #define COPY_ABORTED        0x0a
 #define ABORTED_COMMAND     0x0b
 #define VOLUME_OVERFLOW     0x0d
 #define MISCOMPARE          0x0e
-
+#define HI1861_INTERNEL     0x0C /*for HI1861*/
 
 /*
  *  DEVICE TYPES

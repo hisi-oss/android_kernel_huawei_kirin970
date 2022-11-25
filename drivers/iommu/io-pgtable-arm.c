@@ -27,7 +27,10 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/dma-mapping.h>
-
+#include <linux/hisi-iommu.h>
+#ifdef CONFIG_HISI_LB
+#include <linux/hisi/hisi_lb.h>
+#endif
 #include <asm/barrier.h>
 
 #include "io-pgtable.h"
@@ -210,6 +213,20 @@ static dma_addr_t __arm_lpae_dma_addr(void *pages)
 	return (dma_addr_t)virt_to_phys(pages);
 }
 
+void *arm_get_pgd_from_ops(struct io_pgtable_ops *ops)
+{
+	struct arm_lpae_io_pgtable *data = NULL;
+
+	if (!ops)
+		return NULL;
+
+	data = io_pgtable_ops_to_data(ops);/*lint !e578 */
+	if (!data)
+		return NULL;
+
+	return data->pgd;
+}
+
 static void *__arm_lpae_alloc_pages(size_t size, gfp_t gfp,
 				    struct io_pgtable_cfg *cfg)
 {
@@ -268,6 +285,12 @@ static void __arm_lpae_set_pte(arm_lpae_iopte *ptep, arm_lpae_iopte pte,
 		__arm_lpae_sync_pte(ptep, cfg);
 }
 
+static inline void __arm_lpae_set_pte_raw(arm_lpae_iopte *ptep,
+				arm_lpae_iopte pte)
+{
+	*ptep = pte;
+}
+
 static int __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 			    unsigned long iova, size_t size, int lvl,
 			    arm_lpae_iopte *ptep);
@@ -289,7 +312,7 @@ static void __arm_lpae_init_pte(struct arm_lpae_io_pgtable *data,
 	pte |= ARM_LPAE_PTE_AF | ARM_LPAE_PTE_SH_IS;
 	pte |= pfn_to_iopte(paddr >> data->pg_shift, data);
 
-	__arm_lpae_set_pte(ptep, pte, &data->iop.cfg);
+	__arm_lpae_set_pte_raw(ptep, pte);
 }
 
 static int arm_lpae_init_pte(struct arm_lpae_io_pgtable *data,
@@ -375,7 +398,7 @@ static int __arm_lpae_map(struct arm_lpae_io_pgtable *data, unsigned long iova,
 	/* Grab a pointer to the next level */
 	pte = READ_ONCE(*ptep);
 	if (!pte) {
-		cptep = __arm_lpae_alloc_pages(tblsz, GFP_ATOMIC, cfg);
+		cptep = __arm_lpae_alloc_pages(tblsz, GFP_KERNEL, cfg);
 		if (!cptep)
 			return -ENOMEM;
 
@@ -402,6 +425,10 @@ static int __arm_lpae_map(struct arm_lpae_io_pgtable *data, unsigned long iova,
 static arm_lpae_iopte arm_lpae_prot_to_pte(struct arm_lpae_io_pgtable *data,
 					   int prot)
 {
+#ifdef CONFIG_HISI_LB
+	int pid = 0;
+#endif
+
 	arm_lpae_iopte pte;
 
 	if (data->iop.fmt == ARM_64_LPAE_S1 ||
@@ -436,6 +463,11 @@ static arm_lpae_iopte arm_lpae_prot_to_pte(struct arm_lpae_io_pgtable *data,
 
 	if (prot & IOMMU_NOEXEC)
 		pte |= ARM_LPAE_PTE_XN;
+
+#ifdef CONFIG_HISI_LB
+	pid = (prot & IOMMU_PORT_MASK) >> IOMMU_PORT_SHIFT;
+	pte |= !pid  ?  0 : lb_pid_to_gidphys(pid);
+#endif
 
 	return pte;
 }
@@ -521,7 +553,7 @@ static int arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
 	if (WARN_ON(lvl == ARM_LPAE_MAX_LEVELS))
 		return 0;
 
-	tablep = __arm_lpae_alloc_pages(tablesz, GFP_ATOMIC, cfg);
+	tablep = __arm_lpae_alloc_pages(tablesz, GFP_KERNEL, cfg);
 	if (!tablep)
 		return 0; /* Bytes unmapped */
 
@@ -551,13 +583,12 @@ static int arm_lpae_split_blk_unmap(struct arm_lpae_io_pgtable *data,
 			return 0;
 
 		tablep = iopte_deref(pte, data);
+	} else if (unmap_idx >= 0) {
+		io_pgtable_tlb_add_flush(&data->iop, iova, size, size, true);
+		return size;
 	}
 
-	if (unmap_idx < 0)
-		return __arm_lpae_unmap(data, iova, size, lvl, tablep);
-
-	io_pgtable_tlb_add_flush(&data->iop, iova, size, size, true);
-	return size;
+	return __arm_lpae_unmap(data, iova, size, lvl, tablep);
 }
 
 static int __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
@@ -743,7 +774,7 @@ arm_lpae_alloc_pgtable(struct io_pgtable_cfg *cfg)
 static struct io_pgtable *
 arm_64_lpae_alloc_pgtable_s1(struct io_pgtable_cfg *cfg, void *cookie)
 {
-	u64 reg;
+	u64 reg = 0;
 	struct arm_lpae_io_pgtable *data;
 
 	if (cfg->quirks & ~(IO_PGTABLE_QUIRK_ARM_NS | IO_PGTABLE_QUIRK_NO_DMA))
@@ -754,10 +785,6 @@ arm_64_lpae_alloc_pgtable_s1(struct io_pgtable_cfg *cfg, void *cookie)
 		return NULL;
 
 	/* TCR */
-	reg = (ARM_LPAE_TCR_SH_IS << ARM_LPAE_TCR_SH0_SHIFT) |
-	      (ARM_LPAE_TCR_RGN_WBWA << ARM_LPAE_TCR_IRGN0_SHIFT) |
-	      (ARM_LPAE_TCR_RGN_WBWA << ARM_LPAE_TCR_ORGN0_SHIFT);
-
 	switch (ARM_LPAE_GRANULE(data)) {
 	case SZ_4K:
 		reg |= ARM_LPAE_TCR_TG0_4K;

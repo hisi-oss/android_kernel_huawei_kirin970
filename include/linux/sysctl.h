@@ -42,6 +42,10 @@ typedef int proc_handler (struct ctl_table *ctl, int write,
 
 extern int proc_dostring(struct ctl_table *, int,
 			 void __user *, size_t *, loff_t *);
+#ifdef CONFIG_HKIP_PROTECT_POWEROFF_CMD
+extern int proc_dowrstring(struct ctl_table *, int,
+			   void __user *, size_t *, loff_t *);
+#endif
 extern int proc_dointvec(struct ctl_table *, int,
 			 void __user *, size_t *, loff_t *);
 extern int proc_douintvec(struct ctl_table *, int,
@@ -200,6 +204,9 @@ void unregister_sysctl_table(struct ctl_table_header * table);
 extern int sysctl_init(void);
 
 extern struct ctl_table sysctl_mount_point[];
+#ifdef CONFIG_HW_DSS_BOOST
+extern int g_dss_boost_enabled;
+#endif
 
 #else /* CONFIG_SYSCTL */
 static inline struct ctl_table_header *register_sysctl_table(struct ctl_table * table)

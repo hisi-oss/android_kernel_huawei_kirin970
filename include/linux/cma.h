@@ -20,6 +20,11 @@
 struct cma;
 
 extern unsigned long totalcma_pages;
+#ifdef CONFIG_ZONE_MEDIA
+extern unsigned long cma_min_pfn;
+extern unsigned long cma_max_pfn;
+extern bool is_cma_pfn(unsigned long pfn);
+#endif
 extern phys_addr_t cma_get_base(const struct cma *cma);
 extern unsigned long cma_get_size(const struct cma *cma);
 extern const char *cma_get_name(const struct cma *cma);
@@ -33,7 +38,7 @@ extern int cma_init_reserved_mem(phys_addr_t base, phys_addr_t size,
 					const char *name,
 					struct cma **res_cma);
 extern struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
-			      gfp_t gfp_mask);
+			      bool no_warn);
 extern bool cma_release(struct cma *cma, const struct page *pages, unsigned int count);
 
 extern int cma_for_each_area(int (*it)(struct cma *cma, void *data), void *data);

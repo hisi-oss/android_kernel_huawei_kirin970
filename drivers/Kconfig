@@ -3,6 +3,8 @@ menu "Device Drivers"
 
 source "drivers/amba/Kconfig"
 
+source "drivers/bootdevice/Kconfig"
+
 source "drivers/base/Kconfig"
 
 source "drivers/bus/Kconfig"
@@ -55,6 +57,8 @@ source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
 
+source "drivers/i3c/Kconfig"
+
 source "drivers/spi/Kconfig"
 
 source "drivers/spmi/Kconfig"
@@ -89,6 +93,8 @@ source "drivers/regulator/Kconfig"
 
 source "drivers/media/Kconfig"
 
+source "drivers/vcodec/hi_vcodec/Kconfig"
+
 source "drivers/video/Kconfig"
 
 source "sound/Kconfig"
@@ -101,9 +107,13 @@ source "drivers/uwb/Kconfig"
 
 source "drivers/mmc/Kconfig"
 
+source "drivers/iomt_host/Kconfig"
+
 source "drivers/memstick/Kconfig"
 
 source "drivers/leds/Kconfig"
+
+source "drivers/switch/Kconfig"
 
 source "drivers/accessibility/Kconfig"
 
@@ -175,6 +185,8 @@ source "drivers/ipack/Kconfig"
 
 source "drivers/reset/Kconfig"
 
+source "drivers/gpu/Kconfig"
+
 source "drivers/fmc/Kconfig"
 
 source "drivers/phy/Kconfig"
@@ -209,4 +221,67 @@ source "drivers/tee/Kconfig"
 
 source "drivers/mux/Kconfig"
 
+source "drivers/hisi/Kconfig"
+
+source "drivers/huawei_platform/Kconfig"
+
+-source "drivers/huawei_armpc_platform/Kconfig"
+
+source "drivers/dsm/Kconfig"
+
+source "drivers/log/Kconfig"
+
+source "drivers/hwbootfail/Kconfig"
+
+source "drivers/hwzerohung/Kconfig"
+
+source "drivers/hwusb/Kconfig"
+
+source "drivers/hwpower/Kconfig"
+
+source "drivers/hwsensors/Kconfig"
+
+source "drivers/contexthub/Kconfig"
+
+source "drivers/hwnet/Kconfig"
+
+source "drivers/hwfdleak/Kconfig"
+
+source "drivers/hwerecovery/Kconfig"
+source "drivers/hwmemcheck/Kconfig"
+
+source "drivers/devkit/audiokit/Kconfig"
+
+source "drivers/spmi_hisi/Kconfig"
+
+source "drivers/devkit/lcdkit/Kconfig"
+source "drivers/dubai/Kconfig"
+
+source "drivers/cfi/Kconfig"
+
+source "drivers/cpuload/Kconfig"
+
+source "drivers/devkit/tpkit/Kconfig"
+
+source "drivers/connectivity/Kconfig"
+
+source "drivers/storage_rofa/Kconfig"
+
+source "drivers/mmonitor/Kconfig"
+
+source "drivers/hwxcollie/Kconfig"
+
+source "drivers/hitrace/Kconfig"
+
+source "drivers/echub/Kconfig"
+
+source "drivers/reclaim_acct/Kconfig"
+
+source "drivers/task_mem_stat/Kconfig"
+
+source "drivers/swapfile/Kconfig"
+
+-source "drivers/ics_drivers/Kconfig"
+
+source "drivers/emcom/Kconfig"
 endmenu

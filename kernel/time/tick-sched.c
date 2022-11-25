@@ -23,6 +23,7 @@
 #include <linux/sched/clock.h>
 #include <linux/sched/stat.h>
 #include <linux/sched/nohz.h>
+#include <linux/timer.h>
 #include <linux/module.h>
 #include <linux/irq_work.h>
 #include <linux/posix-timers.h>
@@ -60,8 +61,9 @@ static void tick_do_update_jiffies64(ktime_t now)
 
 	/*
 	 * Do a quick check without holding jiffies_lock:
+	 * The READ_ONCE() pairs with two updates done later in this function.
 	 */
-	delta = ktime_sub(now, last_jiffies_update);
+	delta = ktime_sub(now, READ_ONCE(last_jiffies_update));
 	if (delta < tick_period)
 		return;
 
@@ -72,8 +74,9 @@ static void tick_do_update_jiffies64(ktime_t now)
 	if (delta >= tick_period) {
 
 		delta = ktime_sub(delta, tick_period);
-		last_jiffies_update = ktime_add(last_jiffies_update,
-						tick_period);
+		/* Pairs with the lockless read in this function. */
+		WRITE_ONCE(last_jiffies_update,
+			   ktime_add(last_jiffies_update, tick_period));
 
 		/* Slow path for long timeouts */
 		if (unlikely(delta >= tick_period)) {
@@ -81,8 +84,10 @@ static void tick_do_update_jiffies64(ktime_t now)
 
 			ticks = ktime_divns(delta, incr);
 
-			last_jiffies_update = ktime_add_ns(last_jiffies_update,
-							   incr * ticks);
+			/* Pairs with the lockless read in this function. */
+			WRITE_ONCE(last_jiffies_update,
+				   ktime_add_ns(last_jiffies_update,
+						incr * ticks));
 		}
 		do_timer(++ticks);
 
@@ -570,6 +575,30 @@ static void tick_nohz_start_idle(struct tick_sched *ts)
 	sched_clock_idle_sleep_event();
 }
 
+#ifdef CONFIG_CPUSET_TASKS_CROWDED_WORKAROUND
+/* get the busy time of a CPU since last idle exit */
+u64 get_cpu_nonidle_time_us(int cpu)
+{
+	ktime_t now, delta;
+	struct tick_sched *ts = NULL;
+
+	if (cpu < 0 || cpu >= nr_cpu_ids)
+		return 0;
+
+	if (!tick_nohz_active)
+		return 0;
+
+	ts = &per_cpu(tick_cpu_sched, cpu);
+	if (ts->idle_active)
+		return 0;
+
+	now = ktime_get();
+	delta = ktime_sub(now, ts->idle_exittime);
+
+	return ktime_to_us(delta);
+}
+#endif
+
 /**
  * get_cpu_idle_time_us - get the total idle time of a CPU
  * @cpu: CPU number to query
@@ -956,6 +985,11 @@ static void __tick_nohz_idle_stop_tick(struct tick_sched *ts)
 	ktime_t expires;
 	int cpu = smp_processor_id();
 
+#ifdef CONFIG_SMP
+	if (check_pending_deferrable_timers(cpu))
+		raise_softirq_irqoff(TIMER_SOFTIRQ);
+#endif
+
 	/*
 	 * If tick_nohz_get_sleep_length() ran tick_nohz_next_event(), the
 	 * tick timer expiration time is known already.
@@ -1049,10 +1083,14 @@ void tick_nohz_irq_exit(void)
 {
 	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
 
-	if (ts->inidle)
+	if (ts->inidle) {
+		/* Cancel the timer because CPU already waken up from the C-states*/
+		menu_hrtimer_cancel();
 		tick_nohz_start_idle(ts);
-	else
+	}
+	else {
 		tick_nohz_full_update_tick(ts);
+	}
 }
 
 /**
@@ -1186,6 +1224,8 @@ void tick_nohz_idle_exit(void)
 	WARN_ON_ONCE(ts->timer_expires_base);
 
 	ts->inidle = 0;
+	/* Cancel the timer because CPU already waken up from the C-states*/
+	menu_hrtimer_cancel();
 
 	if (ts->idle_active || ts->tick_stopped)
 		now = ktime_get();

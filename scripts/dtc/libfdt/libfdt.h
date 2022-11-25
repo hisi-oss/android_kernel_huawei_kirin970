@@ -1603,6 +1603,37 @@ static inline int fdt_setprop_cell(void *fdt, int nodeoffset, const char *name,
  */
 int fdt_appendprop(void *fdt, int nodeoffset, const char *name,
 		   const void *val, int len);
+/**
+ * fdt_appendprop_string_truncated - append to or create bootargs property
+ * @fdt: pointer to the device tree blob
+ * @nodeoffset: offset of the node whose property to change
+ * @name: name of the property to append to
+ * @val: pointer to data to append to the property value
+ * @len: length of the data to append to the property value
+ *
+ * fdt_appendprop_string_truncated appends the given strings to the value of
+ * bootargs property in the given node, or creates a new bootargs property
+ * with that value if it does not already exist. The terminating null character
+ * in bootargs property is overwritten by the first character of the given strings.
+ *
+ * This function may insert data into the blob, and will therefore
+ * change the offsets of some existing nodes.
+ *
+ * returns:
+ *	0, on success
+ *	-FDT_ERR_NOSPACE, there is insufficient free space in the blob to
+ *		contain the new property value
+ *	-FDT_ERR_BADOFFSET, nodeoffset did not point to FDT_BEGIN_NODE tag
+ *	-FDT_ERR_BADLAYOUT,
+ *	-FDT_ERR_BADMAGIC,
+ *	-FDT_ERR_BADVERSION,
+ *	-FDT_ERR_BADSTATE,
+ *	-FDT_ERR_BADSTRUCTURE,
+ *	-FDT_ERR_BADLAYOUT,
+ *	-FDT_ERR_TRUNCATED, standard meanings
+ */
+int fdt_appendprop_string_truncated(void *fdt, int nodeoffset, const char *name,
+		   const void *val, int len);
 
 /**
  * fdt_appendprop_u32 - append a 32-bit integer value to a property

@@ -674,7 +674,8 @@ sdev_store_timeout (struct device *dev, struct device_attribute *attr,
 	int timeout;
 	sdev = to_scsi_device(dev);
 	sscanf (buf, "%d\n", &timeout);
-	blk_queue_rq_timeout(sdev->request_queue, timeout * HZ);
+	if (timeout > 0 && timeout < INT_MAX / HZ)
+		blk_queue_rq_timeout(sdev->request_queue, timeout * HZ);
 	return count;
 }
 static DEVICE_ATTR(timeout, S_IRUGO | S_IWUSR, sdev_show_timeout, sdev_store_timeout);
@@ -722,6 +723,14 @@ sdev_store_delete(struct device *dev, struct device_attribute *attr,
 		  const char *buf, size_t count)
 {
 	struct kernfs_node *kn;
+	struct scsi_device *sdev = to_scsi_device(dev);
+
+	/*
+	 * We need to try to get module, avoiding the module been removed
+	 * during delete.
+	 */
+	if (scsi_device_get(sdev))
+		return -ENODEV;
 
 	kn = sysfs_break_active_protection(&dev->kobj, &attr->attr);
 	WARN_ON_ONCE(!kn);
@@ -736,9 +745,10 @@ sdev_store_delete(struct device *dev, struct device_attribute *attr,
 	 * state into SDEV_DEL.
 	 */
 	device_remove_file(dev, attr);
-	scsi_remove_device(to_scsi_device(dev));
+	scsi_remove_device(sdev);
 	if (kn)
 		sysfs_unbreak_active_protection(kn);
+	scsi_device_put(sdev);
 	return count;
 };
 static DEVICE_ATTR(delete, S_IWUSR, NULL, sdev_store_delete);
@@ -1277,6 +1287,7 @@ int scsi_sysfs_add_sdev(struct scsi_device *sdev)
 	}
 	transport_add_device(&sdev->sdev_gendev);
 	sdev->is_visible = 1;
+	sdev->is_visible_bak = 1;
 
 	error = bsg_register_queue(rq, &sdev->sdev_gendev, NULL, NULL);
 
@@ -1300,6 +1311,21 @@ int scsi_sysfs_add_sdev(struct scsi_device *sdev)
 	return error;
 }
 
+/*
+ * In otg plug scenary, is_visible is set to 0 with a low probability, backup
+ * the variable, and check it.
+ */
+static inline unsigned int scsi_visible_check(struct scsi_device *sdev)
+{
+#ifdef CONFIG_HISI_SCSI_OTG_PLUG_WORKAROUND
+	if (sdev->is_visible == 0 && sdev->is_visible_bak == 1) {
+		sdev_printk(KERN_INFO, sdev, "visible compare is diff\n");
+		return 1;
+	}
+#endif
+	return 0;
+}
+
 void __scsi_remove_device(struct scsi_device *sdev)
 {
 	struct device *dev = &sdev->sdev_gendev;
@@ -1313,7 +1339,7 @@ void __scsi_remove_device(struct scsi_device *sdev)
 	if (sdev->sdev_state == SDEV_DEL)
 		return;
 
-	if (sdev->is_visible) {
+	if (sdev->is_visible || scsi_visible_check(sdev)) {
 		/*
 		 * If scsi_internal_target_block() is running concurrently,
 		 * wait until it has finished before changing the device state.

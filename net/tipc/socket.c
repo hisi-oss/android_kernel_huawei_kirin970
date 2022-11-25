@@ -714,14 +714,14 @@ static unsigned int tipc_poll(struct file *file, struct socket *sock,
 			mask |= POLLOUT;
 		/* fall thru' */
 	case TIPC_LISTEN:
-		if (!skb_queue_empty(&sk->sk_receive_queue))
+		if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
 			mask |= (POLLIN | POLLRDNORM);
 		break;
 	case TIPC_OPEN:
 		if (!tsk->cong_link_cnt)
 			mask |= POLLOUT;
 		if (tipc_sk_type_connectionless(sk) &&
-		    (!skb_queue_empty(&sk->sk_receive_queue)))
+		    (!skb_queue_empty_lockless(&sk->sk_receive_queue)))
 			mask |= (POLLIN | POLLRDNORM);
 		break;
 	case TIPC_DISCONNECTING:
@@ -943,7 +943,7 @@ static int __tipc_sendmsg(struct socket *sock, struct msghdr *m, size_t dlen)
 
 	if (unlikely(!dest)) {
 		dest = &tsk->peer;
-		if (!syn && dest->family != AF_TIPC)
+		if (!syn || dest->family != AF_TIPC)
 			return -EDESTADDRREQ;
 	}
 
@@ -1063,10 +1063,8 @@ static int __tipc_sendstream(struct socket *sock, struct msghdr *m, size_t dlen)
 	/* Handle implicit connection setup */
 	if (unlikely(dest)) {
 		rc = __tipc_sendmsg(sock, m, dlen);
-		if (dlen && dlen == rc) {
-			tsk->peer_caps = tipc_node_get_capabilities(net, dnode);
+		if (dlen && (dlen == rc))
 			tsk->snt_unacked = tsk_inc(tsk, dlen + msg_hdr_sz(hdr));
-		}
 		return rc;
 	}
 
@@ -2261,21 +2259,15 @@ void tipc_sk_reinit(struct net *net)
 			goto walk_stop;
 
 		while ((tsk = rhashtable_walk_next(&iter)) && !IS_ERR(tsk)) {
-			sock_hold(&tsk->sk);
-			rhashtable_walk_stop(&iter);
-			lock_sock(&tsk->sk);
+			spin_lock_bh(&tsk->sk.sk_lock.slock);
 			msg = &tsk->phdr;
 			msg_set_prevnode(msg, tn->own_addr);
 			msg_set_orignode(msg, tn->own_addr);
-			release_sock(&tsk->sk);
-			rhashtable_walk_start(&iter);
-			sock_put(&tsk->sk);
+			spin_unlock_bh(&tsk->sk.sk_lock.slock);
 		}
 walk_stop:
 		rhashtable_walk_stop(&iter);
 	} while (tsk == ERR_PTR(-EAGAIN));
-
-	rhashtable_walk_exit(&iter);
 }
 
 static struct tipc_sock *tipc_sk_lookup(struct net *net, u32 portid)

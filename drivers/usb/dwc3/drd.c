@@ -24,7 +24,7 @@
 #include "core.h"
 #include "gadget.h"
 
-static void dwc3_drd_update(struct dwc3 *dwc)
+void dwc3_drd_update(struct dwc3 *dwc)
 {
 	int id;
 
@@ -33,18 +33,25 @@ static void dwc3_drd_update(struct dwc3 *dwc)
 		id = 0;
 
 	dwc3_set_mode(dwc, id ?
-		      DWC3_GCTL_PRTCAP_HOST :
-		      DWC3_GCTL_PRTCAP_DEVICE);
+		      USB_DR_MODE_HOST :
+		      USB_DR_MODE_PERIPHERAL);
 }
 
 static int dwc3_drd_notifier(struct notifier_block *nb,
 			     unsigned long event, void *ptr)
 {
 	struct dwc3 *dwc = container_of(nb, struct dwc3, edev_nb);
+	int host_attach = extcon_get_state(dwc->edev, EXTCON_USB_HOST);
+	int device_attach = extcon_get_state(dwc->edev, EXTCON_USB);
 
-	dwc3_set_mode(dwc, event ?
-		      DWC3_GCTL_PRTCAP_HOST :
-		      DWC3_GCTL_PRTCAP_DEVICE);
+	if (host_attach && device_attach)
+		dev_err(dwc->dev, "host and device both attach!\n");
+	else if (device_attach)
+		dwc3_set_mode(dwc, USB_DR_MODE_PERIPHERAL);
+	else if (host_attach)
+		dwc3_set_mode(dwc, USB_DR_MODE_HOST);
+	else
+		dwc3_set_mode(dwc, USB_DR_MODE_UNKNOWN);
 
 	return NOTIFY_DONE;
 }
@@ -61,23 +68,19 @@ int dwc3_drd_init(struct dwc3 *dwc)
 			return PTR_ERR(dwc->edev);
 
 		dwc->edev_nb.notifier_call = dwc3_drd_notifier;
-		ret = extcon_register_notifier(dwc->edev, EXTCON_USB_HOST,
-					       &dwc->edev_nb);
+		ret = extcon_register_notifier_all(dwc->edev, &dwc->edev_nb);
 		if (ret < 0) {
 			dev_err(dwc->dev, "couldn't register cable notifier\n");
 			return ret;
 		}
 	}
 
-	dwc3_drd_update(dwc);
-
 	return 0;
 }
 
 void dwc3_drd_exit(struct dwc3 *dwc)
 {
-	extcon_unregister_notifier(dwc->edev, EXTCON_USB_HOST,
-				   &dwc->edev_nb);
+	extcon_unregister_notifier_all(dwc->edev, &dwc->edev_nb);
 
 	dwc3_set_mode(dwc, DWC3_GCTL_PRTCAP_DEVICE);
 	flush_work(&dwc->drd_work);

@@ -165,6 +165,10 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 	const unsigned long mmun_start = addr;
 	const unsigned long mmun_end   = addr + PAGE_SIZE;
 	struct mem_cgroup *memcg;
+	pte_t pte;
+#ifdef CONFIG_ZRAM_NON_COMPRESS
+	bool non_compress = 0;
+#endif
 
 	VM_BUG_ON_PAGE(PageTransHuge(old_page), old_page);
 
@@ -185,6 +189,11 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 	VM_BUG_ON_PAGE(addr != pvmw.address, old_page);
 
 	get_page(new_page);
+#ifdef CONFIG_ZRAM_NON_COMPRESS
+	non_compress = TestClearPageNonCompress(old_page);
+	if (non_compress)
+		SetPageNonCompress(new_page);
+#endif
 	page_add_new_anon_rmap(new_page, vma, addr, false);
 	mem_cgroup_commit_charge(new_page, memcg, false, false);
 	lru_cache_add_active_or_unevictable(new_page, vma);
@@ -196,8 +205,12 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 
 	flush_cache_page(vma, addr, pte_pfn(*pvmw.pte));
 	ptep_clear_flush_notify(vma, addr, pvmw.pte);
-	set_pte_at_notify(mm, addr, pvmw.pte,
-			mk_pte(new_page, vma->vm_page_prot));
+	pte = mk_pte(new_page, vma->vm_page_prot);
+#ifdef CONFIG_ZRAM_NON_COMPRESS
+	if (non_compress)
+		pte = pte_wrprotect(pte);
+#endif
+	set_pte_at_notify(mm, addr, pvmw.pte, pte);
 
 	page_remove_rmap(old_page, false);
 	if (!page_mapped(old_page))
@@ -616,7 +629,7 @@ static int prepare_uprobe(struct uprobe *uprobe, struct file *file,
 	BUG_ON((uprobe->offset & ~PAGE_MASK) +
 			UPROBE_SWBP_INSN_SIZE > PAGE_SIZE);
 
-	smp_wmb(); /* pairs with the smp_rmb() in handle_swbp() */
+	smp_wmb(); /* pairs with rmb() in find_active_uprobe() */
 	set_bit(UPROBE_COPY_INSN, &uprobe->flags);
 
  out:
@@ -1854,7 +1867,7 @@ static void handle_trampoline(struct pt_regs *regs)
 
  sigill:
 	uprobe_warn(current, "handle uretprobe, sending SIGILL.");
-	force_sig_info(SIGILL, SEND_SIG_FORCED, current);
+	force_sig(SIGILL, current);
 
 }
 
@@ -1910,17 +1923,9 @@ static void handle_swbp(struct pt_regs *regs)
 	 * After we hit the bp, _unregister + _register can install the
 	 * new and not-yet-analyzed uprobe at the same address, restart.
 	 */
+	smp_rmb(); /* pairs with wmb() in install_breakpoint() */
 	if (unlikely(!test_bit(UPROBE_COPY_INSN, &uprobe->flags)))
 		goto out;
-
-	/*
-	 * Pairs with the smp_wmb() in prepare_uprobe().
-	 *
-	 * Guarantees that if we see the UPROBE_COPY_INSN bit set, then
-	 * we must also see the stores to &uprobe->arch performed by the
-	 * prepare_uprobe() call.
-	 */
-	smp_rmb();
 
 	/* Tracing handlers use ->utask to communicate with fetch methods */
 	if (!get_utask())
@@ -1970,7 +1975,7 @@ static void handle_singlestep(struct uprobe_task *utask, struct pt_regs *regs)
 
 	if (unlikely(err)) {
 		uprobe_warn(current, "execute the probed insn, sending SIGILL.");
-		force_sig_info(SIGILL, SEND_SIG_FORCED, current);
+		force_sig(SIGILL, current);
 	}
 }
 

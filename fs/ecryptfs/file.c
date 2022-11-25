@@ -141,14 +141,44 @@ struct kmem_cache *ecryptfs_file_info_cache;
 static int read_or_initialize_metadata(struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
-	struct ecryptfs_mount_crypt_stat *mount_crypt_stat;
-	struct ecryptfs_crypt_stat *crypt_stat;
+	struct ecryptfs_mount_crypt_stat *mount_crypt_stat = NULL;
+	struct ecryptfs_crypt_stat *crypt_stat = NULL;
+	struct ecryptfs_inode_info *ecryptfs_info = NULL;
+	struct dentry* fp_dentry = NULL;
 	int rc;
 
 	crypt_stat = &ecryptfs_inode_to_private(inode)->crypt_stat;
 	mount_crypt_stat = &ecryptfs_superblock_to_private(
-						inode->i_sb)->mount_crypt_stat;
+		inode->i_sb)->mount_crypt_stat;
 	mutex_lock(&crypt_stat->cs_mutex);
+#ifdef CONFIG_ECRYPT_FS_FILTER
+	if ((mount_crypt_stat->flags & ECRYPTFS_ENABLE_FILTERING) &&
+		(crypt_stat->flags & ECRYPTFS_ENCRYPTED)) {
+		ecryptfs_info = ecryptfs_inode_to_private(inode);
+		if (!ecryptfs_info) {
+			rc = -EINVAL;
+			goto out;
+		}
+		fp_dentry = ecryptfs_info->lower_file->f_path.dentry;
+		if (is_file_dir_match(mount_crypt_stat, fp_dentry)) {
+			if (ecryptfs_read_metadata(dentry)) {
+				crypt_stat->flags &= ~(
+					ECRYPTFS_I_SIZE_INITIALIZED |
+					ECRYPTFS_ENCRYPTED);
+				ecryptfs_printk(KERN_DEBUG, "ECRYPTFS_FILTER "
+					"set[%s] as no need to encrypted\n",
+					fp_dentry->d_name.name);
+			} else {
+				ecryptfs_printk(KERN_ERR, "ECRYPTFS_FILTER "
+					"file system deadly bug, "
+					"ecryptfs_read_metadata error [%s]\n",
+					fp_dentry->d_name.name);
+			}
+			rc = 0;
+			goto out;
+		}
+	}
+#endif
 
 	if (crypt_stat->flags & ECRYPTFS_POLICY_APPLIED &&
 	    crypt_stat->flags & ECRYPTFS_KEY_VALID) {
@@ -403,6 +433,67 @@ ecryptfs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	default:
 		return rc;
 	}
+}
+#endif
+
+#ifdef CONFIG_ECRYPT_FS_FILTER
+static bool is_root_dir(const unsigned char *name)
+{
+	if (!name)
+		return false;
+	if ((strncmp("/", name, 1) == 0) || strlen(name) == 0)
+		return true;
+
+	return false;
+}
+
+bool is_file_dir_match(
+	struct ecryptfs_mount_crypt_stat *mcs, struct dentry *fp_dentry)
+{
+	struct dentry *p = NULL;
+	int i = 0;
+
+	if (!mcs || !fp_dentry) {
+		ecryptfs_printk(KERN_ERR, "%s bad params\n", __func__);
+		return false;
+	}
+	if (strlen(mcs->enc_filter_folder_name[0]) == 0) {
+		ecryptfs_printk(KERN_DEBUG,
+			"ECRYPTFS_FILTER enc_filter_folder_name empty\n");
+		return false;
+	}
+	if (is_root_dir(fp_dentry->d_name.name))
+		return false;
+	p = fp_dentry;
+
+	while (1) {
+		if (!p->d_parent)
+			return false;
+		/* root dentry gotten */
+		if (is_root_dir(p->d_parent->d_name.name)) {
+			for (i = 0; i < SD_ENC_FOLDER_NUM; i++) {
+				if (strlen(mcs->enc_filter_folder_name[i]) == 0)
+					break;
+				if (strlen(p->d_name.name) !=
+					strlen(mcs->enc_filter_folder_name[i]))
+					continue;
+				/* match successful */
+				if (strncasecmp(p->d_name.name,
+					mcs->enc_filter_folder_name[i],
+					strlen(p->d_name.name)) == 0) {
+					ecryptfs_printk(KERN_DEBUG,
+						"ECRYPTFS_FILTER filter name "
+						"[%s] match successfully!\n",
+						mcs->enc_filter_folder_name[i]);
+					return true;
+				}
+			}
+			return false;
+		}
+		/* to upper folder */
+		p = p->d_parent;
+	}
+	return false;
 }
 #endif
 

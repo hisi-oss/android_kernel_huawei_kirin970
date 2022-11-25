@@ -11,6 +11,9 @@
 #include <linux/interrupt.h>
 #include <linux/ratelimit.h>
 #include <linux/irq.h>
+#ifdef CONFIG_CPU_ISOLATION_OPT
+#include <linux/cpumask.h>
+#endif
 
 #include "internals.h"
 
@@ -56,6 +59,9 @@ static bool migrate_one_irq(struct irq_desc *desc)
 	const struct cpumask *affinity;
 	bool brokeaff = false;
 	int err;
+#ifdef CONFIG_CPU_ISOLATION_OPT
+	struct cpumask available_cpus;
+#endif
 
 	/*
 	 * IRQ chip might be already torn down, but the irq descriptor is
@@ -108,6 +114,45 @@ static bool migrate_one_irq(struct irq_desc *desc)
 	if (maskchip && chip->irq_mask)
 		chip->irq_mask(d);
 
+#ifdef CONFIG_CPU_ISOLATION_OPT
+	cpumask_copy(&available_cpus, affinity);
+	cpumask_andnot(&available_cpus, &available_cpus, cpu_isolated_mask);
+
+	/* keep affinity first when conflict with isolation */
+	if (cpumask_intersects(cpu_online_mask, &available_cpus))
+		affinity = &available_cpus;
+
+	if (cpumask_any_and(affinity, cpu_online_mask) >= nr_cpu_ids) {
+		/*
+		 * If the interrupt is managed, then shut it down and leave
+		 * the affinity untouched.
+		 */
+		if (irqd_affinity_is_managed(d)) {
+			irqd_set_managed_shutdown(d);
+			irq_shutdown(desc);
+			return false;
+		}
+
+		/*
+		 * The order of preference for selecting a fallback CPU is
+		 *
+		 * (1) online and un-isolated CPU from default affinity
+		 * (2) online and un-isolated CPU
+		 * (3) online CPU
+		 */
+		cpumask_andnot(&available_cpus, cpu_online_mask,
+			       cpu_isolated_mask);
+		affinity = &available_cpus;
+
+		if (cpumask_intersects(&available_cpus, irq_default_affinity))
+			cpumask_and(&available_cpus, &available_cpus,
+				    irq_default_affinity);
+		else if (cpumask_empty(&available_cpus))
+			affinity = cpu_online_mask;
+
+		brokeaff = true;
+	}
+#else
 	if (cpumask_any_and(affinity, cpu_online_mask) >= nr_cpu_ids) {
 		/*
 		 * If the interrupt is managed, then shut it down and leave
@@ -121,6 +166,7 @@ static bool migrate_one_irq(struct irq_desc *desc)
 		affinity = cpu_online_mask;
 		brokeaff = true;
 	}
+#endif
 	/*
 	 * Do not set the force argument of irq_do_set_affinity() as this
 	 * disables the masking of offline CPUs from the supplied affinity

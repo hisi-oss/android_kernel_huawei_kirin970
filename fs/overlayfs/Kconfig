@@ -24,6 +24,12 @@ config OVERLAY_FS_REDIRECT_DIR
 	  an overlay which has redirects on a kernel that doesn't support this
 	  feature will have unexpected results.
 
+config OVERLAY_FS_CREDS_OVERRIDE
+	bool "Overlayfs: override creds ,turn off by default"
+	depends on OVERLAY_FS
+	help
+	  If this config option is enabled then the creds will be overrided
+
 config OVERLAY_FS_INDEX
 	bool "Overlayfs: turn on inodes index feature by default"
 	depends on OVERLAY_FS

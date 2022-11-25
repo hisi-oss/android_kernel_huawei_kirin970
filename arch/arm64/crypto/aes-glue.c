@@ -87,6 +87,81 @@ asmlinkage void aes_mac_update(u8 const in[], u32 const rk[], int rounds,
 			       int blocks, u8 dg[], int enc_before,
 			       int enc_after);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_ecb_encrypt(u8 out[], u8 const in[], u8 const rk[],
+				int rounds, int blocks, int first)
+{
+	aes_ecb_encrypt(out, in, rk, rounds, blocks, first);
+}
+#define aes_ecb_encrypt __aes_ecb_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_ecb_decrypt(u8 out[], u8 const in[], u8 const rk[],
+				int rounds, int blocks, int first)
+{
+	aes_ecb_decrypt(out, in, rk, rounds, blocks, first);
+}
+#define aes_ecb_decrypt __aes_ecb_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_cbc_encrypt(u8 out[], u8 const in[], u8 const rk[],
+				int rounds, int blocks, u8 iv[], int first)
+{
+	aes_cbc_encrypt(out, in, rk, rounds, blocks, iv, first);
+}
+#define aes_cbc_encrypt __aes_cbc_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_cbc_decrypt(u8 out[], u8 const in[], u8 const rk[],
+				int rounds, int blocks, u8 iv[], int first)
+{
+	aes_cbc_decrypt(out, in, rk, rounds, blocks, iv, first);
+}
+#define aes_cbc_decrypt __aes_cbc_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_ctr_encrypt(u8 out[], u8 const in[], u8 const rk[],
+				int rounds, int blocks, u8 ctr[], int first)
+{
+	aes_ctr_encrypt(out, in, rk, rounds, blocks, ctr, first);
+}
+#define aes_ctr_encrypt __aes_ctr_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_xts_encrypt(u8 out[], u8 const in[], u8 const rk1[],
+				int rounds, int blocks, u8 const rk2[], u8 iv[],
+				int first)
+{
+	aes_xts_encrypt(out, in, rk1, rounds, blocks, rk2, iv, first);
+}
+#define aes_xts_encrypt __aes_xts_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_xts_decrypt(u8 out[], u8 const in[], u8 const rk1[],
+				int rounds, int blocks, u8 const rk2[], u8 iv[],
+				int first)
+{
+	aes_xts_decrypt(out, in, rk1, rounds, blocks, rk2, iv, first);
+}
+#define aes_xts_decrypt __aes_xts_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aes_mac_update(u8 const in[], u32 const rk[], int rounds,
+			       int blocks, u8 dg[], int enc_before,
+			       int enc_after)
+{
+	aes_mac_update(in, rk, rounds, blocks, dg, enc_before, enc_after);
+}
+#define aes_mac_update __aes_mac_update
+#endif
+
 struct crypto_aes_xts_ctx {
 	struct crypto_aes_ctx key1;
 	struct crypto_aes_ctx __aligned(8) key2;

@@ -831,17 +831,7 @@ static void tun_net_uninit(struct net_device *dev)
 /* Net device open. */
 static int tun_net_open(struct net_device *dev)
 {
-	struct tun_struct *tun = netdev_priv(dev);
-	int i;
-
 	netif_tx_start_all_queues(dev);
-
-	for (i = 0; i < tun->numqueues; i++) {
-		struct tun_file *tfile;
-
-		tfile = rtnl_dereference(tun->tfiles[i]);
-		tfile->socket.sk->sk_write_space(tfile->socket.sk);
-	}
 
 	return 0;
 }
@@ -1142,6 +1132,13 @@ static void tun_net_init(struct net_device *dev)
 	dev->max_mtu = MAX_MTU - dev->hard_header_len;
 }
 
+static bool tun_sock_writeable(struct tun_struct *tun, struct tun_file *tfile)
+{
+	struct sock *sk = tfile->socket.sk;
+
+	return (tun->dev->flags & IFF_UP) && sock_writeable(sk);
+}
+
 /* Character device part */
 
 /* Poll */
@@ -1164,10 +1161,14 @@ static unsigned int tun_chr_poll(struct file *file, poll_table *wait)
 	if (!skb_array_empty(&tfile->tx_array))
 		mask |= POLLIN | POLLRDNORM;
 
-	if (tun->dev->flags & IFF_UP &&
-	    (sock_writeable(sk) ||
-	     (!test_and_set_bit(SOCKWQ_ASYNC_NOSPACE, &sk->sk_socket->flags) &&
-	      sock_writeable(sk))))
+	/* Make sure SOCKWQ_ASYNC_NOSPACE is set if not writable to
+	 * guarantee EPOLLOUT to be raised by either here or
+	 * tun_sock_write_space(). Then process could get notification
+	 * after it writes to a down device and meets -EIO.
+	 */
+	if (tun_sock_writeable(tun, tfile) ||
+	    (!test_and_set_bit(SOCKWQ_ASYNC_NOSPACE, &sk->sk_socket->flags) &&
+	     tun_sock_writeable(tun, tfile)))
 		mask |= POLLOUT | POLLWRNORM;
 
 	if (tun->dev->reg_state != NETREG_REGISTERED)
@@ -1195,7 +1196,9 @@ static struct sk_buff *tun_alloc_skb(struct tun_file *tfile,
 				   &err, 0);
 	if (!skb)
 		return ERR_PTR(err);
-
+#ifdef CONFIG_HISI_PAGE_TRACE
+	alloc_skb_with_frags_stats_inc(TUN_ALLOC_SKB_COUNT);
+#endif
 	skb_reserve(skb, prepad);
 	skb_put(skb, linear);
 	skb->data_len = len - linear;
@@ -1360,6 +1363,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 
 	skb_reserve(skb, pad - delta);
 	skb_put(skb, len + delta);
+	skb_set_owner_w(skb, tfile->socket.sk);
 	get_page(alloc_frag->page);
 	alloc_frag->offset += buflen;
 
@@ -1402,6 +1406,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	int err;
 	u32 rxhash;
 	int skb_xdp = 1;
+
+	if (!(tun->dev->flags & IFF_UP))
+		return -EIO;
 
 	if (!(tun->flags & IFF_NO_PI)) {
 		if (len < sizeof(pi))
@@ -1490,11 +1497,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			err = skb_copy_datagram_from_iter(skb, 0, from, len);
 
 		if (err) {
-			err = -EFAULT;
-drop:
 			this_cpu_inc(tun->pcpu_stats->rx_dropped);
 			kfree_skb(skb);
-			return err;
+			return -EFAULT;
 		}
 	}
 
@@ -1503,6 +1508,10 @@ drop:
 		kfree_skb(skb);
 		return -EINVAL;
 	}
+
+	if (!(tun->flags & IFF_NO_PI))
+		if (pi.flags & htons(CHECKSUM_UNNECESSARY))
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	switch (tun->flags & TUN_TYPE_MASK) {
 	case IFF_TUN:
@@ -1565,20 +1574,11 @@ drop:
 	}
 
 	rxhash = __skb_get_hash_symmetric(skb);
-
-	rcu_read_lock();
-	if (unlikely(!(tun->dev->flags & IFF_UP))) {
-		err = -EIO;
-		rcu_read_unlock();
-		goto drop;
-	}
-
 #ifndef CONFIG_4KSTACKS
 	tun_rx_batched(tun, tfile, skb, more);
 #else
 	netif_rx_ni(skb);
 #endif
-	rcu_read_unlock();
 
 	stats = get_cpu_ptr(tun->pcpu_stats);
 	u64_stats_update_begin(&stats->syncp);
@@ -1826,9 +1826,9 @@ static void tun_setup(struct net_device *dev)
 static int tun_validate(struct nlattr *tb[], struct nlattr *data[],
 			struct netlink_ext_ack *extack)
 {
-	NL_SET_ERR_MSG(extack,
-		       "tun/tap creation via rtnetlink is not supported.");
-	return -EOPNOTSUPP;
+	if (!data)
+		return 0;
+	return -EINVAL;
 }
 
 static struct rtnl_link_ops tun_link_ops __read_mostly = {
@@ -2290,6 +2290,12 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	unsigned int ifindex;
 	int le;
 	int ret;
+
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+	if (cmd != TUNGETIFF && !capable(CAP_NET_ADMIN)) {
+		return -EPERM;
+	}
+#endif
 
 	if (cmd == TUNSETIFF || cmd == TUNSETQUEUE || _IOC_TYPE(cmd) == SOCK_IOC_TYPE) {
 		if (copy_from_user(&ifr, argp, ifreq_len))
@@ -2826,6 +2832,7 @@ static int tun_device_event(struct notifier_block *unused,
 {
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct tun_struct *tun = netdev_priv(dev);
+	int i;
 
 	if (dev->rtnl_link_ops != &tun_link_ops)
 		return NOTIFY_DONE;
@@ -2834,6 +2841,14 @@ static int tun_device_event(struct notifier_block *unused,
 	case NETDEV_CHANGE_TX_QUEUE_LEN:
 		if (tun_queue_resize(tun))
 			return NOTIFY_BAD;
+		break;
+	case NETDEV_UP:
+		for (i = 0; i < tun->numqueues; i++) {
+			struct tun_file *tfile;
+
+			tfile = rtnl_dereference(tun->tfiles[i]);
+			tfile->socket.sk->sk_write_space(tfile->socket.sk);
+		}
 		break;
 	default:
 		break;

@@ -162,6 +162,9 @@ struct devfreq {
 	unsigned long last_stat_updated;
 
 	struct srcu_notifier_head transition_notifier_list;
+#ifdef CONFIG_DEVFREQ_THERMAL
+	int paras[5];
+#endif
 };
 
 struct devfreq_freqs {
@@ -267,6 +270,9 @@ struct devfreq_passive_data {
 };
 #endif
 
+#ifdef CONFIG_ARCH_HISI
+void devfreq_apply_limits(struct devfreq *devfreq);
+#endif
 #else /* !CONFIG_PM_DEVFREQ */
 static inline struct devfreq *devfreq_add_device(struct device *dev,
 					  struct devfreq_dev_profile *profile,

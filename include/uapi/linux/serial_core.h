@@ -281,4 +281,7 @@
 /* MediaTek BTIF */
 #define PORT_MTK_BTIF	117
 
+/* Uart v500 */
+#define PORT_UART_V500   118
+
 #endif /* _UAPILINUX_SERIAL_CORE_H */

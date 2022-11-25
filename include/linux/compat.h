@@ -324,8 +324,6 @@ struct compat_kexec_segment;
 struct compat_mq_attr;
 struct compat_msgbuf;
 
-extern void compat_exit_robust_list(struct task_struct *curr);
-
 asmlinkage long
 compat_sys_set_robust_list(struct compat_robust_list_head __user *head,
 			   compat_size_t len);
@@ -774,6 +772,8 @@ static inline struct compat_timeval ns_to_compat_timeval(s64 nsec)
 
 	return ctv;
 }
+
+asmlinkage long compat_sys_delay(unsigned long ns);
 
 #else /* !CONFIG_COMPAT */
 

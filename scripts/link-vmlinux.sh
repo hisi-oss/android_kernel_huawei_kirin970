@@ -117,6 +117,22 @@ modpost_link()
 	fi
 
 	if [ -n "${CONFIG_LTO_CLANG}" ]; then
+		if [ -n "${CONFIG_ARM64_HKRR}" ]; then
+			# HKRR and CLANG use thin archives only
+			info LTO "Setting object sections"
+			rm -f vmlinux.objs
+			for a in built-in.o ${KBUILD_VMLINUX_LIBS}; do
+				${AR} t $a >> vmlinux.objs
+			done
+			export LD_LIBRARY_PATH=${CLANG_PREBUILTS_PATH}/lib64
+			while read -r file; do
+				#echo $file
+				${LLVM_OBJCOPY} --rename-section .text=.text.$file $file 2>/dev/null || { \
+					scripts/llvm-ircopy/llvm-ircopy -q --section-prefix=.$file $file -o ${file}.out && \
+					mv ${file}.out ${file}; }
+			done < vmlinux.objs
+			# HKRR llvm-ranlib built-in.o
+		fi
 		# This might take a while, so indicate that we're doing
 		# an LTO link
 		info LTO vmlinux.o
@@ -149,11 +165,11 @@ vmlinux_link()
 	local objects
 
 	if [ "${SRCARCH}" != "um" ]; then
-		local ld=${LD}
+		local ld="${LD}"
 		local ldflags="${LDFLAGS} ${LDFLAGS_vmlinux}"
 
 		if [ -n "${LDFINAL_vmlinux}" ]; then
-			ld=${LDFINAL_vmlinux}
+			ld="${LDFINAL_vmlinux}"
 			ldflags="${LDFLAGS_FINAL_vmlinux} ${LDFLAGS_vmlinux}"
 		fi
 
@@ -174,6 +190,11 @@ vmlinux_link()
 				${1}"
 		fi
 
+		if [ -n "${CONFIG_ARM64_HKRR}" ]; then
+			if [ $2 = 'vmlinux' ]; then
+				ldflags="${ldflags} -Map=$2.map --emit-relocs"
+			fi
+		fi
 		${ld} ${ldflags} -o ${2} -T ${lds} ${objects}
 	else
 		if [ -n "${CONFIG_THIN_ARCHIVES}" ]; then
@@ -228,8 +249,43 @@ kallsyms()
 
 	local afile="`basename ${2} .o`.S"
 
-	${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
-	${CC} ${aflags} -c -o ${2} ${afile}
+	if [ -n "${CONFIG_HUAWEI_HIDESYMS}" ]; then
+		local src_blacklist="$(cd `dirname $0`; pwd)/hw_hidesyms_blacklist.txt"
+		local tmp_blacklist=".tmp_hw_hidesyms_blacklist.txt"
+		local debug_blacklist="debug_hw_hidesyms_blacklist.log"
+
+		# Delete the debug file if exist.
+		if [ -f "${debug_blacklist}" ]; then
+			rm ${debug_blacklist}
+		fi
+
+		# Get a pure blacklist
+		cat ${src_blacklist} | sed s/[[:space:]]//g | grep -v "#" | \
+			sed -e '/^$/d'| sed 's/$/&.cfi/g' > ${tmp_blacklist}
+
+		cat ${src_blacklist} | sed s/[[:space:]]//g | grep -v "#" | \
+                        sed -e '/^$/d' >> ${tmp_blacklist}
+
+		if [ -s "${tmp_blacklist}" ]; then
+			# Generate debug log
+			if [ -n "${CONFIG_HUAWEI_HIDESYMS_DEBUGFS}" ]; then
+				${NM} -n ${1} | grep -w -f ${tmp_blacklist} > ${debug_blacklist} | cat
+			fi
+
+			${NM} -n ${1} | \
+				grep -vw -f ${tmp_blacklist} | \
+				scripts/kallsyms ${kallsymopt} > ${afile}
+			${CC} ${aflags} -c -o ${2} ${afile}
+		else
+			${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
+			${CC} ${aflags} -c -o ${2} ${afile}
+		fi
+
+		rm ${tmp_blacklist}
+	else
+		${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
+		${CC} ${aflags} -c -o ${2} ${afile}
+	fi
 }
 
 # Create map file with all symbols from ${1}

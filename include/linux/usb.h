@@ -200,7 +200,6 @@ usb_find_last_int_out_endpoint(struct usb_host_interface *alt,
  * @dev: driver model's view of this device
  * @usb_dev: if an interface is bound to the USB major, this will point
  *	to the sysfs representation for that device.
- * @pm_usage_cnt: PM usage counter for this interface
  * @reset_ws: Used for scheduling resets from atomic context.
  * @resetting_device: USB core reset the device, so use alt setting 0 as
  *	current; needs bandwidth alloc after reset.
@@ -257,7 +256,6 @@ struct usb_interface {
 
 	struct device dev;		/* interface specific device info */
 	struct device *usb_dev;
-	atomic_t pm_usage_cnt;		/* usage counter for autosuspend */
 	struct work_struct reset_ws;	/* for resets in atomic context */
 };
 #define	to_usb_interface(d) container_of(d, struct usb_interface, dev)
@@ -467,6 +465,18 @@ struct usb_bus {
 #if defined(CONFIG_USB_MON) || defined(CONFIG_USB_MON_MODULE)
 	struct mon_bus *mon_bus;	/* non-null when associated */
 	int monitored;			/* non-zero when monitored */
+#endif
+
+#ifdef CONFIG_USB_SKIP_RESUME
+	unsigned skip_resume:1;		/* All USB devices are brought into full
+					 * power state after system resume. It
+					 * is desirable for some buses to keep
+					 * their devices in suspend state even
+					 * after system resume. The devices
+					 * are resumed later when a remote
+					 * wakeup is detected or an interface
+					 * driver starts I/O.
+					 */
 #endif
 };
 
@@ -681,6 +691,7 @@ struct usb_device {
 	unsigned do_remote_wakeup:1;
 	unsigned reset_resume:1;
 	unsigned port_is_suspended:1;
+	unsigned do_dpm_resume:1;
 #endif
 	struct wusb_dev *wusb_dev;
 	int slot_id;
@@ -1313,6 +1324,10 @@ extern int usb_disabled(void);
 #define URB_DMA_SG_COMBINED	0x00400000	/* S-G entries were combined */
 #define URB_ALIGNED_TEMP_BUFFER	0x00800000	/* Temp buffer was alloc'd */
 
+#ifdef CONFIG_USB_DWC3_NYET_ABNORMAL
+#define URB_MAP_LOCAL_REALLOC	0x10000000	/* Memory mapping for Kirin970 ASP USB Controller */
+#endif
+
 struct usb_iso_packet_descriptor {
 	unsigned int offset;
 	unsigned int length;		/* expected length */
@@ -1544,6 +1559,10 @@ struct urb {
 	unsigned int transfer_flags;	/* (in) URB_SHORT_NOT_OK | ...*/
 	void *transfer_buffer;		/* (in) associated data buffer */
 	dma_addr_t transfer_dma;	/* (in) dma addr for transfer_buffer */
+#ifdef CONFIG_USB_DWC3_NYET_ABNORMAL
+	void *origin_transfer_buffer;
+	dma_addr_t origin_dma;
+#endif
 	struct scatterlist *sg;		/* (in) scatter gather buffer list */
 	int num_mapped_sgs;		/* (internal) mapped sg entries */
 	int num_sgs;			/* (in) number of entries in the sg list */
@@ -1887,7 +1906,7 @@ void usb_sg_wait(struct usb_sg_request *io);
 static inline unsigned int __create_pipe(struct usb_device *dev,
 		unsigned int endpoint)
 {
-	return (dev->devnum << 8) | (endpoint << 15);
+	return (dev->devnum << 8) | (endpoint << 15); /*[false alarm]:it is a false alarm*/
 }
 
 /* Create various pipes... */
@@ -1935,7 +1954,7 @@ usb_maxpacket(struct usb_device *udev, int pipe, int is_out)
 		return 0;
 
 	/* NOTE:  only 0x07ff bits are for packet size... */
-	return usb_endpoint_maxp(&ep->desc);
+	return usb_endpoint_maxp(&ep->desc);/*[false alarm]:it is a false alarm*/
 }
 
 /* ----------------------------------------------------------------------- */

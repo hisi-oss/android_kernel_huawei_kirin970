@@ -55,6 +55,9 @@ void blk_execute_rq_nowait(struct request_queue *q, struct gendisk *bd_disk,
 
 	rq->rq_disk = bd_disk;
 	rq->end_io = done;
+#ifdef CONFIG_MAS_BLK
+	mas_blk_request_execute_nowait(q, rq, done);
+#endif
 
 	/*
 	 * don't check dying flag for MQ because the request won't
@@ -94,10 +97,16 @@ EXPORT_SYMBOL_GPL(blk_execute_rq_nowait);
 void blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
 		   struct request *rq, int at_head)
 {
+#ifdef CONFIG_MAS_BLK
+	ktime_t start_ktime;
+#endif
 	DECLARE_COMPLETION_ONSTACK(wait);
 	unsigned long hang_check;
 
 	rq->end_io_data = &wait;
+#ifdef CONFIG_MAS_BLK
+	start_ktime = ktime_get();
+#endif
 	blk_execute_rq_nowait(q, bd_disk, rq, at_head, blk_end_sync_rq);
 
 	/* Prevent hang_check timer from firing at us during very long I/O */
@@ -106,5 +115,9 @@ void blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
 		while (!wait_for_completion_io_timeout(&wait, hang_check * (HZ/2)));
 	else
 		wait_for_completion_io(&wait);
+#ifdef CONFIG_MAS_BLK
+	if (ktime_after(ktime_get(), ktime_add_ms(start_ktime, 1000)))
+		mas_blk_dump_request(rq, BLK_DUMP_WARNING);
+#endif
 }
 EXPORT_SYMBOL(blk_execute_rq);

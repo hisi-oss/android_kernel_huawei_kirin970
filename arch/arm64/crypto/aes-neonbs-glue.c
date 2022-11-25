@@ -51,6 +51,78 @@ asmlinkage void neon_aes_cbc_encrypt(u8 out[], u8 const in[], u32 const rk[],
 				     int rounds, int blocks, u8 iv[],
 				     int first);
 
+#ifdef CONFIG_CFI_CLANG
+static inline void __aesbs_convert_key(u8 out[], u32 const rk[], int rounds)
+{
+	aesbs_convert_key(out, rk, rounds);
+}
+#define aesbs_convert_key __aesbs_convert_key
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aesbs_ecb_encrypt(u8 out[], u8 const in[], u8 const rk[],
+				  int rounds, int blocks)
+{
+	aesbs_ecb_encrypt(out, in, rk, rounds, blocks);
+}
+#define aesbs_ecb_encrypt __aesbs_ecb_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aesbs_ecb_decrypt(u8 out[], u8 const in[], u8 const rk[],
+				  int rounds, int blocks)
+{
+	aesbs_ecb_decrypt(out, in, rk, rounds, blocks);
+}
+#define aesbs_ecb_decrypt __aesbs_ecb_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aesbs_ctr_encrypt(u8 out[], u8 const in[], u8 const rk[],
+				  int rounds, int blocks, u8 iv[], u8 final[])
+{
+	aesbs_ctr_encrypt(out, in, rk, rounds, blocks, iv, final);
+}
+#define aesbs_ctr_encrypt __aesbs_ctr_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aesbs_xts_encrypt(u8 out[], u8 const in[], u8 const rk[],
+				  int rounds, int blocks, u8 iv[])
+{
+	aesbs_xts_encrypt(out, in, rk, rounds, blocks, iv);
+}
+#define aesbs_xts_encrypt __aesbs_xts_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __aesbs_xts_decrypt(u8 out[], u8 const in[], u8 const rk[],
+				  int rounds, int blocks, u8 iv[])
+{
+	aesbs_xts_decrypt(out, in, rk, rounds, blocks, iv);
+}
+#define aesbs_xts_decrypt __aesbs_xts_decrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __neon_aes_ecb_encrypt(u8 out[], u8 const in[], u32 const rk[],
+				     int rounds, int blocks, int first)
+{
+	neon_aes_ecb_encrypt(out, in, rk, rounds, blocks, first);
+}
+#define neon_aes_ecb_encrypt __neon_aes_ecb_encrypt
+#endif
+
+#ifdef CONFIG_CFI_CLANG
+static inline void __neon_aes_cbc_encrypt(u8 out[], u8 const in[], u32 const rk[],
+				     int rounds, int blocks, u8 iv[],
+				     int first)
+{
+	neon_aes_cbc_encrypt(out, in, rk, rounds, blocks, iv, first);
+}
+#define neon_aes_cbc_encrypt __neon_aes_cbc_encrypt
+#endif
+
 struct aesbs_ctx {
 	u8	rk[13 * (8 * AES_BLOCK_SIZE) + 32];
 	int	rounds;
@@ -307,6 +379,8 @@ static int __xts_crypt(struct skcipher_request *req,
 	int err;
 
 	err = skcipher_walk_virt(&walk, req, true);
+	if (err)
+		return err;
 
 	kernel_neon_begin();
 

@@ -31,6 +31,11 @@
 #include <linux/compiler.h>
 #include <linux/llist.h>
 #include <linux/bitops.h>
+#include <linux/hisi/page_tracker.h>
+#include <linux/hisi/rdr_hisi_ap_hook.h>
+#ifdef CONFIG_HISI_LB
+#include <linux/hisi/hisi_lb.h>
+#endif
 
 #include <linux/uaccess.h>
 #include <asm/tlbflush.h>
@@ -130,6 +135,13 @@ static void vunmap_page_range(unsigned long addr, unsigned long end)
 		vunmap_p4d_range(pgd, addr, next);
 	} while (pgd++, addr = next, addr != end);
 }
+
+#ifdef CONFIG_HKIP_PRMEM
+void prmem_vunmap_page_range(unsigned long addr, unsigned long end)
+{
+	vunmap_page_range(addr, end);
+}
+#endif
 
 static int vmap_pte_range(pmd_t *pmd, unsigned long addr,
 		unsigned long end, pgprot_t prot, struct page **pages, int *nr)
@@ -244,6 +256,14 @@ static int vmap_page_range(unsigned long start, unsigned long end,
 	flush_cache_vmap(start, end);
 	return ret;
 }
+
+#ifdef CONFIG_HKIP_PRMEM
+int prmem_vmap_page_range(unsigned long start, unsigned long end,
+			  pgprot_t prot, struct page **pages)
+{
+	return vmap_page_range(start, end, prot, pages);
+}
+#endif
 
 int is_vmalloc_or_module_addr(const void *x)
 {
@@ -763,7 +783,7 @@ static void free_unmap_vmap_area(struct vmap_area *va)
 	free_vmap_area_noflush(va);
 }
 
-static struct vmap_area *find_vmap_area(unsigned long addr)
+struct vmap_area *find_vmap_area(unsigned long addr)
 {
 	struct vmap_area *va;
 
@@ -1523,7 +1543,7 @@ static void __vunmap(const void *addr, int deallocate_pages)
 			addr))
 		return;
 
-	area = find_vmap_area((unsigned long)addr)->vm;
+	area = find_vm_area(addr);
 	if (unlikely(!area)) {
 		WARN(1, KERN_ERR "Trying to vfree() nonexistent vm area (%p)\n",
 				addr);
@@ -1542,6 +1562,9 @@ static void __vunmap(const void *addr, int deallocate_pages)
 
 			BUG_ON(!page);
 			__free_pages(page, 0);
+#ifdef CONFIG_HISI_PAGE_TRACE
+			mod_zone_page_state(page_zone(page), NR_VMALLOC_PAGES, -1);
+#endif
 		}
 
 		kvfree(area->pages);
@@ -1609,6 +1632,8 @@ void vfree(const void *addr)
 		__vfree_deferred(addr);
 	else
 		__vunmap(addr, 1);
+
+	vmalloc_trace_hook((unsigned char)MEM_FREE, _RET_IP_, (unsigned long)addr, 0, (unsigned long long)0);/*lint !e571*/
 }
 EXPORT_SYMBOL(vfree);
 
@@ -1629,6 +1654,81 @@ void vunmap(const void *addr)
 		__vunmap(addr, 0);
 }
 EXPORT_SYMBOL(vunmap);
+
+#ifdef CONFIG_HISI_LB
+
+/**
+ *	lb_vmap  -  map an array of lb pages into virtually contiguous space
+ *	@pages:		array of page pointers
+ *	@count:     number of pages to map
+ *  @offset:    number of normal pages offset to the start of virtual space.
+ *              pages[offset] is the beginning of the normal memory pages.
+ *	@flags:		vm_area->flags
+ *	@prot:		page protection for the mapping
+ *
+ *	Maps @count pages from @pages into contiguous kernel virtual
+ *	space.
+ */
+void *lb_vmap(struct page **pages, unsigned int count, unsigned int offset,
+		unsigned long flags, pgprot_t prot)
+{
+	int ret;
+	struct vm_struct *area = NULL;
+	unsigned long size; /* In bytes */
+	unsigned long vm_start, vm_end, vm_mid;
+
+	might_sleep();
+
+	if (count > totalram_pages)
+		return NULL;
+
+	/* All the pages are normal memory, directly call vmap. */
+	if (offset == 0)
+		return vmap(pages, count, flags, prot);
+
+	/* All the pages are last buffer, directly call vmap. */
+	if (count < offset) {
+		lb_prot_build(pages[0], &prot);
+		return vmap(pages, count, flags, prot);
+	}
+
+	/* Split the memory, the first part is last buffer, then the normal memory. */
+	size = (unsigned long)count << PAGE_SHIFT;
+	area = get_vm_area_caller(size, flags, __builtin_return_address(0));
+	if (!area)
+		return NULL;
+
+	vm_start = (unsigned long)area->addr;
+	vm_end = vm_start + get_vm_area_size(area);
+	vm_mid = vm_start + (unsigned long)(offset << PAGE_SHIFT);
+
+	/* For pages from last buffer, they mapped from the beginning of vm area.
+	 * Build the prot of last buffer first.
+	 */
+	lb_prot_build(pages[0], &prot);
+	ret = vmap_page_range_noflush(vm_start, vm_mid, prot, pages);
+	if (ret <= 0) {
+		vunmap(area->addr);
+		return NULL;
+	}
+
+	/* For pages from normal memory, they mapped from the end of last buffer.
+	 * Clear the last buffer prot for normal memory first.
+	 */
+	prot = pgprot_lb(prot, 0);
+	ret = vmap_page_range_noflush(vm_mid, vm_end, prot, pages + offset);
+	if (ret <= 0) {
+		vunmap(area->addr);
+		return NULL;
+	}
+
+	/* Mapping is done. flush the cache of whole vm area. */
+	flush_cache_vmap(vm_start, vm_end);
+	return area->addr;
+}
+EXPORT_SYMBOL(lb_vmap);
+
+#endif
 
 /**
  *	vmap  -  map an array of pages into virtually contiguous space
@@ -1671,6 +1771,7 @@ static void *__vmalloc_node(unsigned long size, unsigned long align,
 static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 				 pgprot_t prot, int node)
 {
+	const int order = 0;
 	struct page **pages;
 	unsigned int nr_pages, array_size, i;
 	const gfp_t nested_gfp = (gfp_mask & GFP_RECLAIM_MASK) | __GFP_ZERO;
@@ -1682,7 +1783,6 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	nr_pages = get_vm_area_size(area) >> PAGE_SHIFT;
 	array_size = (nr_pages * sizeof(struct page *));
 
-	area->nr_pages = nr_pages;
 	/* Please note that the recursion is strictly bounded. */
 	if (array_size > PAGE_SIZE) {
 		pages = __vmalloc_node(array_size, 1, nested_gfp|highmem_mask,
@@ -1690,12 +1790,15 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	} else {
 		pages = kmalloc_node(array_size, nested_gfp, node);
 	}
-	area->pages = pages;
-	if (!area->pages) {
+
+	if (!pages) {
 		remove_vm_area(area->addr);
 		kfree(area);
 		return NULL;
 	}
+
+	area->pages = pages;
+	area->nr_pages = nr_pages;
 
 	for (i = 0; i < area->nr_pages; i++) {
 		struct page *page;
@@ -1703,14 +1806,19 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 		if (node == NUMA_NO_NODE)
 			page = alloc_page(alloc_mask|highmem_mask);
 		else
-			page = alloc_pages_node(node, alloc_mask|highmem_mask, 0);
+			page = alloc_pages_node(node, alloc_mask|highmem_mask, order);
 
 		if (unlikely(!page)) {
 			/* Successfully allocated i pages, free them in __vunmap() */
 			area->nr_pages = i;
 			goto fail;
 		}
+#ifdef CONFIG_HISI_PAGE_TRACE
+		SetPageVmalloc(page);
+		mod_zone_page_state(page_zone(page), NR_VMALLOC_PAGES, 1);
+#endif
 		area->pages[i] = page;
+		page_tracker_set_type(page, TRACK_VMALLOC, 0);
 		if (gfpflags_allow_blocking(gfp_mask|highmem_mask))
 			cond_resched();
 	}
@@ -1766,6 +1874,12 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
 		return NULL;
 
 	/*
+	 * First make sure the mappings are removed from all page-tables
+	 * before they are freed.
+	 */
+	vmalloc_sync_all();
+
+	/*
 	 * In this function, newly allocated vm_struct has VM_UNINITIALIZED
 	 * flag. It means that vm_struct is not fully initialized.
 	 * Now, it is fully initialized, so remove this flag here.
@@ -1773,6 +1887,9 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
 	clear_vm_uninitialized_flag(area);
 
 	kmemleak_vmalloc(area, size, gfp_mask);
+
+	vmalloc_trace_hook((unsigned char)MEM_ALLOC, (unsigned long)caller, (unsigned long)addr,
+						(struct page *)area->pages[0], size);
 
 	return addr;
 
@@ -2314,6 +2431,9 @@ EXPORT_SYMBOL(remap_vmalloc_range);
 /*
  * Implement a stub for vmalloc_sync_all() if the architecture chose not to
  * have one.
+ *
+ * The purpose of this function is to make sure the vmalloc area
+ * mappings are identical in all page-tables in the system.
  */
 void __weak vmalloc_sync_all(void)
 {
@@ -2781,3 +2901,6 @@ module_init(proc_vmalloc_init);
 
 #endif
 
+#ifdef CONFIG_HISI_PAGE_TRACE
+#include "hisi/vmalloc_track.c"
+#endif

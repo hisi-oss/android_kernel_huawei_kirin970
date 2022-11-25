@@ -22,6 +22,7 @@
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
 #include "usb.h"
+#include "hisi-usb-core.h"
 
 static inline const char *plural(int n)
 {
@@ -139,10 +140,12 @@ int usb_choose_configuration(struct usb_device *udev)
 			best = c;
 	}
 
-	if (insufficient_power > 0)
+	if (insufficient_power > 0) {
+		notify_power_insufficient();
 		dev_info(&udev->dev, "rejected %d configuration%s "
 			"due to insufficient available bus power\n",
 			insufficient_power, plural(insufficient_power));
+	}
 
 	if (best) {
 		i = best->desc.bConfigurationValue;

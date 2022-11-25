@@ -9,6 +9,8 @@
 #include <linux/blktrace_api.h>
 #include <linux/pr.h>
 #include <linux/uaccess.h>
+#include <linux/blk-mq.h>
+#include "mas_blk.h"
 
 static int blkpg_ioctl(struct block_device *bdev, struct blkpg_ioctl_arg __user *arg)
 {
@@ -573,6 +575,10 @@ int blkdev_ioctl(struct block_device *bdev, fmode_t mode, unsigned cmd,
 		return put_ulong(arg, size >> 9);
 	case BLKGETSIZE64:
 		return put_u64(arg, i_size_read(bdev->bd_inode));
+#ifdef CONFIG_MAS_BLK
+	case BLKCUST_CMD:
+		return mas_blk_cust_ioctl(bdev, argp);
+#endif
 	case BLKTRACESTART:
 	case BLKTRACESTOP:
 	case BLKTRACESETUP:

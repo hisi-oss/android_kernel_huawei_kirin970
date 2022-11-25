@@ -1,6 +1,6 @@
 /*
  *  linux/mm/oom_kill.c
- * 
+ *
  *  Copyright (C)  1998,2000  Rik van Riel
  *	Thanks go out to Claus Fischer for some serious inspiration and
  *	for goading me into coding this file...
@@ -48,11 +48,23 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/oom.h>
 
+#ifdef  CONFIG_LOG_JANK
+#include <huawei_platform/log/log_jank.h>
+#endif
+
+#ifdef CONFIG_DRM_GEM_HEAP
+#include <linux/hisi/hisi_drm_heaps_tracer.h>
+#endif
+
+#include <chipset_common/hwmemcheck/memcheck.h>
+
 int sysctl_panic_on_oom;
 int sysctl_oom_kill_allocating_task;
 int sysctl_oom_dump_tasks = 1;
 
 DEFINE_MUTEX(oom_lock);
+/* Serializes oom_score_adj and oom_score_adj_min updates */
+DEFINE_MUTEX(oom_adj_mutex);
 
 #ifdef CONFIG_NUMA
 /**
@@ -219,7 +231,7 @@ unsigned long oom_badness(struct task_struct *p, struct mem_cgroup *memcg,
 	 * Never return 0 for an eligible task regardless of the root bonus and
 	 * oom_score_adj (oom_score_adj can't be OOM_SCORE_ADJ_MIN here).
 	 */
-	return points > 0 ? points : 1;
+	return points > 0 ? points : 1; /*[false alarm]*/
 }
 
 enum oom_constraint {
@@ -276,7 +288,7 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 
 	/* Check this allocation failure is caused by cpuset's wall function */
 	for_each_zone_zonelist_nodemask(zone, z, oc->zonelist,
-			high_zoneidx, oc->nodemask)
+			high_zoneidx, oc->nodemask) /*lint !e564*/
 		if (!cpuset_zone_allowed(zone, oc->gfp_mask))
 			cpuset_limited = true;
 
@@ -336,7 +348,7 @@ next:
 abort:
 	if (oc->chosen)
 		put_task_struct(oc->chosen);
-	oc->chosen = (void *)-1UL;
+	oc->chosen = (void *)-1UL; /*lint !e501*/
 	return 1;
 }
 
@@ -399,7 +411,7 @@ static void dump_tasks(struct mem_cgroup *memcg, const nodemask_t *nodemask)
 			atomic_long_read(&task->mm->nr_ptes),
 			mm_nr_pmds(task->mm),
 			get_mm_counter(task->mm, MM_SWAPENTS),
-			task->signal->oom_score_adj, task->comm);
+			task->signal->oom_score_adj, task->comm); /*lint !e1058*/
 		task_unlock(task);
 	}
 	rcu_read_unlock();
@@ -426,6 +438,10 @@ static void dump_header(struct oom_control *oc, struct task_struct *p)
 		show_mem(SHOW_MEM_FILTER_NODES, oc->nodemask);
 	if (sysctl_oom_dump_tasks)
 		dump_tasks(oc->memcg, oc->nodemask);
+
+#ifdef CONFIG_DRM_GEM_HEAP
+	hisi_drm_heaps_process_show();
+#endif
 }
 
 /*
@@ -466,6 +482,21 @@ static DECLARE_WAIT_QUEUE_HEAD(oom_reaper_wait);
 static struct task_struct *oom_reaper_list;
 static DEFINE_SPINLOCK(oom_reaper_lock);
 
+/*
+ * We have to make sure not to cause premature new oom victim selection.
+ *
+ * __alloc_pages_may_oom()     oom_reap_task_mm()/exit_mmap()
+ *   mutex_trylock(&oom_lock)
+ *   get_page_from_freelist(ALLOC_WMARK_HIGH) # fails
+ *                               unmap_page_range() # frees some memory
+ *                               set_bit(MMF_OOM_SKIP)
+ *   out_of_memory()
+ *     select_bad_process()
+ *       test_bit(MMF_OOM_SKIP) # selects new oom victim
+ *   mutex_unlock(&oom_lock)
+ *
+ * Therefore, the callers hold oom_lock when calling this function.
+ */
 void __oom_reap_task_mm(struct mm_struct *mm)
 {
 	struct vm_area_struct *vma;
@@ -507,20 +538,6 @@ static bool oom_reap_task_mm(struct task_struct *tsk, struct mm_struct *mm)
 {
 	bool ret = true;
 
-	/*
-	 * We have to make sure to not race with the victim exit path
-	 * and cause premature new oom victim selection:
-	 * oom_reap_task_mm		exit_mm
-	 *   mmget_not_zero
-	 *				  mmput
-	 *				    atomic_dec_and_test
-	 *				  exit_oom_victim
-	 *				[...]
-	 *				out_of_memory
-	 *				  select_bad_process
-	 *				    # no TIF_MEMDIE task selects new victim
-	 *  unmap_page_range # frees some memory
-	 */
 	mutex_lock(&oom_lock);
 
 	if (!down_read_trylock(&mm->mmap_sem)) {
@@ -620,7 +637,7 @@ static int oom_reaper(void *unused)
 			oom_reap_task(tsk);
 	}
 
-	return 0;
+	return 0; /*lint !e527*/
 }
 
 static void wake_oom_reaper(struct task_struct *tsk)
@@ -741,7 +758,7 @@ bool oom_killer_disable(signed long timeout)
 	if (mutex_lock_killable(&oom_lock))
 		return false;
 	oom_killer_disabled = true;
-	mutex_unlock(&oom_lock);
+	mutex_unlock(&oom_lock); /*lint !e455*/
 
 	ret = wait_event_interruptible_timeout(oom_victims_wait,
 			!atomic_read(&oom_victims), timeout);
@@ -924,6 +941,12 @@ static void oom_kill_process(struct oom_control *oc, const char *message)
 	 */
 	do_send_sig_info(SIGKILL, SEND_SIG_FORCED, victim, true);
 	mark_oom_victim(victim);
+	memcheck_report_lmk_oom(victim->pid, victim->tgid, victim->comm,
+				KILLTYPE_KERNEL_OOM, victim_points, 0);
+#ifdef  CONFIG_LOG_JANK
+	LOG_JANK_D(JLID_KERNEL_OOM, "#ARG1:<%s>#ARG2:<%d>", victim->comm,
+		task_pid_nr(victim));
+#endif
 	pr_err("Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB, shmem-rss:%lukB\n",
 		task_pid_nr(victim), victim->comm, K(victim->mm->total_vm),
 		K(get_mm_counter(victim->mm, MM_ANONPAGES)),
@@ -1050,9 +1073,10 @@ bool out_of_memory(struct oom_control *oc)
 	 * The OOM killer does not compensate for IO-less reclaim.
 	 * pagefault_out_of_memory lost its gfp context so we have to
 	 * make sure exclude 0 mask - all other users should have at least
-	 * ___GFP_DIRECT_RECLAIM to get here.
+	 * ___GFP_DIRECT_RECLAIM to get here. But mem_cgroup_oom() has to
+	 * invoke the OOM killer even if it is a GFP_NOFS allocation.
 	 */
-	if (oc->gfp_mask && !(oc->gfp_mask & __GFP_FS))
+	if (oc->gfp_mask && !(oc->gfp_mask & __GFP_FS) && !is_memcg_oom(oc))
 		return true;
 
 	/*
@@ -1079,15 +1103,9 @@ bool out_of_memory(struct oom_control *oc)
 		dump_header(oc, NULL);
 		panic("Out of memory and no killable processes...\n");
 	}
-	if (oc->chosen && oc->chosen != (void *)-1UL) {
+	if (oc->chosen && oc->chosen != (void *)-1UL)  /*lint !e501*/
 		oom_kill_process(oc, !is_memcg_oom(oc) ? "Out of memory" :
 				 "Memory cgroup out of memory");
-		/*
-		 * Give the killed process a good chance to exit before trying
-		 * to allocate memory again.
-		 */
-		schedule_timeout_killable(1);
-	}
 	return !!oc->chosen;
 }
 
@@ -1112,5 +1130,6 @@ void pagefault_out_of_memory(void)
 	if (!mutex_trylock(&oom_lock))
 		return;
 	out_of_memory(&oc);
-	mutex_unlock(&oom_lock);
+	mutex_unlock(&oom_lock); /*lint !e455*/
+	schedule_timeout_killable(1);
 }

@@ -106,6 +106,8 @@ void iommu_device_unregister(struct iommu_device *iommu)
 
 static struct iommu_domain *__iommu_domain_alloc(struct bus_type *bus,
 						 unsigned type);
+struct iommu_domain *iommu_fwspec_domain_alloc(
+	struct iommu_fwspec *iommu_fwspec, unsigned type);
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev);
 static int __iommu_attach_group(struct iommu_domain *domain,
@@ -205,18 +207,21 @@ static int iommu_insert_resv_region(struct iommu_resv_region *new,
 			pos = pos->next;
 		} else if ((start >= a) && (end <= b)) {
 			if (new->type == type)
-				goto done;
+				return 0;
 			else
 				pos = pos->next;
 		} else {
 			if (new->type == type) {
 				phys_addr_t new_start = min(a, start);
 				phys_addr_t new_end = max(b, end);
+				int ret;
 
 				list_del(&entry->list);
 				entry->start = new_start;
 				entry->length = new_end - new_start + 1;
-				iommu_insert_resv_region(entry, regions);
+				ret = iommu_insert_resv_region(entry, regions);
+				kfree(entry);
+				return ret;
 			} else {
 				pos = pos->next;
 			}
@@ -229,7 +234,6 @@ insert:
 		return -ENOMEM;
 
 	list_add_tail(&region->list, pos);
-done:
 	return 0;
 }
 
@@ -357,7 +361,7 @@ struct iommu_group *iommu_group_alloc(void)
 				   NULL, "%d", group->id);
 	if (ret) {
 		ida_simple_remove(&iommu_group_ida, group->id);
-		kfree(group);
+		kobject_put(&group->kobj);
 		return ERR_PTR(ret);
 	}
 
@@ -611,6 +615,7 @@ err_put_group:
 	mutex_unlock(&group->mutex);
 	dev->iommu_group = NULL;
 	kobject_put(group->devices_kobj);
+	sysfs_remove_link(group->devices_kobj, device->name);
 err_free_name:
 	kfree(device->name);
 err_remove_link:
@@ -999,7 +1004,7 @@ struct iommu_group *pci_device_group(struct device *dev)
  */
 struct iommu_group *iommu_group_get_for_dev(struct device *dev)
 {
-	const struct iommu_ops *ops = dev->bus->iommu_ops;
+	const struct iommu_ops *ops = dev->iommu_fwspec->ops;
 	struct iommu_group *group;
 	int ret;
 
@@ -1024,12 +1029,14 @@ struct iommu_group *iommu_group_get_for_dev(struct device *dev)
 	if (!group->default_domain) {
 		struct iommu_domain *dom;
 
-		dom = __iommu_domain_alloc(dev->bus, iommu_def_domain_type);
+		dom = iommu_fwspec_domain_alloc(dev->iommu_fwspec,
+			iommu_def_domain_type);
 		if (!dom && iommu_def_domain_type != IOMMU_DOMAIN_DMA) {
 			dev_warn(dev,
 				 "failed to allocate default IOMMU domain of type %u; falling back to IOMMU_DOMAIN_DMA",
 				 iommu_def_domain_type);
-			dom = __iommu_domain_alloc(dev->bus, IOMMU_DOMAIN_DMA);
+			dom = iommu_fwspec_domain_alloc(dev->iommu_fwspec,
+				IOMMU_DOMAIN_DMA);
 		}
 
 		group->default_domain = dom;
@@ -1248,6 +1255,27 @@ void iommu_set_fault_handler(struct iommu_domain *domain,
 }
 EXPORT_SYMBOL_GPL(iommu_set_fault_handler);
 
+struct iommu_domain *iommu_fwspec_domain_alloc(
+	struct iommu_fwspec *iommu_fwspec, unsigned type)
+{
+	struct iommu_domain *domain = NULL;
+
+	if (iommu_fwspec == NULL || iommu_fwspec->ops == NULL)
+		return NULL;
+
+	domain = iommu_fwspec->ops->domain_alloc(type);
+	if (!domain)
+		return NULL;
+
+	domain->ops  = iommu_fwspec->ops;
+	domain->type = type;
+	/* Assume all sizes by default; the driver may override this later */
+	domain->pgsize_bitmap  = iommu_fwspec->ops->pgsize_bitmap;
+
+	return domain;
+}
+EXPORT_SYMBOL_GPL(iommu_fwspec_domain_alloc);
+
 static struct iommu_domain *__iommu_domain_alloc(struct bus_type *bus,
 						 unsigned type)
 {
@@ -1307,6 +1335,9 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 	 * Lock the group to make sure the device-count doesn't
 	 * change while we are attaching
 	 */
+
+	if (!group)
+		return __iommu_attach_device(domain, dev);
 	mutex_lock(&group->mutex);
 	ret = -EINVAL;
 	if (iommu_group_device_count(group) != 1)
@@ -1317,7 +1348,6 @@ int iommu_attach_device(struct iommu_domain *domain, struct device *dev)
 out_unlock:
 	mutex_unlock(&group->mutex);
 	iommu_group_put(group);
-
 	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_attach_device);
@@ -1341,7 +1371,8 @@ void iommu_detach_device(struct iommu_domain *domain, struct device *dev)
 	struct iommu_group *group;
 
 	group = iommu_group_get(dev);
-
+	if (!group)
+		return __iommu_detach_device(domain, dev);
 	mutex_lock(&group->mutex);
 	if (iommu_group_device_count(group) != 1) {
 		WARN_ON(1);
@@ -1468,7 +1499,7 @@ phys_addr_t iommu_iova_to_phys(struct iommu_domain *domain, dma_addr_t iova)
 }
 EXPORT_SYMBOL_GPL(iommu_iova_to_phys);
 
-static size_t iommu_pgsize(struct iommu_domain *domain,
+size_t iommu_pgsize(struct iommu_domain *domain,
 			   unsigned long addr_merge, size_t size)
 {
 	unsigned int pgsize_idx;
@@ -1534,7 +1565,6 @@ int iommu_map(struct iommu_domain *domain, unsigned long iova,
 
 	while (size) {
 		size_t pgsize = iommu_pgsize(domain, iova | paddr, size);
-
 		pr_debug("mapping: iova 0x%lx pa %pa pgsize 0x%zx\n",
 			 iova, &paddr, pgsize);
 
@@ -1562,7 +1592,7 @@ static size_t __iommu_unmap(struct iommu_domain *domain,
 			    bool sync)
 {
 	const struct iommu_ops *ops = domain->ops;
-	size_t unmapped_page, unmapped = 0;
+	size_t unmapped = 0;
 	unsigned long orig_iova = iova;
 	unsigned int min_pagesz;
 
@@ -1587,28 +1617,21 @@ static size_t __iommu_unmap(struct iommu_domain *domain,
 		return -EINVAL;
 	}
 
-	pr_debug("unmap this: iova 0x%lx size 0x%zx\n", iova, size);
-
 	/*
 	 * Keep iterating until we either unmap 'size' bytes (or more)
 	 * or we hit an area that isn't mapped.
 	 */
-	while (unmapped < size) {
-		size_t pgsize = iommu_pgsize(domain, iova, size - unmapped);
-
-		unmapped_page = ops->unmap(domain, iova, pgsize);
-		if (!unmapped_page)
-			break;
-
-		if (sync && ops->iotlb_range_add)
-			ops->iotlb_range_add(domain, iova, pgsize);
-
-		pr_debug("unmapped: iova 0x%lx size 0x%zx\n",
-			 iova, unmapped_page);
-
-		iova += unmapped_page;
-		unmapped += unmapped_page;
+	unmapped = ops->unmap(domain, iova, size);
+	if (unmapped < size) {
+		pr_err("%s: unmap failed!\n", __func__);
+		return -EINVAL;
 	}
+
+	if (sync && ops->iotlb_range_add)
+		ops->iotlb_range_add(domain, iova, size);
+
+	pr_debug("unmapped: iova 0x%lx size 0x%zx\n",
+		 iova, unmapped);
 
 	if (sync && ops->iotlb_sync)
 		ops->iotlb_sync(domain);
@@ -1853,9 +1876,9 @@ int iommu_request_dm_for_dev(struct device *dev)
 	int ret;
 
 	/* Device must already be in a group before calling this function */
-	group = iommu_group_get_for_dev(dev);
-	if (IS_ERR(group))
-		return PTR_ERR(group);
+	group = iommu_group_get(dev);
+	if (!group)
+		return -EINVAL;
 
 	mutex_lock(&group->mutex);
 
@@ -1872,7 +1895,7 @@ int iommu_request_dm_for_dev(struct device *dev)
 
 	/* Allocate a direct mapped domain */
 	ret = -ENOMEM;
-	dm_domain = __iommu_domain_alloc(dev->bus, IOMMU_DOMAIN_IDENTITY);
+	dm_domain = iommu_fwspec_domain_alloc(dev->iommu_fwspec, IOMMU_DOMAIN_IDENTITY);
 	if (!dm_domain)
 		goto out;
 

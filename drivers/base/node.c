@@ -80,6 +80,12 @@ static ssize_t node_read_meminfo(struct device *dev,
 		       "Node %d Active(file):   %8lu kB\n"
 		       "Node %d Inactive(file): %8lu kB\n"
 		       "Node %d Unevictable:    %8lu kB\n"
+#ifdef CONFIG_TASK_PROTECT_LRU
+		       "Node %d Active(prot_anon):   %8lu kB\n"
+		       "Node %d Inactive(prot_anon): %8lu kB\n"
+		       "Node %d Active(prot_file):   %8lu kB\n"
+		       "Node %d Inactive(prot_file): %8lu kB\n"
+#endif
 		       "Node %d Mlocked:        %8lu kB\n",
 		       nid, K(i.totalram),
 		       nid, K(i.freeram),
@@ -93,6 +99,12 @@ static ssize_t node_read_meminfo(struct device *dev,
 		       nid, K(node_page_state(pgdat, NR_ACTIVE_FILE)),
 		       nid, K(node_page_state(pgdat, NR_INACTIVE_FILE)),
 		       nid, K(node_page_state(pgdat, NR_UNEVICTABLE)),
+#ifdef CONFIG_TASK_PROTECT_LRU
+		       nid, K(node_page_state(pgdat, NR_PROTECT_ACTIVE_ANON)),
+		       nid, K(node_page_state(pgdat, NR_PROTECT_INACTIVE_ANON)),
+		       nid, K(node_page_state(pgdat, NR_PROTECT_ACTIVE_FILE)),
+		       nid, K(node_page_state(pgdat, NR_PROTECT_INACTIVE_FILE)),
+#endif
 		       nid, K(sum_zone_node_page_state(nid, NR_MLOCK)));
 
 #ifdef CONFIG_HIGHMEM
@@ -114,6 +126,9 @@ static ssize_t node_read_meminfo(struct device *dev,
 		       "Node %d AnonPages:      %8lu kB\n"
 		       "Node %d Shmem:          %8lu kB\n"
 		       "Node %d KernelStack:    %8lu kB\n"
+#ifdef CONFIG_SHADOW_CALL_STACK
+		       "Node %d ShadowCallStack:%8lu kB\n"
+#endif
 		       "Node %d PageTables:     %8lu kB\n"
 		       "Node %d NFS_Unstable:   %8lu kB\n"
 		       "Node %d Bounce:         %8lu kB\n"
@@ -134,6 +149,9 @@ static ssize_t node_read_meminfo(struct device *dev,
 		       nid, K(node_page_state(pgdat, NR_ANON_MAPPED)),
 		       nid, K(i.sharedram),
 		       nid, sum_zone_node_page_state(nid, NR_KERNEL_STACK_KB),
+#ifdef CONFIG_SHADOW_CALL_STACK
+		       nid, sum_zone_node_page_state(nid, NR_KERNEL_SCS_BYTES) / 1024,
+#endif
 		       nid, K(sum_zone_node_page_state(nid, NR_PAGETABLE)),
 		       nid, K(node_page_state(pgdat, NR_UNSTABLE_NFS)),
 		       nid, K(sum_zone_node_page_state(nid, NR_BOUNCE)),
@@ -197,16 +215,11 @@ static ssize_t node_read_vmstat(struct device *dev,
 			     sum_zone_numa_state(nid, i));
 #endif
 
-	for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++) {
-		/* Skip hidden vmstat items. */
-		if (*vmstat_text[i + NR_VM_ZONE_STAT_ITEMS +
-				 NR_VM_NUMA_STAT_ITEMS] == '\0')
-			continue;
+	for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++)
 		n += sprintf(buf+n, "%s %lu\n",
 			     vmstat_text[i + NR_VM_ZONE_STAT_ITEMS +
 			     NR_VM_NUMA_STAT_ITEMS],
 			     node_page_state(pgdat, i));
-	}
 
 	return n;
 }

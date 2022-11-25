@@ -50,7 +50,11 @@ SCHED_FEAT(NONTASK_CAPACITY, true)
  * Queue remote wakeups on the target CPU and process them
  * using the scheduler IPI. Reduces rq->lock contention/bounces.
  */
+#ifdef CONFIG_HISI_EAS_SCHED
+SCHED_FEAT(TTWU_QUEUE, false)
+#else
 SCHED_FEAT(TTWU_QUEUE, true)
+#endif
 
 /*
  * When doing wakeups, attempt to limit superfluous scans of the LLC domain.
@@ -89,7 +93,11 @@ SCHED_FEAT(WA_BIAS, true)
 /*
  * UtilEstimation. Use estimated CPU utilization.
  */
+#ifdef CONFIG_HISI_EAS_SCHED
+SCHED_FEAT(UTIL_EST, false)
+#else
 SCHED_FEAT(UTIL_EST, true)
+#endif
 
 /*
  * Energy aware scheduling. Use platform energy model to guide scheduling
@@ -100,6 +108,8 @@ SCHED_FEAT(ENERGY_AWARE, true)
 #else
 SCHED_FEAT(ENERGY_AWARE, false)
 #endif
+
+SCHED_FEAT(MIN_CAPACITY_CAPPING, false)
 
 /*
  * Energy aware scheduling algorithm choices:
@@ -117,7 +127,12 @@ SCHED_FEAT(ENERGY_AWARE, false)
  */
 SCHED_FEAT(EAS_PREFER_IDLE, true)
 SCHED_FEAT(FIND_BEST_TARGET, true)
+#ifdef CONFIG_HISI_EAS_SCHED
+/* Disable FBT_STRICT_ORDER on all platforms */
+SCHED_FEAT(FBT_STRICT_ORDER, false)
+#else
 SCHED_FEAT(FBT_STRICT_ORDER, true)
+#endif
 
 /*
  * Apply schedtune boost hold to tasks of all sched classes.
@@ -129,3 +144,7 @@ SCHED_FEAT(FBT_STRICT_ORDER, true)
  * RT class.
  */
 SCHED_FEAT(SCHEDTUNE_BOOST_HOLD_ALL, false)
+
+#ifdef CONFIG_HUAWEI_SCHED_VIP
+SCHED_FEAT(VIP_STRIC_EXCLUSIVE, false)
+#endif

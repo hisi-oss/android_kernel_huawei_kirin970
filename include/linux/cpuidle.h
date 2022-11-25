@@ -43,6 +43,10 @@ struct cpuidle_state {
 	unsigned int	exit_latency; /* in US */
 	int		power_usage; /* in mW */
 	unsigned int	target_residency; /* in US */
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+	unsigned int	lp_exit_latency; /* in US */
+	unsigned int	lp_target_residency; /* in US */
+#endif
 	bool		disabled; /* disabled on all CPUs */
 
 	int (*enter)	(struct cpuidle_device *dev,
@@ -60,6 +64,16 @@ struct cpuidle_state {
 			      struct cpuidle_driver *drv,
 			      int index);
 };
+
+#ifdef CONFIG_HISI_CPUIDLE_SKIP_ALL_CORE_DOWN
+extern spinlock_t g_idle_spin_lock;
+extern struct cpumask g_idle_cpus_mask;
+extern struct cpumask g_core_idle_cpus_mask;
+#define __g_idle_cpus_mask ((const struct cpumask *)&g_idle_cpus_mask)
+#define __g_core_idle_cpus_mask ((const struct cpumask *)&g_core_idle_cpus_mask)
+#define num_idle_cpus()		cpumask_weight(__g_idle_cpus_mask)
+#define num_core_idle_cpus()	cpumask_weight(__g_core_idle_cpus_mask)
+#endif
 
 /* Idle State Flags */
 #define CPUIDLE_FLAG_NONE       (0x00)
@@ -251,6 +265,32 @@ struct cpuidle_governor {
 					bool *stop_tick);
 	void (*reflect)		(struct cpuidle_device *dev, int index);
 };
+
+
+#ifdef CONFIG_HISI_CPUIDLE_MENU_GOV_HIST
+struct menu_hist_cstate_data {
+	int	idle_state_idx;
+	int	org_state_idx;
+	unsigned int	residency_us;
+	s64	exit_time;
+};
+
+struct menu_hist_state_info {
+	unsigned int	same_state_failed_count;
+	u64	same_state_failed_us;
+
+	unsigned int	min_residency_us;
+	unsigned int	total_count;
+	u64	total_residency_us;
+	u64	total_us;
+
+	u64	last_run_us;
+};
+#endif
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+extern int get_lp_mode(void);
+extern void cpuidle_switch_to_lp_mode(int enabled);
+#endif
 
 #ifdef CONFIG_CPU_IDLE
 extern int cpuidle_register_governor(struct cpuidle_governor *gov);

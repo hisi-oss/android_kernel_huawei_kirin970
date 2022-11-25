@@ -21,10 +21,57 @@
  */
 
 #include "xhci.h"
+#include <linux/hisi/usb/chip_usb_log.h>
 
 #define XHCI_INIT_VALUE 0x0
 
 /* Add verbose debugging later, just print everything for now */
+
+void xhci_dump_op_regs(struct xhci_hcd *xhci)
+{
+	if (!xhci) {
+		hiusb_pr_err("xhc is NULL\n");
+		return;
+	}
+
+	hiusb_pr_err("USBCMD = 0x%x", readl(&xhci->op_regs->command));
+	hiusb_pr_err("USBSTS = 0x%x", readl(&xhci->op_regs->status));
+	hiusb_pr_err("PAGESIZE = 0x%x", readl(&xhci->op_regs->page_size));
+	hiusb_pr_err("DNCTRL = 0x%x", readl(&xhci->op_regs->dev_notification));
+	hiusb_pr_err("CRCR = 0x%x", readl(&xhci->op_regs->cmd_ring));
+	hiusb_pr_err("DCBAAP = 0x%x", readl(&xhci->op_regs->dcbaa_ptr));
+	hiusb_pr_err("CONFIG = 0x%x", readl(&xhci->op_regs->config_reg));
+}
+
+void xhci_dump_portsc(struct xhci_hcd *xhci)
+{
+	unsigned int u2_port_nums;
+	unsigned int u3_port_nums;
+	u32 portsc;
+
+	hiusb_pr_err("+\n");
+	if (!xhci) {
+		hiusb_pr_err("xhc is NULL\n");
+		return;
+	}
+
+	u2_port_nums = xhci->num_usb2_ports;
+	u3_port_nums = xhci->num_usb3_ports;
+
+	while (u2_port_nums--) {
+		portsc = readl(xhci->usb2_ports[u2_port_nums]);
+		hiusb_pr_err("u2_port_num:%u, portsc[%s]", u2_port_nums,
+				xhci_decode_portsc(portsc));
+	}
+
+	while (u3_port_nums--) {
+		portsc = readl(xhci->usb3_ports[u3_port_nums]);
+		hiusb_pr_err("u3_port_num:%u, portsc[%s]", u3_port_nums,
+				xhci_decode_portsc(portsc));
+	}
+
+	hiusb_pr_err("-\n");
+}
 
 void xhci_dbg_regs(struct xhci_hcd *xhci)
 {

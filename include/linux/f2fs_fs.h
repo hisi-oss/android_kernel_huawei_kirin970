@@ -110,16 +110,16 @@ struct f2fs_super_block {
 	__le32 qf_ino[F2FS_MAX_QUOTAS];	/* quota inode numbers */
 	__u8 hot_ext_count;		/* # of hot file extension */
 	__u8 reserved[310];		/* valid reserved region */
-	__le32 crc;			/* checksum of superblock */
+	__le32 crc;                     /* checksum of superblock */
 } __packed;
 
 /*
  * For checkpoint
  */
-#define CP_DISABLED_QUICK_FLAG		0x00002000
-#define CP_DISABLED_FLAG		0x00001000
-#define CP_QUOTA_NEED_FSCK_FLAG		0x00000800
-#define CP_LARGE_NAT_BITMAP_FLAG	0x00000400
+#define CP_RESIZEFS_FLAG		0x00008000
+#define CP_DISABLED_FLAG		0x00004000
+#define CP_LARGE_NAT_BITMAP_FLAG	0x00002000
+#define CP_QUOTA_NEED_FSCK_FLAG		0x00001000
 #define CP_NOCRC_RECOVERY_FLAG	0x00000200
 #define CP_TRIMMED_FLAG		0x00000100
 #define CP_NAT_BITS_FLAG	0x00000080
@@ -130,6 +130,11 @@ struct f2fs_super_block {
 #define CP_COMPACT_SUM_FLAG	0x00000004
 #define CP_ORPHAN_PRESENT_FLAG	0x00000002
 #define CP_UMOUNT_FLAG		0x00000001
+#ifdef CONFIG_F2FS_JOURNAL_APPEND
+#define CP_APPEND_SIT_FLAG     0x00000400
+#define CP_APPEND_NAT_FLAG     0x00000800
+#endif
+
 
 #define F2FS_CP_PACKS		2	/* # of checkpoint packs */
 
@@ -187,7 +192,7 @@ struct f2fs_orphan_block {
 struct f2fs_extent {
 	__le32 fofs;		/* start file offset of the extent */
 	__le32 blk;		/* start block address of the extent */
-	__le32 len;		/* length of the extent */
+	__le32 len;		/* lengh of the extent */
 } __packed;
 
 #define F2FS_NAME_LEN		255
@@ -285,7 +290,7 @@ enum {
 
 struct node_footer {
 	__le32 nid;		/* node id */
-	__le32 ino;		/* inode number */
+	__le32 ino;		/* inode nunmber */
 	__le32 flag;		/* include cold/fsync/dentry marks and offset */
 	__le64 cp_ver;		/* checkpoint version */
 	__le32 next_blkaddr;	/* next node page block address */
@@ -305,6 +310,11 @@ struct f2fs_node {
  * For NAT entries
  */
 #define NAT_ENTRY_PER_BLOCK (PAGE_SIZE / sizeof(struct f2fs_nat_entry))
+#define NAT_ENTRY_BITMAP_SIZE	((NAT_ENTRY_PER_BLOCK + 7) / 8)
+#define NAT_ENTRY_BITMAP_SIZE_ALIGNED				\
+	((NAT_ENTRY_BITMAP_SIZE + BITS_PER_LONG - 1) /		\
+	BITS_PER_LONG * BITS_PER_LONG)
+
 
 struct f2fs_nat_entry {
 	__u8 version;		/* latest version of cached nat entry */
@@ -406,6 +416,13 @@ struct summary_footer {
 				sizeof(struct sit_journal_entry))
 #define SIT_JOURNAL_RESERVED	((SUM_JOURNAL_SIZE - 2) %\
 				sizeof(struct sit_journal_entry))
+#ifdef CONFIG_F2FS_JOURNAL_APPEND
+#define NAT_APPEND_JOURNAL_ENTRIES     (F2FS_BLKSIZE /\
+                                        sizeof(struct nat_journal_entry))
+#define SIT_APPEND_JOURNAL_ENTRIES     (F2FS_BLKSIZE /\
+                                        sizeof(struct sit_journal_entry))
+#endif
+
 
 /* Reserved area should make size of f2fs_extra_info equals to
  * that of nat_journal and sit_journal.
@@ -490,12 +507,12 @@ typedef __le32	f2fs_hash_t;
 
 /*
  * space utilization of regular dentry and inline dentry (w/o extra reservation)
- *		regular dentry		inline dentry (def)	inline dentry (min)
- * bitmap	1 * 27 = 27		1 * 23 = 23		1 * 1 = 1
- * reserved	1 * 3 = 3		1 * 7 = 7		1 * 1 = 1
- * dentry	11 * 214 = 2354		11 * 182 = 2002		11 * 2 = 22
- * filename	8 * 214 = 1712		8 * 182 = 1456		8 * 2 = 16
- * total	4096			3488			40
+ *		regular dentry			inline dentry
+ * bitmap	1 * 27 = 27			1 * 23 = 23
+ * reserved	1 * 3 = 3			1 * 7 = 7
+ * dentry	11 * 214 = 2354			11 * 182 = 2002
+ * filename	8 * 214 = 1712			8 * 182 = 1456
+ * total	4096				3488
  *
  * Note: there are more reserved space in inline dentry than in regular
  * dentry, when converting inline dentry we should handle this carefully.
@@ -507,13 +524,12 @@ typedef __le32	f2fs_hash_t;
 #define SIZE_OF_RESERVED	(PAGE_SIZE - ((SIZE_OF_DIR_ENTRY + \
 				F2FS_SLOT_LEN) * \
 				NR_DENTRY_IN_BLOCK + SIZE_OF_DENTRY_BITMAP))
-#define MIN_INLINE_DENTRY_SIZE		40	/* just include '.' and '..' entries */
 
 /* One directory entry slot representing F2FS_SLOT_LEN-sized file name */
 struct f2fs_dir_entry {
 	__le32 hash_code;	/* hash code of file name */
 	__le32 ino;		/* inode number */
-	__le16 name_len;	/* length of file name */
+	__le16 name_len;	/* lengh of file name */
 	__u8 file_type;		/* file type */
 } __packed;
 

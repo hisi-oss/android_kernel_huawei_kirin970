@@ -114,7 +114,7 @@ int dev_pm_opp_disable(struct device *dev, unsigned long freq);
 
 int dev_pm_opp_register_notifier(struct device *dev, struct notifier_block *nb);
 int dev_pm_opp_unregister_notifier(struct device *dev, struct notifier_block *nb);
-
+struct srcu_notifier_head *dev_pm_opp_get_notifier(struct device *dev);
 struct opp_table *dev_pm_opp_set_supported_hw(struct device *dev, const u32 *versions, unsigned int count);
 void dev_pm_opp_put_supported_hw(struct opp_table *opp_table);
 struct opp_table *dev_pm_opp_set_prop_name(struct device *dev, const char *name);
@@ -216,6 +216,12 @@ static inline int dev_pm_opp_enable(struct device *dev, unsigned long freq)
 static inline int dev_pm_opp_disable(struct device *dev, unsigned long freq)
 {
 	return 0;
+}
+
+static inline struct srcu_notifier_head *dev_pm_opp_get_notifier(
+							struct device *dev)
+{
+	return ERR_PTR(-ENOTSUPP);
 }
 
 static inline int dev_pm_opp_register_notifier(struct device *dev, struct notifier_block *nb)

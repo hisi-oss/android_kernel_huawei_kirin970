@@ -249,10 +249,6 @@ xfs_defer_trans_roll(
 	for (i = 0; i < XFS_DEFER_OPS_NR_INODES && dop->dop_inodes[i]; i++)
 		xfs_trans_log_inode(*tp, dop->dop_inodes[i], XFS_ILOG_CORE);
 
-	/* Hold the (previously bjoin'd) buffer locked across the roll. */
-	for (i = 0; i < XFS_DEFER_OPS_NR_BUFS && dop->dop_bufs[i]; i++)
-		xfs_trans_dirty_buf(*tp, dop->dop_bufs[i]);
-
 	trace_xfs_defer_trans_roll((*tp)->t_mountp, dop);
 
 	/* Roll the transaction. */
@@ -267,12 +263,6 @@ xfs_defer_trans_roll(
 	/* Rejoin the joined inodes. */
 	for (i = 0; i < XFS_DEFER_OPS_NR_INODES && dop->dop_inodes[i]; i++)
 		xfs_trans_ijoin(*tp, dop->dop_inodes[i], 0);
-
-	/* Rejoin the buffers and dirty them so the log moves forward. */
-	for (i = 0; i < XFS_DEFER_OPS_NR_BUFS && dop->dop_bufs[i]; i++) {
-		xfs_trans_bjoin(*tp, dop->dop_bufs[i]);
-		xfs_trans_bhold(*tp, dop->dop_bufs[i]);
-	}
 
 	return error;
 }
@@ -305,31 +295,6 @@ xfs_defer_ijoin(
 		}
 	}
 
-	ASSERT(0);
-	return -EFSCORRUPTED;
-}
-
-/*
- * Add this buffer to the deferred op.  Each joined buffer is relogged
- * each time we roll the transaction.
- */
-int
-xfs_defer_bjoin(
-	struct xfs_defer_ops		*dop,
-	struct xfs_buf			*bp)
-{
-	int				i;
-
-	for (i = 0; i < XFS_DEFER_OPS_NR_BUFS; i++) {
-		if (dop->dop_bufs[i] == bp)
-			return 0;
-		else if (dop->dop_bufs[i] == NULL) {
-			dop->dop_bufs[i] = bp;
-			return 0;
-		}
-	}
-
-	ASSERT(0);
 	return -EFSCORRUPTED;
 }
 
@@ -528,7 +493,9 @@ xfs_defer_init(
 	struct xfs_defer_ops		*dop,
 	xfs_fsblock_t			*fbp)
 {
-	memset(dop, 0, sizeof(struct xfs_defer_ops));
+	dop->dop_committed = false;
+	dop->dop_low = false;
+	memset(&dop->dop_inodes, 0, sizeof(dop->dop_inodes));
 	*fbp = NULLFSBLOCK;
 	INIT_LIST_HEAD(&dop->dop_intake);
 	INIT_LIST_HEAD(&dop->dop_pending);

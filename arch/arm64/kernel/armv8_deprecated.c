@@ -178,6 +178,10 @@ static void __init register_insn_emulation(struct insn_emulation_ops *ops)
 	struct insn_emulation *insn;
 
 	insn = kzalloc(sizeof(*insn), GFP_KERNEL);
+	if (IS_ERR_OR_NULL(insn)) {
+		pr_err("%s:%d no memory\n", __func__, __LINE__);
+		return;
+	}
 	insn->ops = ops;
 	insn->min = INSN_UNDEF;
 
@@ -245,6 +249,10 @@ static void __init register_insn_emulation_sysctl(struct ctl_table *table)
 
 	insns_sysctl = kzalloc(sizeof(*sysctl) * (nr_insn_emulated + 1),
 			      GFP_KERNEL);
+	if (IS_ERR_OR_NULL(insns_sysctl)) {
+		pr_err("%s:%d no memory\n", __func__, __LINE__);
+		return;
+	}
 
 	raw_spin_lock_irqsave(&insn_emulation_lock, flags);
 	list_for_each_entry(insn, &insn_emulation, node) {
@@ -431,7 +439,7 @@ ret:
 	pr_warn_ratelimited("\"%s\" (%ld) uses obsolete SWP{B} instruction at 0x%llx\n",
 			current->comm, (unsigned long)current->pid, regs->pc);
 
-	regs->pc += 4;
+	arm64_skip_faulting_instruction(regs, 4);
 	return 0;
 
 fault:
@@ -512,16 +520,16 @@ ret:
 	pr_warn_ratelimited("\"%s\" (%ld) uses deprecated CP15 Barrier instruction at 0x%llx\n",
 			current->comm, (unsigned long)current->pid, regs->pc);
 
-	regs->pc += 4;
+	arm64_skip_faulting_instruction(regs, 4);
 	return 0;
 }
 
 static int cp15_barrier_set_hw_mode(bool enable)
 {
 	if (enable)
-		config_sctlr_el1(0, SCTLR_EL1_CP15BEN);
+		sysreg_clear_set(sctlr_el1, 0, SCTLR_EL1_CP15BEN);
 	else
-		config_sctlr_el1(SCTLR_EL1_CP15BEN, 0);
+		sysreg_clear_set(sctlr_el1, SCTLR_EL1_CP15BEN, 0);
 	return 0;
 }
 
@@ -556,9 +564,9 @@ static int setend_set_hw_mode(bool enable)
 		return -EINVAL;
 
 	if (enable)
-		config_sctlr_el1(SCTLR_EL1_SED, 0);
+		sysreg_clear_set(sctlr_el1, SCTLR_EL1_SED, 0);
 	else
-		config_sctlr_el1(0, SCTLR_EL1_SED);
+		sysreg_clear_set(sctlr_el1, 0, SCTLR_EL1_SED);
 	return 0;
 }
 
@@ -586,14 +594,14 @@ static int compat_setend_handler(struct pt_regs *regs, u32 big_endian)
 static int a32_setend_handler(struct pt_regs *regs, u32 instr)
 {
 	int rc = compat_setend_handler(regs, (instr >> 9) & 1);
-	regs->pc += 4;
+	arm64_skip_faulting_instruction(regs, 4);
 	return rc;
 }
 
 static int t16_setend_handler(struct pt_regs *regs, u32 instr)
 {
 	int rc = compat_setend_handler(regs, (instr >> 3) & 1);
-	regs->pc += 2;
+	arm64_skip_faulting_instruction(regs, 2);
 	return rc;
 }
 

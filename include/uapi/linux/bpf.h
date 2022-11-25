@@ -653,6 +653,30 @@ union bpf_attr {
 enum bpf_func_id {
 	__BPF_FUNC_MAPPER(__BPF_ENUM_FN)
 	__BPF_FUNC_MAX_ID,
+	__BPF_HW_FUNC_MIN_ID = 10000,
+
+	/**
+	* u32 bpf_get_socket_pid(skb)
+	*     Get the owner pid of the socket stored inside sk->sk_socket
+	*     @skb: pointer to skb
+	*     Return: pid of the socket owner on success or 0 if the socket pointer
+	*     inside sk->sk_socket is NULL
+	*/
+
+	BPF_FUNC_get_socket_pid,
+
+	/**
+	* u32 bpf_get_socket_process(skb)
+	*     Get the owner process name via pid.
+	*     @skb: pointer to skb
+	*     @comm: get the process name and store to this variable
+	*     @size: the size of comm
+	*     Return: process name on success or 0 if the socket pointer
+	*     inside sk_buff is NULL
+	*/
+	BPF_FUNC_get_socket_process,
+
+	__BPF_HW_FUNC_MAX_ID,
 };
 #undef __BPF_ENUM_FN
 

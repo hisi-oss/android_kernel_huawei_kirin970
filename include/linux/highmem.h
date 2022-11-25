@@ -10,6 +10,9 @@
 #include <linux/hardirq.h>
 
 #include <asm/cacheflush.h>
+#ifdef CONFIG_HISI_LB
+extern void *lb_page_to_virt(struct page *page);
+#endif
 
 #ifndef ARCH_HAS_FLUSH_ANON_PAGE
 static inline void flush_anon_page(struct vm_area_struct *vma, struct page *page, unsigned long vmaddr)
@@ -57,6 +60,10 @@ static inline struct page *kmap_to_page(void *addr)
 static inline void *kmap(struct page *page)
 {
 	might_sleep();
+#ifdef CONFIG_HISI_LB
+	if (PageLB(page))
+		return lb_page_to_virt(page);
+#endif
 	return page_address(page);
 }
 
@@ -68,6 +75,12 @@ static inline void *kmap_atomic(struct page *page)
 {
 	preempt_disable();
 	pagefault_disable();
+
+#ifdef CONFIG_HISI_LB
+	if (PageLB(page))
+		return lb_page_to_virt(page);
+#endif
+
 	return page_address(page);
 }
 #define kmap_atomic_prot(page, prot)	kmap_atomic(page)
@@ -181,7 +194,22 @@ static inline struct page *
 alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
 					unsigned long vaddr)
 {
-	return __alloc_zeroed_user_highpage(__GFP_MOVABLE, vma, vaddr);
+	gfp_t gfp_flags = __GFP_MOVABLE | ___GFP_CMA;
+#ifdef CONFIG_KZEROD
+	struct page *page = NULL;
+
+	mod_node_page_state(&contig_page_data, NR_ZERO_PAGE_ALLOC_TOTAL, 1);
+	page = alloc_zeroed_page();
+	if (page) {
+		mod_node_page_state(&contig_page_data, NR_ZERO_PAGE_ALLOC_PREZERO, 1);
+		return page;
+	}
+#endif
+#ifdef CONFIG_VM_COPY
+	if (vma->ext_flags & VM_COPY_COW)
+		gfp_flags &= ~___GFP_CMA;
+#endif
+	return __alloc_zeroed_user_highpage(gfp_flags, vma, vaddr);
 }
 
 static inline void clear_highpage(struct page *page)

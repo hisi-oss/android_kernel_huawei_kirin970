@@ -26,6 +26,12 @@
 #include <net/inet_frag.h>
 #include <net/ping.h>
 #include <net/protocol.h>
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+#include <hwnet/ipv4/wifi_delayst.h>
+#endif
+#ifdef CONFIG_HW_SNIFFER
+#include <hwnet/ipv4/sysctl_sniffer.h>
+#endif
 
 static int zero;
 static int one = 1;
@@ -37,6 +43,8 @@ static int ip_local_port_range_min[] = { 1, 1 };
 static int ip_local_port_range_max[] = { 65535, 65535 };
 static int tcp_adv_win_scale_min = -31;
 static int tcp_adv_win_scale_max = 31;
+static int tcp_min_snd_mss_min = TCP_MIN_SND_MSS;
+static int tcp_min_snd_mss_max = 65535;
 static int ip_privileged_port_min;
 static int ip_privileged_port_max = 65535;
 static int ip_ttl_min = 1;
@@ -46,6 +54,7 @@ static int tcp_syn_retries_max = MAX_TCP_SYNCNT;
 static int ip_ping_group_range_min[] = { 0, 0 };
 static int ip_ping_group_range_max[] = { GID_T_MAX, GID_T_MAX };
 static int one_day_secs = 24 * 3600;
+static int comp_sack_nr_max = 255;
 
 /* obsolete */
 static int sysctl_tcp_low_latency __read_mostly;
@@ -606,6 +615,14 @@ static struct ctl_table ipv4_table[] = {
 		.maxlen		= TCP_CA_NAME_MAX,
 		.proc_handler	= proc_tcp_congestion_control,
 	},
+#ifdef CONFIG_HW_SNIFFER
+	{
+		.procname	= "net_sniffer",
+		.mode		= 0644,
+		.maxlen		= PCAP_FILE_LEN,
+		.proc_handler	= proc_sniffer_read_01,
+	},
+#endif
 	{
 		.procname	= "tcp_workaround_signed_windows",
 		.data		= &sysctl_tcp_workaround_signed_windows,
@@ -634,6 +651,15 @@ static struct ctl_table ipv4_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
+#ifdef CONFIG_WIFI_DELAY_STATISTIC
+	{
+		.procname       = "tcp_delay_filter",
+		.data           = tcp_delay_filter,
+		.maxlen         = DELAY_FILTER_NAME_MAX,
+		.mode           = 0644,
+		.proc_handler   = proc_wifi_delay_command,
+	},
+#endif
 #ifdef CONFIG_NETLABEL
 	{
 		.procname	= "cipso_cache_enable",
@@ -728,6 +754,17 @@ static struct ctl_table ipv4_table[] = {
 		.extra1		= &zero,
 		.extra2		= &one,
 	},
+#ifdef CONFIG_TCP_NODELAY
+	{
+		.procname	= "tcp_nodelay",
+		.data		= &sysctl_tcp_nodelay,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+#endif
 	{
 		.procname	= "tcp_invalid_ratelimit",
 		.data		= &sysctl_tcp_invalid_ratelimit,
@@ -748,6 +785,17 @@ static struct ctl_table ipv4_table[] = {
 		.mode           = 0644,
 		.proc_handler   = proc_tcp_default_init_rwnd
 	},
+#ifdef CONFIG_TCP_AUTOTUNING
+	{
+		.procname	= "tcp_autotuning",
+		.data		= &sysctl_tcp_autotuning,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+#endif
 	{
 		.procname	= "icmp_msgs_per_sec",
 		.data		= &sysctl_icmp_msgs_per_sec,
@@ -787,6 +835,50 @@ static struct ctl_table ipv4_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &one
 	},
+#ifdef CONFIG_TCP_ARGO
+	{
+		.procname	= "tcp_argo",
+		.data		= &sysctl_tcp_argo,
+		.maxlen		= sizeof(sysctl_tcp_argo),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif /* CONFIG_TCP_ARGO */
+#ifdef CONFIG_HW_NETQOS_SCHED
+	{
+		.procname	= "netqos_switch",
+		.data		= &sysctl_netqos_switch,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+	},
+	{
+		.procname	= "netqos_debug",
+		.data		= &sysctl_netqos_debug,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+	},
+	{
+		.procname	= "netqos_limit",
+		.data		= &sysctl_netqos_limit,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+	},
+
+	{
+		.procname	= "netqos_period",
+		.data		= &sysctl_netqos_period,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
+
 	{ }
 };
 
@@ -906,6 +998,20 @@ static struct ctl_table ipv4_net_table[] = {
 		.proc_handler	= proc_do_large_bitmap,
 	},
 	{
+		.procname	= "local_reserved_ports_bind_ctrl",
+		.data		= &sysctl_local_reserved_ports_bind_ctrl,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec
+	},
+	{
+		.procname	= "local_reserved_ports_bind_pid",
+		.data		= &sysctl_local_reserved_ports_bind_pid,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec
+	},
+	{
 		.procname	= "ip_no_pmtu_disc",
 		.data		= &init_net.ipv4.sysctl_ip_no_pmtu_disc,
 		.maxlen		= sizeof(int),
@@ -964,6 +1070,15 @@ static struct ctl_table ipv4_net_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "tcp_min_snd_mss",
+		.data		= &init_net.ipv4.sysctl_tcp_min_snd_mss,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &tcp_min_snd_mss_min,
+		.extra2		= &tcp_min_snd_mss_max,
 	},
 	{
 		.procname	= "tcp_probe_threshold",
@@ -1179,6 +1294,22 @@ static struct ctl_table ipv4_net_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
+	{
+		.procname	= "tcp_comp_sack_delay_ns",
+		.data		= &init_net.ipv4.sysctl_tcp_comp_sack_delay_ns,
+		.maxlen		= sizeof(unsigned long),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
+	},
+	{
+		.procname	= "tcp_comp_sack_nr",
+		.data		= &init_net.ipv4.sysctl_tcp_comp_sack_nr,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &comp_sack_nr_max,
+	},
 	{ }
 };
 
@@ -1218,6 +1349,14 @@ err_alloc:
 	return -ENOMEM;
 }
 
+#ifndef CONFIG_HW_SNIFFER
+/* define a null function*/
+int proc_sniffer_write_file(const char *header_buff, unsigned int header_len,
+					const char *frame_buff, unsigned int frame_len, int flag_rx_tx)
+{
+	return 0;
+}
+#endif
 static __net_exit void ipv4_sysctl_exit_net(struct net *net)
 {
 	struct ctl_table *table;

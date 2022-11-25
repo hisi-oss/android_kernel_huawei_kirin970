@@ -305,7 +305,7 @@ static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes)
 	else {
 		nodes_remap(tmp, pol->v.nodes,pol->w.cpuset_mems_allowed,
 								*nodes);
-		pol->w.cpuset_mems_allowed = tmp;
+		pol->w.cpuset_mems_allowed = *nodes;
 	}
 
 	if (nodes_empty(tmp))
@@ -379,8 +379,15 @@ void mpol_rebind_mm(struct mm_struct *mm, nodemask_t *new)
 	struct vm_area_struct *vma;
 
 	down_write(&mm->mmap_sem);
-	for (vma = mm->mmap; vma; vma = vma->vm_next)
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+		vm_write_begin(vma);
 		mpol_rebind_policy(vma->vm_policy, new);
+		vm_write_end(vma);
+#else
+		mpol_rebind_policy(vma->vm_policy, new);
+#endif
+	}
 	up_write(&mm->mmap_sem);
 }
 
@@ -599,10 +606,15 @@ unsigned long change_prot_numa(struct vm_area_struct *vma,
 {
 	int nr_updated;
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_begin(vma);
+#endif
 	nr_updated = change_protection(vma, addr, end, PAGE_NONE, 0, 1);
 	if (nr_updated)
 		count_vm_numa_events(NUMA_PTE_UPDATES, nr_updated);
-
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_end(vma);
+#endif
 	return nr_updated;
 }
 #else
@@ -707,6 +719,9 @@ static int vma_replace_policy(struct vm_area_struct *vma,
 	if (IS_ERR(new))
 		return PTR_ERR(new);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_begin(vma);
+#endif
 	if (vma->vm_ops && vma->vm_ops->set_policy) {
 		err = vma->vm_ops->set_policy(vma, new);
 		if (err)
@@ -714,12 +729,24 @@ static int vma_replace_policy(struct vm_area_struct *vma,
 	}
 
 	old = vma->vm_policy;
+	/*
+	 * The speculative page fault handler accesses this field without
+	 * hodling the mmap_sem.
+	 */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	WRITE_ONCE(vma->vm_policy,  new);
+	vm_write_end(vma);
+#else
 	vma->vm_policy = new; /* protected by mmap_sem */
+#endif
 	mpol_put(old);
 
 	return 0;
  err_out:
 	mpol_put(new);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_end(vma);
+#endif
 	return err;
 }
 
@@ -1352,7 +1379,7 @@ static int copy_nodes_to_user(unsigned long __user *mask, unsigned long maxnode,
 			      nodemask_t *nodes)
 {
 	unsigned long copy = ALIGN(maxnode-1, 64) / 8;
-	unsigned int nbytes = BITS_TO_LONGS(nr_node_ids) * sizeof(long);
+	const int nbytes = BITS_TO_LONGS(MAX_NUMNODES) * sizeof(long);
 
 	if (copy > nbytes) {
 		if (copy > PAGE_SIZE)
@@ -1372,6 +1399,7 @@ SYSCALL_DEFINE6(mbind, unsigned long, start, unsigned long, len,
 	int err;
 	unsigned short mode_flags;
 
+	start = untagged_addr(start);
 	mode_flags = mode & MPOL_MODE_FLAGS;
 	mode &= ~MPOL_MODE_FLAGS;
 	if (mode >= MPOL_MAX)
@@ -1513,7 +1541,9 @@ SYSCALL_DEFINE5(get_mempolicy, int __user *, policy,
 	int uninitialized_var(pval);
 	nodemask_t nodes;
 
-	if (nmask != NULL && maxnode < nr_node_ids)
+	addr = untagged_addr(addr);
+
+	if (nmask != NULL && maxnode < MAX_NUMNODES)
 		return -EINVAL;
 
 	err = do_get_mempolicy(&pval, &nodes, addr, flags);
@@ -1542,7 +1572,7 @@ COMPAT_SYSCALL_DEFINE5(get_mempolicy, int __user *, policy,
 	unsigned long nr_bits, alloc_size;
 	DECLARE_BITMAP(bm, MAX_NUMNODES);
 
-	nr_bits = min_t(unsigned long, maxnode-1, nr_node_ids);
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
 
 	if (nmask)
@@ -1610,8 +1640,34 @@ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
 struct mempolicy *__get_vma_policy(struct vm_area_struct *vma,
 						unsigned long addr)
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	struct mempolicy *pol;
+#else
 	struct mempolicy *pol = NULL;
+#endif
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	if (!vma)
+		return NULL;
+	if (vma->vm_ops && vma->vm_ops->get_policy)
+		return vma->vm_ops->get_policy(vma, addr);
+
+	/*
+	 * This could be called without holding the mmap_sem in the
+	 * speculative page fault handler's path.
+	 */
+	pol = READ_ONCE(vma->vm_policy);
+	if (pol) {
+		/*
+		 * shmem_alloc_page() passes MPOL_F_SHARED policy with
+		 * a pseudo vma whose vma->vm_ops=NULL. Take a reference
+		 * count on these policies which will be dropped by
+		 * mpol_cond_put() later
+		 */
+		if (mpol_needs_cond_ref(pol))
+			mpol_get(pol);
+	}
+#else
 	if (vma) {
 		if (vma->vm_ops && vma->vm_ops->get_policy) {
 			pol = vma->vm_ops->get_policy(vma, addr);
@@ -1628,7 +1684,7 @@ struct mempolicy *__get_vma_policy(struct vm_area_struct *vma,
 				mpol_get(pol);
 		}
 	}
-
+#endif
 	return pol;
 }
 

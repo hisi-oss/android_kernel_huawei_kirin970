@@ -177,7 +177,7 @@ cifs_reconnect_tcon(struct cifs_tcon *tcon, int smb_command)
 	if (!ses->need_reconnect && !tcon->need_reconnect)
 		return 0;
 
-	nls_codepage = load_nls_default();
+	nls_codepage = load_nls("utf8");
 
 	/*
 	 * need to prevent multiple threads trying to simultaneously
@@ -2007,12 +2007,13 @@ cifs_writev_requeue(struct cifs_writedata *wdata)
 
 		wdata2->cfile = find_writable_file(CIFS_I(inode), false);
 		if (!wdata2->cfile) {
-			cifs_dbg(VFS, "No writable handles for inode\n");
+			cifs_dbg(VFS, "No writable handle to retry writepages\n");
 			rc = -EBADF;
-			break;
+		} else {
+			wdata2->pid = wdata2->cfile->pid;
+			rc = server->ops->async_writev(wdata2,
+						       cifs_writedata_release);
 		}
-		wdata2->pid = wdata2->cfile->pid;
-		rc = server->ops->async_writev(wdata2, cifs_writedata_release);
 
 		for (j = 0; j < nr_pages; j++) {
 			unlock_page(wdata2->pages[j]);
@@ -2027,6 +2028,7 @@ cifs_writev_requeue(struct cifs_writedata *wdata)
 			kref_put(&wdata2->refcount, cifs_writedata_release);
 			if (rc == -EAGAIN)
 				continue;
+			i += nr_pages;
 			break;
 		}
 
@@ -2034,7 +2036,15 @@ cifs_writev_requeue(struct cifs_writedata *wdata)
 		i += nr_pages;
 	} while (i < wdata->nr_pages);
 
-	mapping_set_error(inode->i_mapping, rc);
+	/* cleanup remaining pages from the original wdata */
+	for (; i < wdata->nr_pages; i++) { //lint !e574
+		SetPageError(wdata->pages[i]);
+		end_page_writeback(wdata->pages[i]);
+		put_page(wdata->pages[i]);
+	}
+
+	if (rc != 0 && rc != -EAGAIN)
+		mapping_set_error(inode->i_mapping, rc);
 	kref_put(&wdata->refcount, cifs_writedata_release);
 }
 

@@ -9,6 +9,7 @@ remoteproc-y				+= remoteproc_debugfs.o
 remoteproc-y				+= remoteproc_sysfs.o
 remoteproc-y				+= remoteproc_virtio.o
 remoteproc-y				+= remoteproc_elf_loader.o
+obj-$(CONFIG_HISP_REMOTEPROC)		+= hisp_remoteproc.o bin_loader.o
 obj-$(CONFIG_IMX_REMOTEPROC)		+= imx_rproc.o
 obj-$(CONFIG_OMAP_REMOTEPROC)		+= omap_remoteproc.o
 obj-$(CONFIG_WKUP_M3_RPROC)		+= wkup_m3_rproc.o
@@ -21,4 +22,9 @@ obj-$(CONFIG_QCOM_WCNSS_PIL)		+= qcom_wcnss_pil.o
 qcom_wcnss_pil-y			+= qcom_wcnss.o
 qcom_wcnss_pil-y			+= qcom_wcnss_iris.o
 obj-$(CONFIG_ST_REMOTEPROC)		+= st_remoteproc.o
-obj-$(CONFIG_ST_SLIM_REMOTEPROC)	+= st_slim_rproc.o
+ifeq ($(CONFIG_HISP_DEBUG), y)
+	subdir-ccflags-y += -DDEBUG_HISP
+endif
+ifeq ($(CONFIG_HISP_SMMU_BYPASS_DEBUG), y)
+	subdir-ccflags-y += -DISP_DEBUG_MMU_BYPASS
+endif

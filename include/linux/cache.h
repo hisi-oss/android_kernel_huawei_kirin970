@@ -31,6 +31,65 @@
 #define __ro_after_init __attribute__((__section__(".data..ro_after_init")))
 #endif
 
+#ifdef CONFIG_HKIP_PRMEM
+/*
+ * __wr is used to mark objects that cannot be modified directly from the
+ * beginning of the init phase (i.e. after prmem_init() has been called).
+ * These objects become effectively read-only, from the perspective of
+ * performing a direct write, like a variable assignment.
+ * However, they can be altered through a dedicated function.
+ * It is intended for those objects which are modified, ao seldomly, that
+ * the extra cost from the indirect modification is either negligible or
+ * worth paying, for the sake of the protection gained.
+ */
+#ifndef __wr
+#define __wr  __attribute__((__section__(".data..prmem_wr")))
+#endif
+
+/*
+ * __wr_after_init is used to mark objects that cannot be modified
+ * directly after init (i.e. after mark_rodata_ro() has been called).
+ * These objects become effectively read-only, from the perspective of
+ * performing a direct write, like a variable assignment.
+ * However, they can be altered through a dedicated function.
+ * It is intended for those objects which are occasionally modified after
+ * init, however they are modified so seldomly, that the extra cost from
+ * the indirect modification is either negligible or worth paying, for the
+ * sake of the protection gained.
+ */
+#ifndef __wr_after_init
+#define __wr_after_init \
+		__attribute__((__section__(".data..prmem_wr_after_init")))
+#endif
+
+/*
+ * __rw is used as temporary storage for data which eventually will be
+ * stored either in __wr or in __wr_after_init. During development it can
+ * be convenient to formally adhere to prmem interface, while not
+ * enforcing the actual write prtection, until all the code is ready to
+ * cope with the data not being writable by direct assignment.
+ */
+#ifndef __rw
+#define __rw  __attribute__((__section__(".data..prmem_rw")))
+#endif
+
+#ifndef __prmem_pool_type
+#define __prmem_pool_type(type)						\
+		__attribute__((__section__(".data.." #type "_prmem_pools")))
+#define __prmem_object_cache						\
+		__attribute__((__section__(".data..prmem_object_caches")))
+#endif
+
+#else /* !defined(CONFIG_HKIP_PRMEM) */
+
+#define __wr
+#define __wr_after_init
+#define __rw
+#define __prmem_pool_type(type)
+#define __prmem_object_cache
+
+#endif /* !defined(CONFIG_HKIP_PRMEM) */
+
 #ifndef ____cacheline_aligned
 #define ____cacheline_aligned __attribute__((__aligned__(SMP_CACHE_BYTES)))
 #endif

@@ -19,6 +19,18 @@ extern int proc_dohung_task_timeout_secs(struct ctl_table *table, int write,
 enum { sysctl_hung_task_timeout_secs = 0 };
 #endif
 
+#ifdef CONFIG_BOOST_KILL
+extern unsigned int sysctl_boost_killing;
+#endif
+
+#ifdef CONFIG_HW_VIP_THREAD
+#include <chipset_common/hwcfs/hwcfs_sysctl.h>
+#endif
+
+#ifdef CONFIG_HW_QOS_THREAD
+#include <chipset_common/hwqos/hwqos_sysctl.h>
+#endif
+
 extern unsigned int sysctl_sched_latency;
 extern unsigned int sysctl_sched_min_granularity;
 extern unsigned int sysctl_sched_sync_hint_enable;
@@ -30,6 +42,24 @@ extern unsigned int sysctl_sched_use_walt_cpu_util;
 extern unsigned int sysctl_sched_use_walt_task_util;
 extern unsigned int sysctl_sched_walt_init_task_load_pct;
 extern unsigned int sysctl_sched_walt_cpu_high_irqload;
+#ifdef CONFIG_HISI_EAS_SCHED
+extern unsigned int sysctl_sched_walt_cpu_overload_irqload;
+extern unsigned int sysctl_sched_force_upmigrate_duration;
+#endif
+#ifdef CONFIG_SCHED_RUNNING_TASK_ROTATION
+extern unsigned int sysctl_sched_rotate_big_tasks;
+#endif
+#endif
+
+#ifdef CONFIG_RT_CAS
+extern unsigned int sysctl_sched_enable_rt_cas;
+#endif
+#ifdef CONFIG_RT_ACTIVE_LB
+extern unsigned int sysctl_sched_enable_rt_active_lb;
+#endif
+
+#ifdef CONFIG_RENDER_RT_DEBUG
+extern unsigned int sysctl_sched_enable_render_rt_trace;
 #endif
 
 enum sched_tunable_scaling {
@@ -49,11 +79,11 @@ extern unsigned int sysctl_numa_balancing_scan_size;
 extern __read_mostly unsigned int sysctl_sched_migration_cost;
 extern __read_mostly unsigned int sysctl_sched_nr_migrate;
 extern __read_mostly unsigned int sysctl_sched_time_avg;
+#endif
 
 int sched_proc_update_handler(struct ctl_table *table, int write,
 		void __user *buffer, size_t *length,
 		loff_t *ppos);
-#endif
 
 /*
  *  control realtime throttling:

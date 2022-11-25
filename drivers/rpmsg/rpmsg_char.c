@@ -198,7 +198,7 @@ static ssize_t rpmsg_eptdev_read(struct file *filp, char __user *buf,
 		/* Wait until we get data or the endpoint goes away */
 		if (wait_event_interruptible(eptdev->readq,
 					     !skb_queue_empty(&eptdev->queue) ||
-					     !eptdev->ept))
+					     !eptdev->ept)) /*lint !e666*/
 			return -ERESTARTSYS;
 
 		/* We lost the endpoint while waiting */
@@ -249,7 +249,7 @@ static ssize_t rpmsg_eptdev_write(struct file *filp, const char __user *buf,
 		ret = rpmsg_send(eptdev->ept, kbuf, len);
 
 unlock_eptdev:
-	mutex_unlock(&eptdev->ept_lock);
+	mutex_unlock(&eptdev->ept_lock); /*lint !e455*/
 
 free_kbuf:
 	kfree(kbuf);
@@ -300,7 +300,7 @@ static ssize_t name_show(struct device *dev, struct device_attribute *attr,
 {
 	struct rpmsg_eptdev *eptdev = dev_get_drvdata(dev);
 
-	return sprintf(buf, "%s\n", eptdev->chinfo.name);
+	return sprintf(buf, "%s\n", eptdev->chinfo.name); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(name);
 
@@ -309,7 +309,7 @@ static ssize_t src_show(struct device *dev, struct device_attribute *attr,
 {
 	struct rpmsg_eptdev *eptdev = dev_get_drvdata(dev);
 
-	return sprintf(buf, "%d\n", eptdev->chinfo.src);
+	return sprintf(buf, "%d\n", eptdev->chinfo.src); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(src);
 
@@ -318,7 +318,7 @@ static ssize_t dst_show(struct device *dev, struct device_attribute *attr,
 {
 	struct rpmsg_eptdev *eptdev = dev_get_drvdata(dev);
 
-	return sprintf(buf, "%d\n", eptdev->chinfo.dst);
+	return sprintf(buf, "%d\n", eptdev->chinfo.dst); /*lint !e421*/
 }
 static DEVICE_ATTR_RO(dst);
 
@@ -394,7 +394,7 @@ static int rpmsg_eptdev_create(struct rpmsg_ctrldev *ctrldev,
 		put_device(dev);
 	}
 
-	return ret;
+	return ret; /*lint !e429*/
 
 free_ept_ida:
 	ida_simple_remove(&rpmsg_ept_ida, dev->id);
@@ -427,7 +427,7 @@ static int rpmsg_ctrldev_release(struct inode *inode, struct file *filp)
 }
 
 static long rpmsg_ctrldev_ioctl(struct file *fp, unsigned int cmd,
-				unsigned long arg)
+				unsigned long arg) /*lint !e429*/
 {
 	struct rpmsg_ctrldev *ctrldev = fp->private_data;
 	void __user *argp = (void __user *)arg;
@@ -511,7 +511,7 @@ static int rpmsg_chrdev_probe(struct rpmsg_device *rpdev)
 
 	dev_set_drvdata(&rpdev->dev, ctrldev);
 
-	return ret;
+	return ret; /*lint !e429*/
 
 free_ctrl_ida:
 	ida_simple_remove(&rpmsg_ctrl_ida, dev->id);

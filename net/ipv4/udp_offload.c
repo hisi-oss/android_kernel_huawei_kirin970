@@ -187,6 +187,82 @@ out_unlock:
 }
 EXPORT_SYMBOL(skb_udp_tunnel_segment);
 
+struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,
+				  netdev_features_t features,
+				  unsigned int mss, __sum16 check)
+{
+	struct sock *sk = gso_skb->sk;
+	unsigned int sum_truesize = 0;
+	struct sk_buff *segs, *seg;
+	unsigned int hdrlen;
+	struct udphdr *uh;
+	struct iphdr *iph;
+	bool copy_dtor;
+
+	if (gso_skb->len <= sizeof(*uh) + mss)
+		return ERR_PTR(-EINVAL);
+
+	hdrlen = gso_skb->data - skb_mac_header(gso_skb);
+	skb_pull(gso_skb, sizeof(*uh));
+
+	/* clear destructor to avoid skb_segment assigning it to tail */
+	copy_dtor = gso_skb->destructor == sock_wfree;
+	if (copy_dtor)
+		gso_skb->destructor = NULL;
+
+	features = (features & 0xFFFFFFFE);
+	segs = skb_segment(gso_skb, features);
+	if (unlikely(IS_ERR_OR_NULL(segs))) {
+		if (copy_dtor)
+			gso_skb->destructor = sock_wfree;
+		return segs;
+	}
+
+	for (seg = segs; seg; seg = seg->next) {
+		uh = udp_hdr(seg);
+		iph = ip_hdr(seg);
+		uh->len = htons(seg->len - hdrlen);
+		uh->check = 0;
+		seg->csum = csum_partial(skb_transport_header(seg), seg->len - skb_transport_offset(seg), 0);
+		uh->check = csum_tcpudp_magic(iph->saddr, iph->daddr, (seg->len - skb_transport_offset(seg)),
+				      IPPROTO_UDP, seg->csum);
+
+		if (copy_dtor) {
+			seg->destructor = sock_wfree;
+			seg->sk = sk;
+			sum_truesize += seg->truesize;
+		}
+	}
+
+	if (copy_dtor) {
+		int delta = sum_truesize - gso_skb->truesize;
+
+		/* In some pathological cases, delta can be negative.
+		 * We need to either use refcount_add() or refcount_sub_and_test()
+		 */
+		if (likely(delta >= 0))
+			refcount_add(delta, &sk->sk_wmem_alloc);
+		else
+			WARN_ON_ONCE(refcount_sub_and_test(-delta, &sk->sk_wmem_alloc));
+	}
+
+	return segs;
+}
+/*lint -e580*/
+EXPORT_SYMBOL_GPL(__udp_gso_segment);
+/*lint +e580*/
+
+static struct sk_buff *__udp4_gso_segment(struct sk_buff *gso_skb,
+					  netdev_features_t features)
+{
+	const struct iphdr *iph = ip_hdr(gso_skb);
+	unsigned int mss = skb_shinfo(gso_skb)->gso_size;
+
+	return __udp_gso_segment(gso_skb, features, mss,
+				 udp_v4_check(sizeof(struct udphdr) + mss,
+					      iph->saddr, iph->daddr, 0));
+}
+
 static struct sk_buff *udp4_ufo_fragment(struct sk_buff *skb,
 					 netdev_features_t features)
 {
@@ -203,11 +279,14 @@ static struct sk_buff *udp4_ufo_fragment(struct sk_buff *skb,
 		goto out;
 	}
 
-	if (!(skb_shinfo(skb)->gso_type & SKB_GSO_UDP))
+	if (!(skb_shinfo(skb)->gso_type & (SKB_GSO_UDP | SKB_GSO_UDP_L4)))
 		goto out;
 
 	if (!pskb_may_pull(skb, sizeof(struct udphdr)))
 		goto out;
+
+	if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4)
+		return __udp4_gso_segment(skb, features);
 
 	mss = skb_shinfo(skb)->gso_size;
 	if (unlikely(skb->len <= mss))

@@ -28,6 +28,7 @@
 #include <asm/cpu.h>
 #include <asm/cputype.h>
 #include <asm/topology.h>
+#include <asm/smp_plat.h>
 
 static int __init get_cpu_for_node(struct device_node *node)
 {
@@ -215,6 +216,117 @@ out:
 struct cpu_topology cpu_topology[NR_CPUS];
 EXPORT_SYMBOL_GPL(cpu_topology);
 
+#ifdef CONFIG_ARCH_HISI
+static const char * const little_cores[] = {
+	"arm,cortex-a53",
+	NULL,
+};
+
+static bool is_little_cpu(struct device_node *cn)
+{
+	const char * const *lc;
+	for (lc = little_cores; *lc; lc++)
+		if (of_device_is_compatible(cn, *lc))
+			return true;
+	return false;
+}
+
+void __init arch_get_fast_and_slow_cpus(struct cpumask *fast,
+					struct cpumask *slow)
+{
+	struct device_node *cn = NULL;
+	int cpu;
+
+	cpumask_clear(fast);
+	cpumask_clear(slow);
+
+	/*
+	 * Else, parse device tree for little cores.
+	 */
+	while ((cn = of_find_node_by_type(cn, "cpu"))) {
+		const u32 *mpidr;
+		int len;
+
+		mpidr = of_get_property(cn, "reg", &len);
+		if (!mpidr || len != 8) {
+			pr_err("%s missing reg property\n", cn->full_name);
+			continue;
+		}
+
+		cpu = get_logical_index(be32_to_cpup(mpidr+1));
+		if (cpu == -EINVAL) {
+			pr_err("couldn't get logical index for mpidr %x\n",
+							be32_to_cpup(mpidr+1));
+			break;
+		}
+
+		if (is_little_cpu(cn))
+			cpumask_set_cpu(cpu, slow);
+		else
+			cpumask_set_cpu(cpu, fast);
+	}
+
+	if (!cpumask_empty(fast) && !cpumask_empty(slow))
+		return;
+
+	/*
+	 * We didn't find both big and little cores so let's call all cores
+	 * fast as this will keep the system running, with all cores being
+	 * treated equal.
+	 */
+	cpumask_setall(fast);
+	cpumask_clear(slow);
+}
+
+struct cpumask slow_cpu_mask;
+struct cpumask fast_cpu_mask;
+
+void hisi_get_fast_cpus(struct cpumask *cpumask)
+{
+	cpumask_copy(cpumask, &fast_cpu_mask);
+}
+EXPORT_SYMBOL(hisi_get_fast_cpus);
+
+void hisi_get_slow_cpus(struct cpumask *cpumask)
+{
+	cpumask_copy(cpumask, &slow_cpu_mask);
+}
+EXPORT_SYMBOL(hisi_get_slow_cpus);
+
+int test_fast_cpu(int cpu)
+{
+	return cpumask_test_cpu(cpu, &fast_cpu_mask);
+}
+EXPORT_SYMBOL(test_fast_cpu);
+
+int test_slow_cpu(int cpu)
+{
+	return cpumask_test_cpu(cpu, &slow_cpu_mask);
+}
+EXPORT_SYMBOL(test_slow_cpu);
+#endif
+
+#ifdef CONFIG_32BIT_COMPAT
+struct cpumask compat_cpu_mask;
+
+void hisi_get_compat_cpus(struct cpumask *cpumask)
+{
+	cpumask_copy(cpumask, &compat_cpu_mask);
+}
+
+int hisi_test_compat_cpu(int cpu)
+{
+	return cpumask_test_cpu(cpu, &compat_cpu_mask);
+}
+
+static bool is_current_compat_cpu(void)
+{
+	u64 reg_id_aa64pfr0 = read_sysreg_s(SYS_ID_AA64PFR0_EL1);
+
+	return id_aa64pfr0_32bit_el0(reg_id_aa64pfr0);
+}
+#endif
+
 const struct cpumask *cpu_coregroup_mask(int cpu)
 {
 	return &cpu_topology[cpu].core_sibling;
@@ -250,6 +362,10 @@ void store_cpu_topology(unsigned int cpuid)
 	struct cpu_topology *cpuid_topo = &cpu_topology[cpuid];
 	u64 mpidr;
 
+#ifdef CONFIG_32BIT_COMPAT
+	if (is_current_compat_cpu())
+		cpumask_set_cpu(cpuid, &compat_cpu_mask);
+#endif
 	if (cpuid_topo->cluster_id != -1)
 		goto topology_populated;
 
@@ -363,4 +479,11 @@ void __init init_cpu_topology(void)
 		reset_cpu_topology();
 	else
 		set_sched_topology(arm64_topology);
+
+#ifdef CONFIG_ARCH_HISI
+	arch_get_fast_and_slow_cpus(&fast_cpu_mask, &slow_cpu_mask);
+#endif
+#ifdef CONFIG_32BIT_COMPAT
+	cpumask_clear(&compat_cpu_mask);
+#endif
 }

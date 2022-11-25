@@ -418,11 +418,11 @@ found_service:
 
 	case RXRPC_CONN_REMOTELY_ABORTED:
 		rxrpc_set_call_completion(call, RXRPC_CALL_REMOTELY_ABORTED,
-					  conn->abort_code, conn->error);
+					  conn->remote_abort, -ECONNABORTED);
 		break;
 	case RXRPC_CONN_LOCALLY_ABORTED:
 		rxrpc_abort_call("CON", call, sp->hdr.seq,
-				 conn->abort_code, conn->error);
+				 conn->local_abort, -ECONNABORTED);
 		break;
 	default:
 		BUG();

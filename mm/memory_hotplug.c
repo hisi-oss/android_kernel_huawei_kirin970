@@ -35,7 +35,9 @@
 #include <linux/memblock.h>
 #include <linux/bootmem.h>
 #include <linux/compaction.h>
-#include <linux/rmap.h>
+#ifdef CONFIG_HYPERHOLD
+#include <linux/memcg_policy.h>
+#endif
 
 #include <asm/tlbflush.h>
 
@@ -48,7 +50,7 @@
  * and restore_online_page_callback() for generic callback restore.
  */
 
-static void generic_online_page(struct page *page);
+static int generic_online_page(struct page *page);
 
 static online_page_callback_t online_page_callback = generic_online_page;
 static DEFINE_MUTEX(online_page_callback_lock);
@@ -65,7 +67,7 @@ void put_online_mems(void)
 	percpu_up_read(&mem_hotplug_lock);
 }
 
-bool movable_node_enabled = false;
+bool movable_node_enabled = true;
 
 #ifndef CONFIG_MEMORY_HOTPLUG_DEFAULT_ONLINE
 bool memhp_auto_online;
@@ -680,11 +682,12 @@ void __online_page_free(struct page *page)
 }
 EXPORT_SYMBOL_GPL(__online_page_free);
 
-static void generic_online_page(struct page *page)
+static int generic_online_page(struct page *page)
 {
 	__online_page_set_limits(page);
 	__online_page_increment_counters(page);
 	__online_page_free(page);
+	return 0;
 }
 
 static int online_pages_range(unsigned long start_pfn, unsigned long nr_pages,
@@ -966,6 +969,9 @@ int __ref online_pages(unsigned long pfn, unsigned long nr_pages, int online_typ
 	if (onlined_pages) {
 		kswapd_run(nid);
 		kcompactd_run(nid);
+#ifdef CONFIG_HYPERHOLD_ZSWAPD
+		zswapd_run(nid);
+#endif
 	}
 
 	vm_total_pages = nr_free_pagecache_pages();
@@ -1110,7 +1116,12 @@ static int online_memory_block(struct memory_block *mem, void *arg)
 	return device_online(&mem->dev);
 }
 
-/* we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG */
+/*
+ * NOTE: The caller must call lock_device_hotplug() to serialize hotplug
+ * and online/offline operations (triggered e.g. by sysfs).
+ *
+ * we are OK calling __meminit stuff here - we have CONFIG_MEMORY_HOTPLUG
+ */
 int __ref add_memory_resource(int nid, struct resource *res, bool online)
 {
 	u64 start, size;
@@ -1203,9 +1214,9 @@ out:
 	mem_hotplug_done();
 	return ret;
 }
-EXPORT_SYMBOL_GPL(add_memory_resource);
 
-int __ref add_memory(int nid, u64 start, u64 size)
+/* requires device_hotplug_lock, see add_memory_resource() */
+int __ref __add_memory(int nid, u64 start, u64 size)
 {
 	struct resource *res;
 	int ret;
@@ -1218,6 +1229,17 @@ int __ref add_memory(int nid, u64 start, u64 size)
 	if (ret < 0)
 		release_memory_resource(res);
 	return ret;
+}
+
+int add_memory(int nid, u64 start, u64 size)
+{
+	int rc;
+
+	lock_device_hotplug();
+	rc = __add_memory(nid, start, size);
+	unlock_device_hotplug();
+
+	return rc;
 }
 EXPORT_SYMBOL_GPL(add_memory);
 
@@ -1395,21 +1417,6 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 		} else if (thp_migration_supported() && PageTransHuge(page))
 			pfn = page_to_pfn(compound_head(page))
 				+ hpage_nr_pages(page) - 1;
-
-		/*
-		 * HWPoison pages have elevated reference counts so the migration would
-		 * fail on them. It also doesn't make any sense to migrate them in the
-		 * first place. Still try to unmap such a page in case it is still mapped
-		 * (e.g. current hwpoison implementation doesn't unmap KSM pages but keep
-		 * the unmap as the catch all safety net).
-		 */
-		if (PageHWPoison(page)) {
-			if (WARN_ON(PageLRU(page)))
-				isolate_lru_page(page);
-			if (page_mapped(page))
-				try_to_unmap(page, TTU_IGNORE_MLOCK | TTU_IGNORE_ACCESS);
-			continue;
-		}
 
 		if (!get_page_unless_zero(page))
 			continue;
@@ -1727,6 +1734,9 @@ repeat:
 	if (arg.status_change_nid >= 0) {
 		kswapd_stop(node);
 		kcompactd_stop(node);
+#ifdef CONFIG_HYPERHOLD_ZSWAPD
+		zswapd_stop(node);
+#endif
 	}
 
 	vm_total_pages = nr_free_pagecache_pages();
@@ -1748,7 +1758,8 @@ failed_removal:
 /* Must be protected by mem_hotplug_begin() or a device_lock */
 int offline_pages(unsigned long start_pfn, unsigned long nr_pages)
 {
-	return __offline_pages(start_pfn, start_pfn + nr_pages, 120 * HZ);
+	/* offline pages timeout is 3s */
+	return __offline_pages(start_pfn, start_pfn + nr_pages, 3 * HZ);
 }
 #endif /* CONFIG_MEMORY_HOTREMOVE */
 

@@ -62,24 +62,23 @@ static inline void __cpuidle_unset_driver(struct cpuidle_driver *drv)
  * __cpuidle_set_driver - set per CPU driver variables for the given driver.
  * @drv: a valid pointer to a struct cpuidle_driver
  *
- * For each CPU in the driver's cpumask, unset the registered driver per CPU
- * to @drv.
- *
- * Returns 0 on success, -EBUSY if the CPUs have driver(s) already.
+ * Returns 0 on success, -EBUSY if any CPU in the cpumask have a driver
+ * different from drv already.
  */
 static inline int __cpuidle_set_driver(struct cpuidle_driver *drv)
 {
 	int cpu;
 
 	for_each_cpu(cpu, drv->cpumask) {
+		struct cpuidle_driver *old_drv;
 
-		if (__cpuidle_get_cpu_driver(cpu)) {
-			__cpuidle_unset_driver(drv);
+		old_drv = __cpuidle_get_cpu_driver(cpu);
+		if (old_drv && old_drv != drv)
 			return -EBUSY;
-		}
-
-		per_cpu(cpuidle_drivers, cpu) = drv;
 	}
+
+	for_each_cpu(cpu, drv->cpumask)
+		per_cpu(cpuidle_drivers, cpu) = drv;
 
 	return 0;
 }
@@ -354,3 +353,45 @@ void cpuidle_driver_unref(void)
 
 	spin_unlock(&cpuidle_driver_lock);
 }
+
+#ifdef CONFIG_HISI_CPUIDLE_LP_MODE
+static int lp_mode_enabled = 0;
+int get_lp_mode(void)
+{
+	return lp_mode_enabled;
+}
+
+void cpuidle_switch_to_lp_mode(int enabled)
+{
+	int cpu, i;
+	struct cpuidle_driver *drv = NULL;
+
+	cpuidle_pause();
+
+	spin_lock(&cpuidle_driver_lock);
+
+	for_each_possible_cpu(cpu) {
+		drv = per_cpu(cpuidle_drivers, cpu);
+		if (drv == NULL)
+			continue;
+		if (cpumask_first(drv->cpumask) != cpu)
+			continue;
+
+		/* state0 will be ignored */
+		for (i = 1; i < drv->state_count; i++) {
+			if (enabled && drv->states[i].lp_exit_latency > drv->states[i].exit_latency)
+				continue;
+
+			if (!enabled && drv->states[i].lp_exit_latency < drv->states[i].exit_latency)
+				continue;
+
+			swap(drv->states[i].lp_exit_latency, drv->states[i].exit_latency);
+			swap(drv->states[i].lp_target_residency, drv->states[i].target_residency);
+		}
+	}
+	lp_mode_enabled = enabled;
+	spin_unlock(&cpuidle_driver_lock);
+
+	cpuidle_resume();
+}
+#endif // CONFIG_HISI_CPUIDLE_LP_MODE

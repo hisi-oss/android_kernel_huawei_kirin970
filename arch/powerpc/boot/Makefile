@@ -49,11 +49,6 @@ endif
 
 BOOTAFLAGS	:= -D__ASSEMBLY__ $(BOOTCFLAGS) -traditional -nostdinc
 
-ifeq ($(cc-name),clang)
-BOOTCFLAGS += $(CLANG_FLAGS)
-BOOTAFLAGS += $(CLANG_FLAGS)
-endif
-
 ifdef CONFIG_DEBUG_INFO
 BOOTCFLAGS	+= -g
 endif

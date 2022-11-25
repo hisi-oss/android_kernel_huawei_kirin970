@@ -78,23 +78,17 @@ static int bnxt_tc_parse_redir(struct bnxt *bp,
 	return 0;
 }
 
-static int bnxt_tc_parse_vlan(struct bnxt *bp,
-			      struct bnxt_tc_actions *actions,
-			      const struct tc_action *tc_act)
+static void bnxt_tc_parse_vlan(struct bnxt *bp,
+			       struct bnxt_tc_actions *actions,
+			       const struct tc_action *tc_act)
 {
-	switch (tcf_vlan_action(tc_act)) {
-	case TCA_VLAN_ACT_POP:
+	if (tcf_vlan_action(tc_act) == TCA_VLAN_ACT_POP) {
 		actions->flags |= BNXT_TC_ACTION_FLAG_POP_VLAN;
-		break;
-	case TCA_VLAN_ACT_PUSH:
+	} else if (tcf_vlan_action(tc_act) == TCA_VLAN_ACT_PUSH) {
 		actions->flags |= BNXT_TC_ACTION_FLAG_PUSH_VLAN;
 		actions->push_vlan_tci = htons(tcf_vlan_push_vid(tc_act));
 		actions->push_vlan_tpid = tcf_vlan_push_proto(tc_act);
-		break;
-	default:
-		return -EOPNOTSUPP;
 	}
-	return 0;
 }
 
 static int bnxt_tc_parse_actions(struct bnxt *bp,
@@ -128,9 +122,7 @@ static int bnxt_tc_parse_actions(struct bnxt *bp,
 
 		/* Push/pop VLAN */
 		if (is_tcf_vlan(tc_act)) {
-			rc = bnxt_tc_parse_vlan(bp, actions, tc_act);
-			if (rc)
-				return rc;
+			bnxt_tc_parse_vlan(bp, actions, tc_act);
 			continue;
 		}
 	}

@@ -556,6 +556,9 @@ void copy_attrs(struct inode *dest, const struct inode *src)
 static int sdcardfs_permission(struct vfsmount *mnt, struct inode *inode, int mask)
 {
 	int err;
+#ifdef SDCARDFS_PLUGIN_PRIVACY_SPACE
+	struct sdcardfs_sb_info *sbi;
+#endif
 	struct inode tmp;
 	struct sdcardfs_inode_data *top = top_data_get(SDCARDFS_I(inode));
 
@@ -586,6 +589,16 @@ static int sdcardfs_permission(struct vfsmount *mnt, struct inode *inode, int ma
 	if (IS_POSIXACL(inode))
 		pr_warn("%s: This may be undefined behavior...\n", __func__);
 	err = generic_permission(&tmp, mask);
+#ifdef SDCARDFS_PLUGIN_PRIVACY_SPACE
+	sbi = SDCARDFS_SB(inode->i_sb);
+	if (unlikely(sbi->blocked_userid >= 0)) {
+		uid_t uid = from_kuid(&init_user_ns, current_fsuid()); /*lint !e666*/
+		if (multiuser_get_user_id(uid) == sbi->blocked_userid &&
+			(multiuser_get_app_id(uid) != sbi->appid_excluded &&
+			multiuser_get_app_id(uid) != 1000)) // 1000 means default uid, not magic num
+			return -EACCES;
+	}
+#endif
 	return err;
 }
 
@@ -810,6 +823,7 @@ const struct inode_operations sdcardfs_dir_iops = {
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+	.listxattr	= sdcardfs_listxattr,
 };
 
 const struct inode_operations sdcardfs_main_iops = {
@@ -818,4 +832,5 @@ const struct inode_operations sdcardfs_main_iops = {
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+	.listxattr	= sdcardfs_listxattr,
 };

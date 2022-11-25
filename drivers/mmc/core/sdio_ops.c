@@ -159,12 +159,13 @@ int mmc_io_rw_extended(struct mmc_card *card, int write, unsigned fn,
 
 		data.sg = sgtable.sgl;
 		data.sg_len = nents;
-
+		/*lint -save -e679*/
 		for_each_sg(data.sg, sg_ptr, data.sg_len, i) {
 			sg_set_buf(sg_ptr, buf + i * seg_size,
 				   min(seg_size, left_size));
 			left_size -= seg_size;
 		}
+		/*lint -restore*/
 	} else {
 		data.sg = &sg;
 		data.sg_len = 1;

@@ -9,6 +9,8 @@
  * 2 of the License, or (at your option) any later version.
  */
 
+#include <linux/fscrypt_common.h>
+
 struct super_block;
 struct file_system_type;
 struct iomap;

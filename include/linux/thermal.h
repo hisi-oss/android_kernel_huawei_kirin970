@@ -31,6 +31,9 @@
 #include <linux/sysfs.h>
 #include <linux/workqueue.h>
 #include <uapi/linux/thermal.h>
+#ifdef CONFIG_FREQ_LIMIT_COUNTER
+#include <linux/hisi/perfhub.h>
+#endif
 
 #define THERMAL_TRIPS_NONE	-1
 #define THERMAL_MAX_TRIPS	12
@@ -78,11 +81,36 @@ enum thermal_device_mode {
 	THERMAL_DEVICE_ENABLED,
 };
 
+#ifdef CONFIG_IPA_THERMAL
+enum thermal_boost_mode {
+	THERMAL_BOOST_DISABLED = 0,
+	THERMAL_BOOST_ENABLED,
+};
+#endif
+
+#if defined(CONFIG_THERMAL_TSENSOR) || defined(CONFIG_THERMAL_PERIPHERAL)
+enum thermal_trip_activation_mode {
+	THERMAL_TRIP_ACTIVATION_DISABLED = 0,
+	THERMAL_TRIP_ACTIVATION_ENABLED,
+};
+#endif
+
 enum thermal_trip_type {
 	THERMAL_TRIP_ACTIVE = 0,
 	THERMAL_TRIP_PASSIVE,
 	THERMAL_TRIP_HOT,
 	THERMAL_TRIP_CRITICAL,
+#if defined(CONFIG_THERMAL_TSENSOR) || defined(CONFIG_THERMAL_PERIPHERAL)
+	THERMAL_TRIP_CONFIGURABLE_HI,
+	THERMAL_TRIP_CONFIGURABLE_LOW,
+	THERMAL_TRIP_CRITICAL_LOW,
+#endif
+#ifdef CONFIG_THERMAL_TRIP
+	THERMAL_TRIP_THROTTLING,
+	THERMAL_TRIP_SHUTDOWN,
+	THERMAL_TRIP_BELOW_VR_MIN,
+	THERMAL_TRIP_OVER_SKIN,
+#endif
 };
 
 enum thermal_trend {
@@ -120,6 +148,10 @@ struct thermal_zone_device_ops {
 		enum thermal_trip_type *);
 	int (*get_trip_temp) (struct thermal_zone_device *, int, int *);
 	int (*set_trip_temp) (struct thermal_zone_device *, int, int);
+#if defined(CONFIG_THERMAL_TSENSOR) || defined(CONFIG_THERMAL_PERIPHERAL)
+	int (*activate_trip_type) (struct thermal_zone_device *, int,
+		enum thermal_trip_activation_mode);
+#endif
 	int (*get_trip_hyst) (struct thermal_zone_device *, int, int *);
 	int (*set_trip_hyst) (struct thermal_zone_device *, int, int);
 	int (*get_crit_temp) (struct thermal_zone_device *, int *);
@@ -151,8 +183,15 @@ struct thermal_cooling_device {
 	const struct thermal_cooling_device_ops *ops;
 	bool updated; /* true if the cooling device does not need update */
 	struct mutex lock; /* protect thermal_instances list */
+#ifdef CONFIG_IPA_THERMAL
+	bool bound_event;  /* record bound event for bounded detection */
+	bool ipa_enabled;
+	int current_load;  /* record load information for bounded detection */
+	int current_freq;  /* record freq information for bounded detection */
+#endif
 	struct list_head thermal_instances;
 	struct list_head node;
+	u64 cdev_cur_power;
 };
 
 struct thermal_attr {
@@ -233,6 +272,10 @@ struct thermal_zone_device {
 	struct list_head node;
 	struct delayed_work poll_queue;
 	enum thermal_notify_event notify_event;
+#ifdef CONFIG_IPA_THERMAL
+	bool is_board_thermal;
+	bool is_soc_thermal;
+#endif
 };
 
 /**
@@ -341,6 +384,16 @@ struct thermal_zone_params {
 	 * 		Used by thermal zone drivers (default 0).
 	 */
 	int offset;
+
+#ifdef CONFIG_IPA_THERMAL
+	s32 boost;
+
+	u32 boost_timeout;
+	u32 max_sustainable_power;
+#endif
+	u64 cur_ipa_total_power;
+	u32 check_cnt;
+	u32 cur_enable;
 };
 
 struct thermal_genl_event {
@@ -556,4 +609,54 @@ static inline int thermal_generate_netlink_event(struct thermal_zone_device *tz,
 }
 #endif
 
+#ifdef CONFIG_IPA_THERMAL
+#define IPA_PERIPH_NUM 8
+
+#define IPA_FREQ_MAX	(~0U)
+#define USER_SPACE_GOVERNOR       "user_space"
+#define SOC_THERMAL_NAME "soc_thermal"
+#define BOARD_THERMAL_NAME "board_thermal"
+
+#define CDEV_GPU_NAME "thermal-devfreq-0"
+#define CDEV_CPU_CLUSTER0_NAME "thermal-cpufreq-0"
+#define CDEV_CPU_CLUSTER1_NAME "thermal-cpufreq-1"
+#define CDEV_CPU_CLUSTER2_NAME "thermal-cpufreq-2"
+
+#ifdef CONFIG_THERMAL_SHELL
+#define IPA_SENSOR_SHELL "shell_frame"
+#define IPA_SENSOR_SHELLID    254
+#endif
+
+extern u32 g_cluster_num;
+extern u32 g_ipa_sensor_num;
+/* the num of ipa cpufreq table equals cluster num , but
+cluster num is a variable. So define a larger arrays in advance.
+*/
+#define CAPACITY_OF_ARRAY  10
+extern unsigned int g_ipa_actor_num;
+extern u32 ipa_cpufreq_table_index[CAPACITY_OF_ARRAY];
+extern const char *ipa_actor_name[CAPACITY_OF_ARRAY];
+extern u32 ipa_actor_index[CAPACITY_OF_ARRAY];
+#define IPA_CLUSTER0_WEIGHT_NAME       "cdev1_weight"  //default name value
+#define IPA_CLUSTER1_WEIGHT_NAME       "cdev2_weight"
+#define IPA_CLUSTER2_WEIGHT_NAME       "cdev3_weight"
+#define IPA_GPU_WEIGHT_NAME            "cdev0_weight"
+extern unsigned int g_ipa_gpu_boost_weights[CAPACITY_OF_ARRAY];
+extern unsigned int g_ipa_normal_weights[CAPACITY_OF_ARRAY];
+
+s32 thermal_zone_temp_check(s32 temperature);
+int thermal_zone_cdev_get_power(const char *thermal_zone_name, const char *cdev_name, unsigned int *power);
+int of_parse_ipa_sensor_index_table(void);
+int ipa_weights_cfg_init(void);
+int ipa_get_actor_id(const char *name);
+void ipa_freq_limit_init(void);
+void ipa_freq_limit_reset(struct thermal_zone_device *tz);
+unsigned int ipa_freq_limit(int actor, unsigned int target_freq);
+int get_soc_temp(void);
+#else
+static inline int get_soc_temp(void)
+{
+	return 0;
+}
+#endif
 #endif /* __THERMAL_H__ */

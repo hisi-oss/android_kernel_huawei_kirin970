@@ -182,7 +182,7 @@ void thermal_cdev_update(struct thermal_cooling_device *cdev)
 	list_for_each_entry(instance, &cdev->thermal_instances, cdev_node) {
 		dev_dbg(&cdev->device, "zone%d->target=%lu\n",
 			instance->tz->id, instance->target);
-		if (instance->target == THERMAL_NO_TARGET)
+		if (instance->target == THERMAL_NO_TARGET)/*lint !e501 */
 			continue;
 		if (instance->target > target)
 			target = instance->target;

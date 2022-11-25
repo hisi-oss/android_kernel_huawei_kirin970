@@ -134,6 +134,12 @@ config U_SERIAL_CONSOLE
 	help
 	   It supports the serial gadget can be used as a console.
 
+config USB_FUNC_ADD_SS_DESC
+	boolean "USB Gadget functions support superspeed"
+	default y
+	help
+	  USB Gadget functions support superspeed.
+
 source "drivers/usb/gadget/udc/Kconfig"
 
 #
@@ -150,6 +156,9 @@ config USB_F_ACM
 	tristate
 
 config USB_F_SS_LB
+	tristate
+
+config USB_F_SOURCESINK_EXT
 	tristate
 
 config USB_U_SERIAL
@@ -215,11 +224,40 @@ config USB_F_PRINTER
 config USB_F_TCM
 	tristate
 
+config USB_F_MTP
+	tristate
+
+config USB_F_PTP
+        tristate
+
 config USB_F_AUDIO_SRC
 	tristate
 
 config USB_F_ACC
 	tristate
+
+config USB_F_MODEM_ACM
+	bool "USB F MODEM ACM"
+
+config USB_HW_F_ACM
+	tristate
+
+config USB_MASS_STORAGE_SUPPORT_MAC
+	bool "Mass Storage support MAC system"
+	depends on USB_F_MASS_STORAGE
+	help
+	  Mass Storage support MAC system.
+
+config USB_MIRRORLINK_SUPPORT
+	bool "USB MIRRORLINK SUPPORT"
+	depends on USB_CONFIGFS_NCM
+	help
+	  USB MIRRORLINK SUPPORT
+
+config USB_HICAR_SUPPORT
+	bool "USB HICAR SUPPORT"
+	help
+	  USB HICAR SUPPORT
 
 # this first set of drivers all depend on bulk-capable hardware.
 
@@ -362,6 +400,14 @@ config USB_CONFIGFS_F_LB_SS
 	  test software, like the "usbtest" driver, to put your hardware
 	  and its driver through a basic set of functional tests.
 
+config USB_CONFIGFS_F_SOURCESINK_EXT
+	bool "sourcesink_ext function (for testing)"
+	depends on USB_CONFIGFS
+	select USB_F_SOURCESINK_EXT
+	help
+	  Sourcesink_ext function either sinks and sources bulk/intr/isoc data.
+	  It also implements control requests, for "chapter 9" conformance.
+
 config USB_CONFIGFS_F_FS
 	bool "Function filesystem (FunctionFS)"
 	depends on USB_CONFIGFS
@@ -374,9 +420,24 @@ config USB_CONFIGFS_F_FS
 	  implemented in kernel space (for instance Ethernet, serial or
 	  mass storage) and other are implemented in user space.
 
+config USB_CONFIGFS_F_MTP
+	boolean "MTP gadget"
+	depends on USB_CONFIGFS
+	select USB_F_MTP
+	help
+	  USB gadget MTP support
+
+config USB_CONFIGFS_F_PTP
+	boolean "PTP gadget"
+	depends on USB_CONFIGFS && USB_CONFIGFS_F_MTP
+	select USB_F_PTP
+	help
+	  USB gadget PTP support
+
 config USB_CONFIGFS_F_ACC
 	boolean "Accessory gadget"
 	depends on USB_CONFIGFS
+	depends on HID=y
 	select USB_F_ACC
 	help
 	  USB gadget Accessory support
@@ -512,34 +573,26 @@ config USB_CONFIGFS_F_TCM
 	  Both protocols can work on USB2.0 and USB3.0.
 	  UAS utilizes the USB 3.0 feature called streams support.
 
-choice
-	tristate "USB Gadget precomposed configurations"
-	default USB_ETH
-	optional
+config USB_CONFIGFS_MODEM_ACM
+	bool "USB CONFIGFS MODEM ACM"
+	depends on USB_CONFIGFS
+	select USB_F_MODEM_ACM
 	help
-	  A Linux "Gadget Driver" talks to the USB Peripheral Controller
-	  driver through the abstract "gadget" API.  Some other operating
-	  systems call these "client" drivers, of which "class drivers"
-	  are a subset (implementing a USB device class specification).
-	  A gadget driver implements one or more USB functions using
-	  the peripheral hardware.
+	  ACM function used for Modem
 
-	  Gadget drivers are hardware-neutral, or "platform independent",
-	  except that they sometimes must understand quirks or limitations
-	  of the particular controllers they work with.  For example, when
-	  a controller doesn't support alternate configurations or provide
-	  enough of the right types of endpoints, the gadget driver might
-	  not be able work with that controller, or might need to implement
-	  a less common variant of a device class protocol.
+config USB_CONFIGFS_HW_ACM
+	bool "USB CONFIGFS HW ACM"
+	depends on USB_CONFIGFS
+	select USB_HW_F_ACM
+	help
+	  ACM function used for manufacture mode.
 
-	  The available choices each represent a single precomposed USB
-	  gadget configuration. In the device model, each option contains
-	  both the device instantiation as a child for a USB gadget
-	  controller, and the relevant drivers for each function declared
-	  by the device.
+config CHIP_USB_CONFIGFS
+	bool "USB Gadget set up through configfs in platforms"
+	depends on USB_CONFIGFS
+	help
+	  USB Gadget set up through configfs in platforms.
 
 source "drivers/usb/gadget/legacy/Kconfig"
-
-endchoice
 
 endif # USB_GADGET

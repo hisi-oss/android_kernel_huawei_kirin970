@@ -27,7 +27,7 @@
  * reports.
  */
 
-static noinline void __init kmalloc_oob_right(void)
+static noinline void kmalloc_oob_right(void)
 {
 	char *ptr;
 	size_t size = 123;
@@ -43,7 +43,7 @@ static noinline void __init kmalloc_oob_right(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_oob_left(void)
+static noinline void kmalloc_oob_left(void)
 {
 	char *ptr;
 	size_t size = 15;
@@ -59,7 +59,7 @@ static noinline void __init kmalloc_oob_left(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_node_oob_right(void)
+static noinline void kmalloc_node_oob_right(void)
 {
 	char *ptr;
 	size_t size = 4096;
@@ -76,7 +76,7 @@ static noinline void __init kmalloc_node_oob_right(void)
 }
 
 #ifdef CONFIG_SLUB
-static noinline void __init kmalloc_pagealloc_oob_right(void)
+static noinline void kmalloc_pagealloc_oob_right(void)
 {
 	char *ptr;
 	size_t size = KMALLOC_MAX_CACHE_SIZE + 10;
@@ -96,7 +96,7 @@ static noinline void __init kmalloc_pagealloc_oob_right(void)
 }
 #endif
 
-static noinline void __init kmalloc_large_oob_right(void)
+static noinline void kmalloc_large_oob_right(void)
 {
 	char *ptr;
 	size_t size = KMALLOC_MAX_CACHE_SIZE - 256;
@@ -114,7 +114,7 @@ static noinline void __init kmalloc_large_oob_right(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_oob_krealloc_more(void)
+static noinline void kmalloc_oob_krealloc_more(void)
 {
 	char *ptr1, *ptr2;
 	size_t size1 = 17;
@@ -126,6 +126,7 @@ static noinline void __init kmalloc_oob_krealloc_more(void)
 	if (!ptr1 || !ptr2) {
 		pr_err("Allocation failed\n");
 		kfree(ptr1);
+		kfree(ptr2);
 		return;
 	}
 
@@ -133,7 +134,7 @@ static noinline void __init kmalloc_oob_krealloc_more(void)
 	kfree(ptr2);
 }
 
-static noinline void __init kmalloc_oob_krealloc_less(void)
+static noinline void kmalloc_oob_krealloc_less(void)
 {
 	char *ptr1, *ptr2;
 	size_t size1 = 17;
@@ -151,7 +152,7 @@ static noinline void __init kmalloc_oob_krealloc_less(void)
 	kfree(ptr2);
 }
 
-static noinline void __init kmalloc_oob_16(void)
+static noinline void kmalloc_oob_16(void)
 {
 	struct {
 		u64 words[2];
@@ -171,7 +172,7 @@ static noinline void __init kmalloc_oob_16(void)
 	kfree(ptr2);
 }
 
-static noinline void __init kmalloc_oob_memset_2(void)
+static noinline void kmalloc_oob_memset_2(void)
 {
 	char *ptr;
 	size_t size = 8;
@@ -187,7 +188,7 @@ static noinline void __init kmalloc_oob_memset_2(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_oob_memset_4(void)
+static noinline void kmalloc_oob_memset_4(void)
 {
 	char *ptr;
 	size_t size = 8;
@@ -204,7 +205,7 @@ static noinline void __init kmalloc_oob_memset_4(void)
 }
 
 
-static noinline void __init kmalloc_oob_memset_8(void)
+static noinline void kmalloc_oob_memset_8(void)
 {
 	char *ptr;
 	size_t size = 8;
@@ -220,7 +221,7 @@ static noinline void __init kmalloc_oob_memset_8(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_oob_memset_16(void)
+static noinline void kmalloc_oob_memset_16(void)
 {
 	char *ptr;
 	size_t size = 16;
@@ -236,7 +237,7 @@ static noinline void __init kmalloc_oob_memset_16(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_oob_in_memset(void)
+static noinline void kmalloc_oob_in_memset(void)
 {
 	char *ptr;
 	size_t size = 666;
@@ -252,7 +253,7 @@ static noinline void __init kmalloc_oob_in_memset(void)
 	kfree(ptr);
 }
 
-static noinline void __init kmalloc_uaf(void)
+static noinline void kmalloc_uaf(void)
 {
 	char *ptr;
 	size_t size = 10;
@@ -268,7 +269,7 @@ static noinline void __init kmalloc_uaf(void)
 	*(ptr + 8) = 'x';
 }
 
-static noinline void __init kmalloc_uaf_memset(void)
+static noinline void kmalloc_uaf_memset(void)
 {
 	char *ptr;
 	size_t size = 33;
@@ -284,7 +285,7 @@ static noinline void __init kmalloc_uaf_memset(void)
 	memset(ptr, 0, size);
 }
 
-static noinline void __init kmalloc_uaf2(void)
+static noinline void kmalloc_uaf2(void)
 {
 	char *ptr1, *ptr2;
 	size_t size = 43;
@@ -309,7 +310,7 @@ static noinline void __init kmalloc_uaf2(void)
 	kfree(ptr2);
 }
 
-static noinline void __init kmem_cache_oob(void)
+static noinline void kmem_cache_oob(void)
 {
 	char *p;
 	size_t size = 200;
@@ -367,7 +368,7 @@ free_cache:
 
 static char global_array[10];
 
-static noinline void __init kasan_global_oob(void)
+static noinline void kasan_global_oob(void)
 {
 	volatile int i = 3;
 	char *p = &global_array[ARRAY_SIZE(global_array) + i];
@@ -376,7 +377,7 @@ static noinline void __init kasan_global_oob(void)
 	*(volatile char *)p;
 }
 
-static noinline void __init kasan_stack_oob(void)
+static noinline void kasan_stack_oob(void)
 {
 	char stack_array[10];
 	volatile int i = 0;
@@ -386,10 +387,10 @@ static noinline void __init kasan_stack_oob(void)
 	*(volatile char *)p;
 }
 
-static noinline void __init ksize_unpoisons_memory(void)
+static noinline void ksize_unpoisons_memory(void)
 {
 	char *ptr;
-	size_t size = 123, real_size = size;
+	size_t size = 123, real_size;
 
 	pr_info("ksize() unpoisons the whole allocated chunk\n");
 	ptr = kmalloc(size, GFP_KERNEL);
@@ -405,7 +406,7 @@ static noinline void __init ksize_unpoisons_memory(void)
 	kfree(ptr);
 }
 
-static noinline void __init copy_user_test(void)
+static noinline void copy_user_test(void)
 {
 	char *kmem;
 	char __user *usermem;
@@ -450,7 +451,7 @@ static noinline void __init copy_user_test(void)
 	kfree(kmem);
 }
 
-static noinline void __init use_after_scope_test(void)
+static noinline void use_after_scope_test(void)
 {
 	volatile char *volatile p;
 
@@ -473,7 +474,27 @@ static noinline void __init use_after_scope_test(void)
 	p[1023] = 1;
 }
 
-static int __init kmalloc_tests_init(void)
+static noinline void kasan_alloca_oob_left(void)
+{
+	volatile int i = 10;
+	char alloca_array[i];
+	char *p = alloca_array - 1;
+
+	pr_info("out-of-bounds to left on alloca\n");
+	*(volatile char *)p;
+}
+
+static noinline void kasan_alloca_oob_right(void)
+{
+	volatile int i = 10;
+	char alloca_array[i];
+	char *p = alloca_array + i;
+
+	pr_info("out-of-bounds to right on alloca\n");
+	*(volatile char *)p;
+}
+
+int kmalloc_tests_init(void)
 {
 	/*
 	 * Temporarily enable multi-shot mode. Otherwise, we'd only get a
@@ -512,5 +533,3 @@ static int __init kmalloc_tests_init(void)
 	return -EAGAIN;
 }
 
-module_init(kmalloc_tests_init);
-MODULE_LICENSE("GPL");

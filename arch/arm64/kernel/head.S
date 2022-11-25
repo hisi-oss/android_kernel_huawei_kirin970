@@ -37,6 +37,7 @@
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable.h>
 #include <asm/page.h>
+#include <asm/scs.h>
 #include <asm/smp.h>
 #include <asm/sysreg.h>
 #include <asm/thread_info.h>
@@ -113,7 +114,7 @@ pe_header:
 	 *  x28        __create_page_tables()     callee preserved temp register
 	 *  x19/x20    __primary_switch()         callee preserved temp registers
 	 */
-ENTRY(stext)
+ENTRY_NOTAG(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	adrp	x23, __PHYS_OFFSET
@@ -127,6 +128,9 @@ ENTRY(stext)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
+#ifdef CONFIG_UEFI_HHEE
+	bl	hhee_vmmu_enable
+#endif
 	b	__primary_switch
 ENDPROC(stext)
 
@@ -325,13 +329,28 @@ __primary_switched:
 	add	sp, x4, #THREAD_SIZE
 	adr_l	x5, init_task
 	msr	sp_el0, x5			// Save thread_info
+#ifdef CONFIG_HISI_HARDEN_BRANCH_PREDICTOR
+	mrs	x4, mpidr_el1
+	isb
+	ubfx	x4, x4, #8, #8
+	cmp	x4, #0x4
 
+	adr_l	x5, vectors
+	adr_l	x8, bigcpus_vectors
+
+	csel	x8, x5, x8, lt
+#else
 	adr_l	x8, vectors			// load VBAR_EL1 with virtual
+#endif
 	msr	vbar_el1, x8			// vector table address
 	isb
 
 	stp	xzr, x30, [sp, #-16]!
 	mov	x29, sp
+
+#ifdef CONFIG_SHADOW_CALL_STACK
+	adr_l	x18, init_shadow_call_stack	// Set shadow call stack
+#endif
 
 	str_l	x21, __fdt_pointer, x5		// Save FDT pointer
 
@@ -346,7 +365,6 @@ __primary_switched:
 	sub	x2, x2, x0
 	bl	__pi_memset
 	dsb	ishst				// Make zero page visible to PTW
-
 #ifdef CONFIG_KASAN
 	bl	kasan_early_init
 #endif
@@ -373,7 +391,7 @@ ENDPROC(__primary_switched)
  */
 	.section ".idmap.text","awx"
 
-ENTRY(kimage_vaddr)
+ENTRY_NOTAG(kimage_vaddr)
 	.quad		_text - TEXT_OFFSET
 
 /*
@@ -506,9 +524,7 @@ install_el2_stub:
 	 * will be done via the _EL1 system register aliases in __cpu_setup.
 	 */
 	/* sctlr_el1 */
-	mov	x0, #0x0800			// Set/clear RES{1,0} bits
-CPU_BE(	movk	x0, #0x33d0, lsl #16	)	// Set EE and E0E on BE systems
-CPU_LE(	movk	x0, #0x30d0, lsl #16	)	// Clear EE and E0E on LE systems
+	mov_q	x0, (SCTLR_EL1_RES1 | ENDIAN_SET_EL1)
 	msr	sctlr_el1, x0
 
 	/* Coprocessor traps. */
@@ -557,14 +573,14 @@ ENDPROC(set_cpu_boot_mode_flag)
  * This is not in .bss, because we set it sufficiently early that the boot-time
  * zeroing of .bss would clobber it.
  */
-ENTRY(__boot_cpu_mode)
+ENTRY_NOTAG(__boot_cpu_mode)
 	.long	BOOT_CPU_MODE_EL2
 	.long	BOOT_CPU_MODE_EL1
 /*
  * The booting CPU updates the failed status @__early_cpu_boot_status,
  * with MMU turned off.
  */
-ENTRY(__early_cpu_boot_status)
+ENTRY_NOTAG(__early_cpu_boot_status)
 	.long 	0
 
 	.popsection
@@ -573,7 +589,7 @@ ENTRY(__early_cpu_boot_status)
 	 * This provides a "holding pen" for platforms to hold all secondary
 	 * cores are held until we're ready for them to initialise.
 	 */
-ENTRY(secondary_holding_pen)
+ENTRY_NOTAG(secondary_holding_pen)
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	bl	set_cpu_boot_mode_flag
 	mrs	x0, mpidr_el1
@@ -608,7 +624,19 @@ secondary_startup:
 ENDPROC(secondary_startup)
 
 __secondary_switched:
+#ifdef CONFIG_HISI_HARDEN_BRANCH_PREDICTOR
+	mrs	x1, mpidr_el1
+	isb
+	ubfx	x1, x1, #8, #8
+	cmp	x1, #0x4
+
+	adr_l	x0, vectors
+	adr_l	x5, bigcpus_vectors
+
+	csel	x5, x0, x5, lt
+#else
 	adr_l	x5, vectors
+#endif
 	msr	vbar_el1, x5
 	isb
 
@@ -617,6 +645,10 @@ __secondary_switched:
 	mov	sp, x1
 	ldr	x2, [x0, #CPU_BOOT_TASK]
 	msr	sp_el0, x2
+#ifdef CONFIG_SHADOW_CALL_STACK
+	ldr	x18, [x2, #TSK_TI_SCS]		// Set shadow call stack
+	str	xzr, [x2, #TSK_TI_SCS]
+#endif
 	mov	x29, #0
 	mov	x30, #0
 	b	secondary_start_kernel

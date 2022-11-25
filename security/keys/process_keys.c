@@ -20,7 +20,6 @@
 #include <linux/security.h>
 #include <linux/user_namespace.h>
 #include <linux/uaccess.h>
-#include <keys/request_key_auth-type.h>
 #include "internal.h"
 
 /* Session keyring create vs join semaphore */
@@ -756,6 +755,7 @@ reget_creds:
 	put_cred(ctx.cred);
 	goto try_again;
 }
+EXPORT_SYMBOL(lookup_user_key);
 
 /*
  * Join the named keyring as the session keyring if possible else attempt to
@@ -845,7 +845,15 @@ error:
 void key_change_session_keyring(struct callback_head *twork)
 {
 	const struct cred *old = current_cred();
+#ifdef CONFIG_HKIP_PROTECT_CRED
+	struct cred_rw *cred_rw = container_of(twork, struct cred_rw, rcu);
+	struct cred *new = NULL;
+
+	validate_cred_rw(cred_rw);
+	new = cred_rw->cred_wr;
+#else
 	struct cred *new = container_of(twork, struct cred, rcu);
+#endif
 
 	if (unlikely(current->flags & PF_EXITING)) {
 		put_cred(new);

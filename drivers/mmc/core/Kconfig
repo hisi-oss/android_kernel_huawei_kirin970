@@ -61,6 +61,14 @@ config MMC_BLOCK_MINORS
 
 	  If unsure, say 8 here.
 
+config MMC_BLOCK_DEFERRED_RESUME
+	bool "Deferr MMC layer resume until I/O is requested"
+	depends on MMC_BLOCK
+	default n
+	help
+	  Say Y here to enable deferred MMC resume until I/O
+	  is requested. This will reduce overall resume latency and
+	  save power when theres an SD card inserted but not being used.
 config SDIO_UART
 	tristate "SDIO UART/GPS class support"
 	depends on TTY
@@ -94,3 +102,29 @@ config MMC_PARANOID_SD_INIT
 	  about re-trying SD init requests. This can be a useful
 	  work-around for buggy controllers and hardware. Enable
 	  if you are experiencing issues with SD detection.
+
+config MMC_FFU
+	bool "FFU SUPPORT"
+	depends on MMC != n
+	help
+	  This is an option to run firmware update on eMMC 5.0.
+	  Field firmware updates (FFU) enables features enhancment
+	  in the field.
+
+config HW_SD_HEALTH_DETECT
+	bool "SD HEALTH DIAG SUPPORT"
+	default y
+	help
+	  This is an option to diag sd health status.
+
+config MMC_PASSWORDS
+	boolean "MMC card lock/unlock passwords (EXPERIMENTAL)"
+	select KEYS
+	default y
+	help
+	  Say Y here to enable the use of passwords to lock and unlock
+	  MMC cards.  This uses the access key retention support, using
+	  request_key to look up the key associated with each card.
+	  For example, if you have an MMC card that was locked using
+	  Symbian OS on your cell phone, you won't be able to read it
+	  on Linux without this support.

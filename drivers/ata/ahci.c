@@ -1695,6 +1695,10 @@ static int ahci_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		hpriv->irq_handler = ahci_thunderx_irq_handler;
 #endif
 
+#ifdef CONFIG_PCIE_DEVICE_LEGACY_INT
+	if (pdev->vendor == PCI_VENDOR_ID_ASMEDIA && pdev->device == 0x1064)
+		hpriv->flags |= AHCI_HFLAG_NO_MSI;
+#endif
 	/* save initial config */
 	ahci_pci_save_initial_config(pdev, hpriv);
 

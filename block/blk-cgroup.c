@@ -73,6 +73,8 @@ static void blkg_free(struct blkcg_gq *blkg)
 		if (blkg->pd[i])
 			blkcg_policy[i]->pd_free_fn(blkg->pd[i]);
 
+	percpu_counter_destroy(&blkg->nr_dirtied);
+
 	if (blkg->blkcg != &blkcg_root)
 		blk_exit_rl(blkg->q, &blkg->rl);
 
@@ -94,6 +96,7 @@ static struct blkcg_gq *blkg_alloc(struct blkcg *blkcg, struct request_queue *q,
 {
 	struct blkcg_gq *blkg;
 	int i;
+	int ret;
 
 	/* alloc and init base part */
 	blkg = kzalloc_node(sizeof(*blkg), gfp_mask, q->node);
@@ -108,6 +111,7 @@ static struct blkcg_gq *blkg_alloc(struct blkcg *blkcg, struct request_queue *q,
 	INIT_LIST_HEAD(&blkg->q_node);
 	blkg->blkcg = blkcg;
 	atomic_set(&blkg->refcnt, 1);
+	atomic_set(&blkg->writers, 0);
 
 	/* root blkg uses @q->root_rl, init rl only for !root blkgs */
 	if (blkcg != &blkcg_root) {
@@ -133,6 +137,11 @@ static struct blkcg_gq *blkg_alloc(struct blkcg *blkcg, struct request_queue *q,
 		pd->plid = i;
 	}
 
+	ret = percpu_counter_init(&blkg->nr_dirtied, (s64)0, gfp_mask);
+	if (ret)
+		goto err_free;
+
+	blkg->weight = blkcg->weight;
 	return blkg;
 
 err_free:
@@ -872,13 +881,20 @@ int blkg_conf_prep(struct blkcg *blkcg, const struct blkcg_policy *pol,
 			goto fail;
 		}
 
+		if (radix_tree_preload(GFP_KERNEL)) {
+			blkg_free(new_blkg);
+			ret = -ENOMEM;
+			goto fail;
+		}
+
 		rcu_read_lock();
 		spin_lock_irq(q->queue_lock);
 
 		blkg = blkg_lookup_check(pos, pol, q);
 		if (IS_ERR(blkg)) {
 			ret = PTR_ERR(blkg);
-			goto fail_unlock;
+			blkg_free(new_blkg);
+			goto fail_preloaded;
 		}
 
 		if (blkg) {
@@ -887,9 +903,11 @@ int blkg_conf_prep(struct blkcg *blkcg, const struct blkcg_policy *pol,
 			blkg = blkg_create(pos, q, new_blkg);
 			if (unlikely(IS_ERR(blkg))) {
 				ret = PTR_ERR(blkg);
-				goto fail_unlock;
+				goto fail_preloaded;
 			}
 		}
+
+		radix_tree_preload_end();
 
 		if (pos == blkcg)
 			goto success;
@@ -900,6 +918,8 @@ success:
 	ctx->body = body;
 	return 0;
 
+fail_preloaded:
+	radix_tree_preload_end();
 fail_unlock:
 	spin_unlock_irq(q->queue_lock);
 	rcu_read_unlock();
@@ -1096,6 +1116,7 @@ blkcg_css_alloc(struct cgroup_subsys_state *parent_css)
 			pol->cpd_init_fn(cpd);
 	}
 
+	blkcg->weight = BLKIO_WEIGHT_DEFAULT;
 	spin_lock_init(&blkcg->lock);
 	INIT_RADIX_TREE(&blkcg->blkg_tree, GFP_NOWAIT | __GFP_NOWARN);
 	INIT_HLIST_HEAD(&blkcg->blkg_list);
@@ -1210,6 +1231,66 @@ void blkcg_exit_queue(struct request_queue *q)
 	blk_throtl_exit(q);
 }
 
+#ifdef CONFIG_BLK_DEV_THROTTLING
+static void blkcg_attach(struct cgroup_taskset *tset)
+{
+	struct task_struct *task;
+	struct cgroup_subsys_state *css;
+	struct blkcg *blkcg;
+
+	cgroup_taskset_first(tset, &css);
+	blkcg = css_to_blkcg(css);
+	spin_lock_irq(&blkcg->lock);
+	rcu_read_lock();
+
+	cgroup_taskset_for_each(task, css, tset) {
+		wake_up_process(task);
+
+		if (!task->mm)
+			continue;
+
+		if (!task->mm->io_limit)
+			continue;
+
+		if (task->mm->io_limit->max_inflights == blkcg->max_inflights)
+			continue;
+
+		blk_throtl_update_limit(task->mm->io_limit,
+					blkcg->max_inflights);
+	}
+
+	rcu_read_unlock();
+	spin_unlock_irq(&blkcg->lock);
+}
+
+static void blkcg_fork(struct task_struct *task)
+{
+	struct blkcg *blkcg;
+
+	if (task_css_is_root(task, io_cgrp_id))
+		return;
+
+	if (!task->mm)
+		return;
+
+	if (!task->mm->io_limit)
+		return;
+
+	rcu_read_lock();
+	blkcg = task_blkcg(task);
+	if (task->mm->io_limit->max_inflights == blkcg->max_inflights) {
+		rcu_read_unlock();
+		return;
+	}
+
+	spin_lock_irq(&blkcg->lock);
+	blk_throtl_update_limit(task->mm->io_limit,
+				blkcg->max_inflights);
+	spin_unlock_irq(&blkcg->lock);
+	rcu_read_unlock();
+}
+#endif
+
 /*
  * We cannot support shared io contexts, as we have no mean to support
  * two tasks with the same ioc in two different groups without major rework
@@ -1261,6 +1342,10 @@ struct cgroup_subsys io_cgrp_subsys = {
 	.css_offline = blkcg_css_offline,
 	.css_free = blkcg_css_free,
 	.can_attach = blkcg_can_attach,
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	.attach = blkcg_attach,
+	.fork = blkcg_fork,
+#endif
 	.bind = blkcg_bind,
 	.dfl_cftypes = blkcg_files,
 	.legacy_cftypes = blkcg_legacy_files,

@@ -40,8 +40,9 @@ struct vm_area_struct;
 #define ___GFP_DIRECT_RECLAIM	0x400000u
 #define ___GFP_WRITE		0x800000u
 #define ___GFP_KSWAPD_RECLAIM	0x1000000u
+#define ___GFP_CMA              0x2000000u
 #ifdef CONFIG_LOCKDEP
-#define ___GFP_NOLOCKDEP	0x2000000u
+#define ___GFP_NOLOCKDEP	0x4000000u
 #else
 #define ___GFP_NOLOCKDEP	0
 #endif
@@ -210,7 +211,7 @@ struct vm_area_struct;
 #define __GFP_NOLOCKDEP ((__force gfp_t)___GFP_NOLOCKDEP)
 
 /* Room for N __GFP_FOO bits */
-#define __GFP_BITS_SHIFT (25 + IS_ENABLED(CONFIG_LOCKDEP))
+#define __GFP_BITS_SHIFT (26 + IS_ENABLED(CONFIG_LOCKDEP))
 #define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
 
 /*
@@ -302,6 +303,9 @@ static inline int gfpflags_to_migratetype(const gfp_t gfp_flags)
 	if (unlikely(page_group_by_mobility_disabled))
 		return MIGRATE_UNMOVABLE;
 
+	if (IS_ENABLED(CONFIG_CMA) && gfp_flags & ___GFP_CMA)
+		return MIGRATE_CMA;
+
 	/* Group based on mobility */
 	return (gfp_flags & GFP_MOVABLE_MASK) >> GFP_MOVABLE_SHIFT;
 }
@@ -311,6 +315,29 @@ static inline int gfpflags_to_migratetype(const gfp_t gfp_flags)
 static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 {
 	return !!(gfp_flags & __GFP_DIRECT_RECLAIM);
+}
+
+/**
+ * gfpflags_normal_context - is gfp_flags a normal sleepable context?
+ * @gfp_flags: gfp_flags to test
+ *
+ * Test whether @gfp_flags indicates that the allocation is from the
+ * %current context and allowed to sleep.
+ *
+ * An allocation being allowed to block doesn't mean it owns the %current
+ * context.  When direct reclaim path tries to allocate memory, the
+ * allocation context is nested inside whatever %current was doing at the
+ * time of the original allocation.  The nested allocation may be allowed
+ * to block but modifying anything %current owns can corrupt the outer
+ * context's expectations.
+ *
+ * %true result from this function indicates that the allocation context
+ * can sleep and use anything that's associated with %current.
+ */
+static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
+{
+	return (gfp_flags & (__GFP_DIRECT_RECLAIM | __GFP_MEMALLOC)) ==
+		__GFP_DIRECT_RECLAIM;
 }
 
 #ifdef CONFIG_HIGHMEM
@@ -403,6 +430,10 @@ static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 	| 1 << (___GFP_MOVABLE | ___GFP_DMA32 | ___GFP_DMA | ___GFP_HIGHMEM)  \
 )
 
+#ifdef CONFIG_ZONE_MEDIA
+#define IS_MEIDA_ZONE_IDX(z)	(z >= ZONE_MEDIA)
+#endif
+
 static inline enum zone_type gfp_zone(gfp_t flags)
 {
 	enum zone_type z;
@@ -411,6 +442,7 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	z = (GFP_ZONE_TABLE >> (bit * GFP_ZONES_SHIFT)) &
 					 ((1 << GFP_ZONES_SHIFT) - 1);
 	VM_BUG_ON((GFP_ZONE_BAD >> bit) & 1);
+
 	return z;
 }
 
@@ -430,6 +462,13 @@ static inline int gfp_zonelist(gfp_t flags)
 	return ZONELIST_FALLBACK;
 }
 
+#ifdef CONFIG_MEMORY_AFFINITY
+static inline int gfp_zonelist_affinity(gfp_t flags)
+{
+	return ZONELIST_AFFINITY;
+}
+#endif
+
 /*
  * We get the zone list from the current node and the gfp_mask.
  * This zone list contains a maximum of MAXNODES*MAX_NR_ZONES zones.
@@ -443,6 +482,13 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 {
 	return NODE_DATA(nid)->node_zonelists + gfp_zonelist(flags);
 }
+
+#ifdef CONFIG_MEMORY_AFFINITY
+static inline struct zonelist *node_zonelist_affinity(int nid, gfp_t flags)
+{
+	return NODE_DATA(nid)->node_zonelists + gfp_zonelist_affinity(flags);
+}
+#endif
 
 #ifndef HAVE_ARCH_FREE_PAGE
 static inline void arch_free_page(struct page *page, int order) { }
@@ -471,6 +517,10 @@ __alloc_pages_node(int nid, gfp_t gfp_mask, unsigned int order)
 	VM_BUG_ON(nid < 0 || nid >= MAX_NUMNODES);
 	VM_WARN_ON(!node_online(nid));
 
+#ifndef CONFIG_ION_HISI_SUPPORT_4GPLUS
+	if (!(gfp_mask & __GFP_HIGHMEM))
+		gfp_mask |= __GFP_DMA;
+#endif
 	return __alloc_pages(gfp_mask, order, nid);
 }
 
@@ -487,6 +537,11 @@ static inline struct page *alloc_pages_node(int nid, gfp_t gfp_mask,
 
 	return __alloc_pages_node(nid, gfp_mask, order);
 }
+
+#ifdef CONFIG_KZEROD
+extern struct page *alloc_zeroed_page(void);
+extern unsigned long kzerod_get_zeroed_size(void);
+#endif
 
 #ifdef CONFIG_NUMA
 extern struct page *alloc_pages_current(gfp_t gfp_mask, unsigned order);

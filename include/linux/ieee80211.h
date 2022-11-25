@@ -2431,6 +2431,13 @@ enum ieee80211_sa_query_action {
 #define WLAN_AKM_SUITE_FT_FILS_SHA256		SUITE(0x000FAC, 16)
 #define WLAN_AKM_SUITE_FT_FILS_SHA384		SUITE(0x000FAC, 17)
 
+#define WLAN_CIPHER_SUITE_PMK           SUITE(0x00904C, 0)
+
+#ifdef CONFIG_BCMDHD
+/* WAPI */
+#define WLAN_AKM_SUITE_WAPI_PSK         SUITE(0x000FAC, 21)
+#define WLAN_AKM_SUITE_WAPI_CERT        SUITE(0x000FAC, 22)
+#endif
 #define WLAN_MAX_KEY_LEN		32
 
 #define WLAN_PMK_NAME_LEN		16
@@ -2741,6 +2748,59 @@ static inline bool ieee80211_action_contains_tpc(struct sk_buff *skb)
 		return false;
 
 	return true;
+}
+
+struct element {
+	u8 id;
+	u8 datalen;
+	u8 data[];
+} __packed;
+
+/* element iteration helpers */
+#define for_each_element(_elem, _data, _datalen)			\
+	for (_elem = (const struct element *)(_data);			\
+	     (const u8 *)(_data) + (_datalen) - (const u8 *)_elem >=	\
+		(int)sizeof(*_elem) &&					\
+	     (const u8 *)(_data) + (_datalen) - (const u8 *)_elem >=	\
+		(int)sizeof(*_elem) + _elem->datalen;			\
+	     _elem = (const struct element *)(_elem->data + _elem->datalen))
+
+#define for_each_element_id(element, _id, data, datalen)		\
+	for_each_element(element, data, datalen)			\
+		if (element->id == (_id))
+
+#define for_each_element_extid(element, extid, data, datalen)		\
+	for_each_element(element, data, datalen)			\
+		if (element->id == WLAN_EID_EXTENSION &&		\
+		    element->datalen > 0 &&				\
+		    element->data[0] == (extid))
+
+#define for_each_subelement(sub, element)				\
+	for_each_element(sub, (element)->data, (element)->datalen)
+
+#define for_each_subelement_id(sub, id, element)			\
+	for_each_element_id(sub, id, (element)->data, (element)->datalen)
+
+#define for_each_subelement_extid(sub, extid, element)			\
+	for_each_element_extid(sub, extid, (element)->data, (element)->datalen)
+
+/**
+ * for_each_element_completed - determine if element parsing consumed all data
+ * @element: element pointer after for_each_element() or friends
+ * @data: same data pointer as passed to for_each_element() or friends
+ * @datalen: same data length as passed to for_each_element() or friends
+ *
+ * This function returns %true if all the data was parsed or considered
+ * while walking the elements. Only use this if your for_each_element()
+ * loop cannot be broken out of, otherwise it always returns %false.
+ *
+ * If some data was malformed, this returns %false since the last parsed
+ * element will not fill the whole remaining data.
+ */
+static inline bool for_each_element_completed(const struct element *element,
+					      const void *data, size_t datalen)
+{
+	return (const u8 *)element == (const u8 *)data + datalen;
 }
 
 #endif /* LINUX_IEEE80211_H */

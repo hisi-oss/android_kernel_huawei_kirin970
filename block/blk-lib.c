@@ -63,13 +63,14 @@ int __blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 		 * Issue in chunks of the user defined max discard setting,
 		 * ensuring that bi_size doesn't overflow
 		 */
-		req_sects = min_t(sector_t, nr_sects,
+		if (q->limits.max_discard_sectors == 0) {
+			req_sects = min_t(sector_t, nr_sects, UINT_MAX >> 9);
+		} else {
+			req_sects = min_t(sector_t, nr_sects,
 					q->limits.max_discard_sectors);
-		if (!req_sects)
-			goto fail;
-		if (req_sects > UINT_MAX >> 9)
-			req_sects = UINT_MAX >> 9;
-
+			if (req_sects > UINT_MAX >> 9)
+				req_sects = UINT_MAX >> 9;
+		}
 		/*
 		 * If splitting a request, and the next starting sector would be
 		 * misaligned, stop the discard at the previous aligned sector.
@@ -104,14 +105,6 @@ int __blkdev_issue_discard(struct block_device *bdev, sector_t sector,
 
 	*biop = bio;
 	return 0;
-
-fail:
-	if (bio) {
-		submit_bio_wait(bio);
-		bio_put(bio);
-	}
-	*biop = NULL;
-	return -EOPNOTSUPP;
 }
 EXPORT_SYMBOL(__blkdev_issue_discard);
 

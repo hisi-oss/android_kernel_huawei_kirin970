@@ -51,10 +51,10 @@ struct addr_marker {
 enum address_markers_idx {
 	USER_SPACE_NR = 0,
 	KERNEL_SPACE_NR,
-#ifdef CONFIG_MODIFY_LDT_SYSCALL
+	LOW_KERNEL_NR,
+#if defined(CONFIG_MODIFY_LDT_SYSCALL) && defined(CONFIG_X86_5LEVEL)
 	LDT_NR,
 #endif
-	LOW_KERNEL_NR,
 	VMALLOC_START_NR,
 	VMEMMAP_START_NR,
 #ifdef CONFIG_KASAN
@@ -62,6 +62,9 @@ enum address_markers_idx {
 	KASAN_SHADOW_END_NR,
 #endif
 	CPU_ENTRY_AREA_NR,
+#if defined(CONFIG_MODIFY_LDT_SYSCALL) && !defined(CONFIG_X86_5LEVEL)
+	LDT_NR,
+#endif
 #ifdef CONFIG_X86_ESPFIX64
 	ESPFIX_START_NR,
 #endif
@@ -462,11 +465,11 @@ static inline bool is_hypervisor_range(int idx)
 {
 #ifdef CONFIG_X86_64
 	/*
-	 * A hole in the beginning of kernel address space reserved
-	 * for a hypervisor.
+	 * ffff800000000000 - ffff87ffffffffff is reserved for
+	 * the hypervisor.
 	 */
-	return	(idx >= pgd_index(GUARD_HOLE_BASE_ADDR)) &&
-		(idx <  pgd_index(GUARD_HOLE_END_ADDR));
+	return	(idx >= pgd_index(__PAGE_OFFSET) - 16) &&
+		(idx <  pgd_index(__PAGE_OFFSET));
 #else
 	return false;
 #endif

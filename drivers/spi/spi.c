@@ -70,7 +70,7 @@ modalias_show(struct device *dev, struct device_attribute *a, char *buf)
 	if (len != -ENODEV)
 		return len;
 
-	return sprintf(buf, "%s%s\n", SPI_MODULE_PREFIX, spi->modalias);
+	return sprintf(buf, "%s%s\n", SPI_MODULE_PREFIX, spi->modalias);/*lint !e421 */
 }
 static DEVICE_ATTR_RO(modalias);
 
@@ -116,42 +116,42 @@ SPI_STATISTICS_ATTRS(name, file)
 	SPI_STATISTICS_SHOW_NAME(field, __stringify(field),		\
 				 field, format_string)
 
-SPI_STATISTICS_SHOW(messages, "%lu");
-SPI_STATISTICS_SHOW(transfers, "%lu");
-SPI_STATISTICS_SHOW(errors, "%lu");
-SPI_STATISTICS_SHOW(timedout, "%lu");
+SPI_STATISTICS_SHOW(messages, "%lu");//lint !e421
+SPI_STATISTICS_SHOW(transfers, "%lu");//lint !e421
+SPI_STATISTICS_SHOW(errors, "%lu");//lint !e421
+SPI_STATISTICS_SHOW(timedout, "%lu");//lint !e421
 
-SPI_STATISTICS_SHOW(spi_sync, "%lu");
-SPI_STATISTICS_SHOW(spi_sync_immediate, "%lu");
-SPI_STATISTICS_SHOW(spi_async, "%lu");
+SPI_STATISTICS_SHOW(spi_sync, "%lu");//lint !e421
+SPI_STATISTICS_SHOW(spi_sync_immediate, "%lu");//lint !e421
+SPI_STATISTICS_SHOW(spi_async, "%lu");//lint !e421
 
-SPI_STATISTICS_SHOW(bytes, "%llu");
-SPI_STATISTICS_SHOW(bytes_rx, "%llu");
-SPI_STATISTICS_SHOW(bytes_tx, "%llu");
+SPI_STATISTICS_SHOW(bytes, "%llu");//lint !e421
+SPI_STATISTICS_SHOW(bytes_rx, "%llu");//lint !e421
+SPI_STATISTICS_SHOW(bytes_tx, "%llu");//lint !e421
 
 #define SPI_STATISTICS_TRANSFER_BYTES_HISTO(index, number)		\
 	SPI_STATISTICS_SHOW_NAME(transfer_bytes_histo##index,		\
 				 "transfer_bytes_histo_" number,	\
 				 transfer_bytes_histo[index],  "%lu")
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(0,  "0-1");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(1,  "2-3");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(2,  "4-7");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(3,  "8-15");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(4,  "16-31");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(5,  "32-63");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(6,  "64-127");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(7,  "128-255");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(8,  "256-511");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(9,  "512-1023");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(10, "1024-2047");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(11, "2048-4095");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(12, "4096-8191");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(13, "8192-16383");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(14, "16384-32767");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(15, "32768-65535");
-SPI_STATISTICS_TRANSFER_BYTES_HISTO(16, "65536+");
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(0,  "0-1");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(1,  "2-3");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(2,  "4-7");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(3,  "8-15");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(4,  "16-31");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(5,  "32-63");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(6,  "64-127");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(7,  "128-255");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(8,  "256-511");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(9,  "512-1023");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(10, "1024-2047");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(11, "2048-4095");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(12, "4096-8191");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(13, "8192-16383");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(14, "16384-32767");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(15, "32768-65535");//lint !e421
+SPI_STATISTICS_TRANSFER_BYTES_HISTO(16, "65536+");//lint !e421
 
-SPI_STATISTICS_SHOW(transfers_split_maxsize, "%lu");
+SPI_STATISTICS_SHOW(transfers_split_maxsize, "%lu");//lint !e421
 
 static struct attribute *spi_dev_attrs[] = {
 	&dev_attr_modalias.attr,
@@ -252,7 +252,7 @@ void spi_statistics_add_transfer_stats(struct spi_statistics *stats,
 				       struct spi_controller *ctlr)
 {
 	unsigned long flags;
-	int l2len = min(fls(xfer->len), SPI_STATISTICS_HISTO_SIZE) - 1;
+	int l2len = min(fls(xfer->len), SPI_STATISTICS_HISTO_SIZE) - 1;/*lint !e666 */
 
 	if (l2len < 0)
 		l2len = 0;
@@ -699,7 +699,7 @@ int spi_register_board_info(struct spi_board_info const *info, unsigned n)
 	if (!bi)
 		return -ENOMEM;
 
-	for (i = 0; i < n; i++, bi++, info++) {
+	for (i = 0; i < n; i++, bi++, info++) {/*lint !e574 */
 		struct spi_controller *ctlr;
 
 		memcpy(&bi->board_info, info, sizeof(*info));
@@ -707,7 +707,7 @@ int spi_register_board_info(struct spi_board_info const *info, unsigned n)
 			bi->board_info.properties =
 					property_entries_dup(info->properties);
 			if (IS_ERR(bi->board_info.properties))
-				return PTR_ERR(bi->board_info.properties);
+				return PTR_ERR(bi->board_info.properties);/*lint !e429 */
 		}
 
 		mutex_lock(&board_lock);
@@ -718,7 +718,7 @@ int spi_register_board_info(struct spi_board_info const *info, unsigned n)
 		mutex_unlock(&board_lock);
 	}
 
-	return 0;
+	return 0;/*lint !e429 */
 }
 
 /*-------------------------------------------------------------------------*/
@@ -763,10 +763,10 @@ static int spi_map_buf(struct spi_controller *ctlr, struct device *dev,
 
 	if (vmalloced_buf || kmap_buf) {
 		desc_len = min_t(int, max_seg_size, PAGE_SIZE);
-		sgs = DIV_ROUND_UP(len + offset_in_page(buf), desc_len);
+		sgs = DIV_ROUND_UP(len + offset_in_page(buf), desc_len);/*lint !e573 */
 	} else if (virt_addr_valid(buf)) {
 		desc_len = min_t(int, max_seg_size, ctlr->max_dma_len);
-		sgs = DIV_ROUND_UP(len, desc_len);
+		sgs = DIV_ROUND_UP(len, desc_len);/*lint !e573 */
 	} else {
 		return -EINVAL;
 	}
@@ -991,6 +991,8 @@ static int spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 		if (max_tx || max_rx) {
 			list_for_each_entry(xfer, &msg->transfers,
 					    transfer_list) {
+				if (!xfer->len)
+					continue;
 				if (!xfer->tx_buf)
 					xfer->tx_buf = ctlr->dummy_tx;
 				if (!xfer->rx_buf)
@@ -1190,6 +1192,17 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 		ctlr->dummy_rx = NULL;
 		kfree(ctlr->dummy_tx);
 		ctlr->dummy_tx = NULL;
+#if defined CONFIG_HISI_SPI
+		mutex_lock(&ctlr->msg_mutex);
+		disable_spi(ctlr);
+		pl022_runtime_suspend(ctlr->dev.parent);
+		mutex_unlock(&ctlr->msg_mutex);
+		if (ctlr->unprepare_transfer_hardware &&
+		    ctlr->unprepare_transfer_hardware(ctlr))
+			dev_err(&ctlr->dev,
+				"failed to unprepare transfer hardware\n");
+#else
+
 		if (ctlr->unprepare_transfer_hardware &&
 		    ctlr->unprepare_transfer_hardware(ctlr))
 			dev_err(&ctlr->dev,
@@ -1198,6 +1211,7 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 			pm_runtime_mark_last_busy(ctlr->dev.parent);
 			pm_runtime_put_autosuspend(ctlr->dev.parent);
 		}
+#endif
 		trace_spi_controller_idle(ctlr);
 
 		spin_lock_irqsave(&ctlr->queue_lock, flags);
@@ -1219,6 +1233,26 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 
 	mutex_lock(&ctlr->io_mutex);
 
+#if defined CONFIG_HISI_SPI
+	if (!was_busy)
+		trace_spi_controller_busy(ctlr);
+
+	if (!was_busy && ctlr->prepare_transfer_hardware) {
+		ret = ctlr->prepare_transfer_hardware(ctlr);
+		if (ret) {
+			dev_err(&ctlr->dev,
+				"failed to prepare transfer hardware\n");
+
+			mutex_unlock(&ctlr->io_mutex);
+
+			return;
+		}
+	}
+
+	if (!was_busy)
+		(void)pl022_runtime_resume(ctlr->dev.parent);
+
+#else
 	if (!was_busy && ctlr->auto_runtime_pm) {
 		ret = pm_runtime_get_sync(ctlr->dev.parent);
 		if (ret < 0) {
@@ -1245,6 +1279,7 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 			return;
 		}
 	}
+#endif
 
 	trace_spi_message_start(ctlr->cur_msg);
 
@@ -1271,6 +1306,10 @@ static void __spi_pump_messages(struct spi_controller *ctlr, bool in_kthread)
 	if (ret) {
 		dev_err(&ctlr->dev,
 			"failed to transfer one message from queue\n");
+#if defined CONFIG_HISI_SPI
+		ctlr->cur_msg->status = ret;
+		spi_finalize_current_message(ctlr);
+#endif
 		goto out;
 	}
 
@@ -2050,10 +2089,10 @@ static int of_spi_register_master(struct spi_controller *ctlr)
 		return -ENOMEM;
 
 	for (i = 0; i < ctlr->num_chipselect; i++)
-		cs[i] = -ENOENT;
+		cs[i] = -ENOENT; //lint !e613
 
 	for (i = 0; i < nb; i++)
-		cs[i] = of_get_named_gpio(np, "cs-gpios", i);
+		cs[i] = of_get_named_gpio(np, "cs-gpios", i); //lint !e613
 
 	return 0;
 }
@@ -2126,7 +2165,7 @@ int spi_register_controller(struct spi_controller *ctlr)
 			id = idr_alloc(&spi_master_idr, ctlr, ctlr->bus_num,
 				       ctlr->bus_num + 1, GFP_KERNEL);
 			mutex_unlock(&board_lock);
-			if (WARN(id < 0, "couldn't get idr"))
+			if (WARN(id < 0, "couldn't get idr"))/*lint !e146 !e665*/
 				return id == -ENOSPC ? -EBUSY : id;
 		}
 	}
@@ -2141,7 +2180,7 @@ int spi_register_controller(struct spi_controller *ctlr)
 		id = idr_alloc(&spi_master_idr, ctlr, first_dynamic,
 			       0, GFP_KERNEL);
 		mutex_unlock(&board_lock);
-		if (WARN(id < 0, "couldn't get idr"))
+		if (WARN(id < 0, "couldn't get idr"))/*lint !e146 !e665*/
 			return id;
 		ctlr->bus_num = id;
 	}
@@ -2150,6 +2189,9 @@ int spi_register_controller(struct spi_controller *ctlr)
 	spin_lock_init(&ctlr->bus_lock_spinlock);
 	mutex_init(&ctlr->bus_lock_mutex);
 	mutex_init(&ctlr->io_mutex);
+#if defined CONFIG_HISI_SPI
+	mutex_init(&ctlr->msg_mutex);
+#endif
 	ctlr->bus_lock_flag = 0;
 	init_completion(&ctlr->xfer_completion);
 	if (!ctlr->max_dma_len)
@@ -2373,7 +2415,7 @@ EXPORT_SYMBOL_GPL(spi_busnum_to_master);
 void *spi_res_alloc(struct spi_device *spi,
 		    spi_res_release_t release,
 		    size_t size, gfp_t gfp)
-{
+{/*lint --e{429}*/
 	struct spi_res *sres;
 
 	sres = kzalloc(sizeof(*sres) + size, gfp);
@@ -2851,7 +2893,7 @@ static int __spi_validate(struct spi_device *spi, struct spi_message *message)
 			w_size = 4;
 
 		/* No partial transfers accepted */
-		if (xfer->len % w_size)
+		if (xfer->len % w_size) //lint !e573
 			return -EINVAL;
 
 		if (xfer->speed_hz && ctlr->min_speed_hz &&
@@ -3087,6 +3129,22 @@ static void spi_complete(void *arg)
 	complete(arg);
 }
 
+#if defined CONFIG_HISI_SPI
+void spi_show_err_info(struct spi_device *spi)
+{
+	u32 cost_time;
+	struct spi_controller *master = NULL;
+
+	if (!spi || !spi->controller)
+		return;
+
+	master =  spi->controller;
+	cost_time = jiffies_to_msecs(jiffies - spi->start);
+	dev_err(&master->dev, "spi cost :%u ms\n", cost_time);
+	master->show_err_info(master);
+}
+#endif
+
 static int __spi_sync(struct spi_device *spi, struct spi_message *message)
 {
 	DECLARE_COMPLETION_ONSTACK(done);
@@ -3098,12 +3156,15 @@ static int __spi_sync(struct spi_device *spi, struct spi_message *message)
 	if (status != 0)
 		return status;
 
+#if defined CONFIG_HISI_SPI
+	spi->start = jiffies;
+#endif
 	message->complete = spi_complete;
 	message->context = &done;
 	message->spi = spi;
 
-	SPI_STATISTICS_INCREMENT_FIELD(&ctlr->statistics, spi_sync);
-	SPI_STATISTICS_INCREMENT_FIELD(&spi->statistics, spi_sync);
+	SPI_STATISTICS_INCREMENT_FIELD(&ctlr->statistics, spi_sync); //lint !e578
+	SPI_STATISTICS_INCREMENT_FIELD(&spi->statistics, spi_sync); //lint !e578
 
 	/* If we're not using the legacy transfer method then we will
 	 * try to transfer in the calling context so special case.
@@ -3127,13 +3188,14 @@ static int __spi_sync(struct spi_device *spi, struct spi_message *message)
 		 * can.
 		 */
 		if (ctlr->transfer == spi_queued_transfer) {
+			//lint -e{578}
 			SPI_STATISTICS_INCREMENT_FIELD(&ctlr->statistics,
 						       spi_sync_immediate);
+			//lint -e{578}
 			SPI_STATISTICS_INCREMENT_FIELD(&spi->statistics,
 						       spi_sync_immediate);
 			__spi_pump_messages(ctlr, false);
 		}
-
 		wait_for_completion(&done);
 		status = message->status;
 	}
@@ -3212,7 +3274,7 @@ EXPORT_SYMBOL_GPL(spi_sync_locked);
  * Return: always zero.
  */
 int spi_bus_lock(struct spi_controller *ctlr)
-{
+{/*lint --e{454}*/
 	unsigned long flags;
 
 	mutex_lock(&ctlr->bus_lock_mutex);
@@ -3241,7 +3303,7 @@ EXPORT_SYMBOL_GPL(spi_bus_lock);
  * Return: always zero.
  */
 int spi_bus_unlock(struct spi_controller *ctlr)
-{
+{/*lint --e{455}*/
 	ctlr->bus_lock_flag = 0;
 
 	mutex_unlock(&ctlr->bus_lock_mutex);
@@ -3292,9 +3354,11 @@ int spi_write_then_read(struct spi_device *spi,
 	 * keep heap costs out of the hot path unless someone else is
 	 * using the pre-allocated buffer or the transfer is too large.
 	 */
-	if ((n_tx + n_rx) > SPI_BUFSIZ || !mutex_trylock(&lock)) {
-		local_buf = kmalloc(max((unsigned)SPI_BUFSIZ, n_tx + n_rx),
+	if ((n_tx + n_rx) > SPI_BUFSIZ || !mutex_trylock(&lock)) { //lint !e574
+		/*lint -e666 */
+		local_buf = kmalloc(max((unsigned)SPI_BUFSIZ, (n_tx + n_rx)),
 				    GFP_KERNEL | GFP_DMA);
+        /*lint +e666 */
 		if (!local_buf)
 			return -ENOMEM;
 	} else {
@@ -3322,7 +3386,7 @@ int spi_write_then_read(struct spi_device *spi,
 		memcpy(rxbuf, x[1].rx_buf, n_rx);
 
 	if (x[0].tx_buf == buf)
-		mutex_unlock(&lock);
+		mutex_unlock(&lock); //lint !e455
 	else
 		kfree(local_buf);
 
@@ -3332,7 +3396,7 @@ EXPORT_SYMBOL_GPL(spi_write_then_read);
 
 /*-------------------------------------------------------------------------*/
 
-#if IS_ENABLED(CONFIG_OF_DYNAMIC)
+#if IS_ENABLED(CONFIG_OF_DYNAMIC) //lint !e553
 static int __spi_of_device_match(struct device *dev, void *data)
 {
 	return dev->of_node == data;
@@ -3425,7 +3489,7 @@ static struct notifier_block spi_of_notifier = {
 extern struct notifier_block spi_of_notifier;
 #endif /* IS_ENABLED(CONFIG_OF_DYNAMIC) */
 
-#if IS_ENABLED(CONFIG_ACPI)
+#if IS_ENABLED(CONFIG_ACPI) //lint !e553
 static int spi_acpi_controller_match(struct device *dev, const void *data)
 {
 	return ACPI_COMPANION(dev->parent) == data;

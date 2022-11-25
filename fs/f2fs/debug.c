@@ -27,7 +27,14 @@ static DEFINE_MUTEX(f2fs_stat_mutex);
 static void update_general_status(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_stat_info *si = F2FS_STAT(sbi);
+	struct f2fs_super_block *raw_super = F2FS_RAW_SUPER(sbi);
 	int i;
+
+	/* these will be changed if online resize is done */
+	si->main_area_segs = le32_to_cpu(raw_super->segment_count_main);
+	si->main_area_sections = le32_to_cpu(raw_super->section_count);
+	si->main_area_zones = si->main_area_sections /
+				le32_to_cpu(raw_super->secs_per_zone);
 
 	/* validation check of the segment numbers */
 	si->hit_largest = atomic64_read(&sbi->read_hit_largest);
@@ -53,8 +60,6 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 	si->vw_cnt = atomic_read(&sbi->vw_cnt);
 	si->max_aw_cnt = atomic_read(&sbi->max_aw_cnt);
 	si->max_vw_cnt = atomic_read(&sbi->max_vw_cnt);
-	si->nr_dio_read = get_pages(sbi, F2FS_DIO_READ);
-	si->nr_dio_write = get_pages(sbi, F2FS_DIO_WRITE);
 	si->nr_wb_cp_data = get_pages(sbi, F2FS_WB_CP_DATA);
 	si->nr_wb_data = get_pages(sbi, F2FS_WB_DATA);
 	si->nr_rd_data = get_pages(sbi, F2FS_RD_DATA);
@@ -64,7 +69,7 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 		si->nr_flushed =
 			atomic_read(&SM_I(sbi)->fcc_info->issued_flush);
 		si->nr_flushing =
-			atomic_read(&SM_I(sbi)->fcc_info->queued_flush);
+			atomic_read(&SM_I(sbi)->fcc_info->issing_flush);
 		si->flush_list_empty =
 			llist_empty(&SM_I(sbi)->fcc_info->issue_list);
 	}
@@ -72,7 +77,7 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 		si->nr_discarded =
 			atomic_read(&SM_I(sbi)->dcc_info->issued_discard);
 		si->nr_discarding =
-			atomic_read(&SM_I(sbi)->dcc_info->queued_discard);
+			atomic_read(&SM_I(sbi)->dcc_info->issing_discard);
 		si->nr_discard_cmd =
 			atomic_read(&SM_I(sbi)->dcc_info->discard_cmd_cnt);
 		si->undiscard_blks = SM_I(sbi)->dcc_info->undiscard_blks;
@@ -108,10 +113,25 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 	si->avail_nids = NM_I(sbi)->available_nids;
 	si->alloc_nids = NM_I(sbi)->nid_cnt[PREALLOC_NID];
 	si->bg_gc = sbi->bg_gc;
+#ifdef CONFIG_F2FS_TURBO_ZONE
+	si->turbo_bg_gc = sbi->tz_info.turbo_bg_gc;
+#endif
 	si->io_skip_bggc = sbi->io_skip_bggc;
 	si->other_skip_bggc = sbi->other_skip_bggc;
 	si->skipped_atomic_files[BG_GC] = sbi->skipped_atomic_files[BG_GC];
 	si->skipped_atomic_files[FG_GC] = sbi->skipped_atomic_files[FG_GC];
+	if (is_gc_test_set(sbi, GC_TEST_ENABLE_GC_STAT)) {
+		si->dirty_data_count = dirty_data_segments(sbi);
+		si->dirty_node_count = si->dirty_count - si->dirty_data_count;
+		si->io_skip_bggc = sbi->io_skip_bggc;
+		si->other_skip_bggc = sbi->other_skip_bggc;
+		si->assr_lfs_segs = sbi->assr_lfs_segs;
+		si->assr_ssr_segs = sbi->assr_ssr_segs;
+		si->assr_lfs_blks = sbi->assr_lfs_blks;
+		si->assr_ssr_blks = sbi->assr_ssr_blks;
+		si->bggc_node_lfs_blks = sbi->bggc_node_lfs_blks;
+		si->bggc_node_ssr_blks = sbi->bggc_node_ssr_blks;
+	}
 	si->util_free = (int)(free_user_blocks(sbi) >> sbi->log_blocks_per_seg)
 		* 100 / (int)(sbi->user_block_count >> sbi->log_blocks_per_seg)
 		/ 2;
@@ -120,11 +140,32 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 		* 100 / (int)(sbi->user_block_count >> sbi->log_blocks_per_seg)
 		/ 2;
 	si->util_invalid = 50 - si->util_free - si->util_valid;
-	for (i = CURSEG_HOT_DATA; i <= CURSEG_COLD_NODE; i++) {
+	for (i = CURSEG_HOT_DATA; i < NO_CHECK_TYPE; i++) {
 		struct curseg_info *curseg = CURSEG_I(sbi, i);
 		si->curseg[i] = curseg->segno;
 		si->cursec[i] = GET_SEC_FROM_SEG(sbi, curseg->segno);
 		si->curzone[i] = GET_ZONE_FROM_SEC(sbi, si->cursec[i]);
+	}
+	for (i = 0; i < NO_CHECK_TYPE; i++) {
+		si->dirty_seg[i] = 0;
+		si->full_seg[i] = 0;
+		si->valid_blks[i] = 0;
+	}
+	for (i = 0; i < MAIN_SEGS(sbi); i++) {
+		int blks = get_seg_entry(sbi, i)->valid_blocks;
+		int type;
+
+		if (!blks)
+			continue;
+
+		type = get_seg_entry(sbi, i)->type;
+		if (type >= CURSEG_FRAGMENT_DATA)
+			continue;
+		if (blks == sbi->blocks_per_seg)
+			si->full_seg[type]++;
+		else
+			si->dirty_seg[type]++;
+		si->valid_blks[type] += blks;
 	}
 
 	for (i = META_CP; i < META_MAX; i++)
@@ -200,7 +241,7 @@ static void update_mem_info(struct f2fs_sb_info *sbi)
 	si->base_mem += 2 * SIT_VBLOCK_MAP_SIZE * MAIN_SEGS(sbi);
 	si->base_mem += SIT_VBLOCK_MAP_SIZE * MAIN_SEGS(sbi);
 	si->base_mem += SIT_VBLOCK_MAP_SIZE;
-	if (__is_large_section(sbi))
+	if (sbi->segs_per_sec > 1)
 		si->base_mem += MAIN_SECS(sbi) * sizeof(struct sec_entry);
 	si->base_mem += __bitmap_size(sbi, SIT_BITMAP);
 
@@ -210,8 +251,8 @@ static void update_mem_info(struct f2fs_sb_info *sbi)
 	si->base_mem += f2fs_bitmap_size(MAIN_SECS(sbi));
 
 	/* build curseg */
-	si->base_mem += sizeof(struct curseg_info) * NR_CURSEG_TYPE;
-	si->base_mem += PAGE_SIZE * NR_CURSEG_TYPE;
+	si->base_mem += sizeof(struct curseg_info) * NR_INMEM_CURSEG_TYPE;
+	si->base_mem += PAGE_SIZE * NR_INMEM_CURSEG_TYPE;
 
 	/* build dirty segmap */
 	si->base_mem += sizeof(struct dirty_seglist_info);
@@ -229,10 +270,6 @@ static void update_mem_info(struct f2fs_sb_info *sbi)
 
 get_cache:
 	si->cache_mem = 0;
-
-	/* build gc */
-	if (sbi->gc_thread)
-		si->cache_mem += sizeof(struct f2fs_gc_kthread);
 
 	/* build merge flush thread */
 	if (SM_I(sbi)->fcc_info)
@@ -260,11 +297,11 @@ get_cache:
 
 	si->page_mem = 0;
 	if (sbi->node_inode) {
-		unsigned npages = NODE_MAPPING(sbi)->nrpages;
+		unsigned int npages = NODE_MAPPING(sbi)->nrpages;
 		si->page_mem += (unsigned long long)npages << PAGE_SHIFT;
 	}
 	if (sbi->meta_inode) {
-		unsigned npages = META_MAPPING(sbi)->nrpages;
+		unsigned int npages = META_MAPPING(sbi)->nrpages;
 		si->page_mem += (unsigned long long)npages << PAGE_SHIFT;
 	}
 }
@@ -313,34 +350,65 @@ static int stat_show(struct seq_file *s, void *v)
 		seq_printf(s, "\nMain area: %d segs, %d secs %d zones\n",
 			   si->main_area_segs, si->main_area_sections,
 			   si->main_area_zones);
-		seq_printf(s, "  - COLD  data: %d, %d, %d\n",
+		seq_printf(s, "  - COLD  data: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
 			   si->curseg[CURSEG_COLD_DATA],
 			   si->cursec[CURSEG_COLD_DATA],
-			   si->curzone[CURSEG_COLD_DATA]);
-		seq_printf(s, "  - WARM  data: %d, %d, %d\n",
+			   si->curzone[CURSEG_COLD_DATA],
+			   si->dirty_seg[CURSEG_COLD_DATA],
+			   si->full_seg[CURSEG_COLD_DATA],
+			   si->valid_blks[CURSEG_COLD_DATA]);
+		seq_printf(s, "  - WARM  data: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
 			   si->curseg[CURSEG_WARM_DATA],
 			   si->cursec[CURSEG_WARM_DATA],
-			   si->curzone[CURSEG_WARM_DATA]);
-		seq_printf(s, "  - HOT   data: %d, %d, %d\n",
+			   si->curzone[CURSEG_WARM_DATA],
+			   si->dirty_seg[CURSEG_WARM_DATA],
+			   si->full_seg[CURSEG_WARM_DATA],
+			   si->valid_blks[CURSEG_WARM_DATA]);
+		seq_printf(s, "  - HOT	 data: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
 			   si->curseg[CURSEG_HOT_DATA],
 			   si->cursec[CURSEG_HOT_DATA],
-			   si->curzone[CURSEG_HOT_DATA]);
-		seq_printf(s, "  - Dir   dnode: %d, %d, %d\n",
+			   si->curzone[CURSEG_HOT_DATA],
+			   si->dirty_seg[CURSEG_HOT_DATA],
+			   si->full_seg[CURSEG_HOT_DATA],
+			   si->valid_blks[CURSEG_HOT_DATA]);
+		seq_printf(s, "  - Dir	 dnode: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
 			   si->curseg[CURSEG_HOT_NODE],
 			   si->cursec[CURSEG_HOT_NODE],
-			   si->curzone[CURSEG_HOT_NODE]);
-		seq_printf(s, "  - File   dnode: %d, %d, %d\n",
+			   si->curzone[CURSEG_HOT_NODE],
+			   si->dirty_seg[CURSEG_HOT_NODE],
+			   si->full_seg[CURSEG_HOT_NODE],
+			   si->valid_blks[CURSEG_HOT_NODE]);
+		seq_printf(s, "  - File   dnode: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
 			   si->curseg[CURSEG_WARM_NODE],
 			   si->cursec[CURSEG_WARM_NODE],
-			   si->curzone[CURSEG_WARM_NODE]);
-		seq_printf(s, "  - Indir nodes: %d, %d, %d\n",
+			   si->curzone[CURSEG_WARM_NODE],
+			   si->dirty_seg[CURSEG_WARM_NODE],
+			   si->full_seg[CURSEG_WARM_NODE],
+			   si->valid_blks[CURSEG_WARM_NODE]);
+		seq_printf(s, "  - Indir nodes: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
 			   si->curseg[CURSEG_COLD_NODE],
 			   si->cursec[CURSEG_COLD_NODE],
-			   si->curzone[CURSEG_COLD_NODE]);
-		seq_printf(s, "\n  - Valid: %d\n  - Dirty: %d\n",
-			   si->main_area_segs - si->dirty_count -
-			   si->prefree_count - si->free_segs,
-			   si->dirty_count);
+			   si->curzone[CURSEG_COLD_NODE],
+			   si->dirty_seg[CURSEG_COLD_NODE],
+			   si->full_seg[CURSEG_COLD_NODE],
+			   si->valid_blks[CURSEG_COLD_NODE]);
+		seq_printf(s, "  - Fragment datas: %d, %d, %d, [dirty:%u, full:%u, valid_blks:%u]\n",
+			   si->curseg[CURSEG_FRAGMENT_DATA],
+			   si->cursec[CURSEG_FRAGMENT_DATA],
+			   si->curzone[CURSEG_FRAGMENT_DATA],
+			   si->dirty_seg[CURSEG_FRAGMENT_DATA],
+			   si->full_seg[CURSEG_FRAGMENT_DATA],
+			   si->valid_blks[CURSEG_FRAGMENT_DATA]);
+		if (is_gc_test_set(si->sbi, GC_TEST_ENABLE_GC_STAT))
+			seq_printf(s, "\n  - Valid: %d\n  - Dirty: %d (Node: %d, Data: %d)\n",
+				   si->main_area_segs - si->dirty_count -
+				   si->prefree_count - si->free_segs,
+				   si->dirty_count, si->dirty_node_count, si->dirty_data_count);
+		else
+			seq_printf(s, "\n  - Valid: %d\n  - Dirty: %d\n",
+				   si->main_area_segs - si->dirty_count -
+				   si->prefree_count - si->free_segs,
+				   si->dirty_count);
 		seq_printf(s, "  - Prefree: %d\n  - Free: %d (%d)\n\n",
 			   si->prefree_count, si->free_segs, si->free_secs);
 		seq_printf(s, "CP calls: %d (BG: %d)\n",
@@ -370,6 +438,16 @@ static int stat_show(struct seq_file *s, void *v)
 				si->skipped_atomic_files[BG_GC]);
 		seq_printf(s, "BG skip : IO: %u, Other: %u\n",
 				si->io_skip_bggc, si->other_skip_bggc);
+		if (is_gc_test_set(si->sbi, GC_TEST_ENABLE_GC_STAT)) {
+			seq_printf(s, "Moved %d data blocks (LFS: %d, SSR: %d)\n", si->assr_lfs_blks +
+					si->assr_ssr_blks, si->assr_lfs_blks, si->assr_ssr_blks);
+			seq_printf(s, "Moved %d node blocks (LFS: %d, SSR: %d)\n", si->bggc_node_lfs_blks +
+					si->bggc_node_ssr_blks, si->bggc_node_lfs_blks, si->bggc_node_ssr_blks);
+			seq_printf(s, "ASSR used %d segments (LFS: %d, SSR: %d)\n", si->assr_lfs_segs +
+					si->assr_ssr_segs, si->assr_lfs_segs, si->assr_ssr_segs);
+			seq_printf(s, "BG GC skip : IO: %u, Other: %u\n",
+					si->io_skip_bggc, si->other_skip_bggc);
+		}
 		seq_puts(s, "\nExtent Cache:\n");
 		seq_printf(s, "  - Hit Count: L1-1:%llu L1-2:%llu L2:%llu\n",
 				si->hit_largest, si->hit_cached,
@@ -381,8 +459,6 @@ static int stat_show(struct seq_file *s, void *v)
 		seq_printf(s, "  - Inner Struct Count: tree: %d(%d), node: %d\n",
 				si->ext_tree, si->zombie_tree, si->ext_node);
 		seq_puts(s, "\nBalancing F2FS Async:\n");
-		seq_printf(s, "  - DIO (R: %4d, W: %4d)\n",
-			   si->nr_dio_read, si->nr_dio_write);
 		seq_printf(s, "  - IO_R (Data: %4d, Node: %4d, Meta: %4d\n",
 			   si->nr_rd_data, si->nr_rd_node, si->nr_rd_meta);
 		seq_printf(s, "  - IO_W (CP: %4d, Data: %4d, Flush: (%4d %4d %4d), "
@@ -448,6 +524,35 @@ static int stat_show(struct seq_file *s, void *v)
 				si->cache_mem >> 10);
 		seq_printf(s, "  - paged : %llu KB\n",
 				si->page_mem >> 10);
+
+#ifdef CONFIG_F2FS_TURBO_ZONE
+		/* turbo zone info */
+		if (si->sbi->tz_info.total_segs > 0) {
+			seq_puts(s, "\n\nTurbo Zone Info:\n");
+			seq_printf(s, "  - enabled: %d\n",
+				(int)si->sbi->tz_info.enabled);
+			seq_printf(s, "  - switchable: %d\n",
+				(int)si->sbi->tz_info.switchable);
+			seq_printf(s, "  - total_segs: %u\n",
+				si->sbi->tz_info.total_segs);
+			seq_printf(s, "  - start_seg: %u\n",
+				si->sbi->tz_info.start_seg);
+			seq_printf(s, "  - end_seg: %u\n",
+				si->sbi->tz_info.end_seg);
+			seq_printf(s, "  - free_segs: %u\n",
+				si->sbi->tz_info.free_segs);
+			seq_printf(s, "  - written_valid_blocks: %u\n",
+				si->sbi->tz_info.written_valid_blocks);
+			seq_printf(s, "  - reserved_blks: %u\n",
+				si->sbi->tz_info.reserved_blks);
+			/* turbo gc */
+			seq_printf(s, "  - turbo_bg_gc: %d\n",
+				si->sbi->tz_info.turbo_bg_gc);
+			/* turbo bg gc total mv blocks*/
+			seq_printf(s, "  - turbo_bg_gc_tot_blks: %d\n",
+				si->turbo_bg_gc_tot_blks);
+		}
+#endif
 	}
 	mutex_unlock(&f2fs_stat_mutex);
 	return 0;
@@ -519,19 +624,33 @@ void f2fs_destroy_stats(struct f2fs_sb_info *sbi)
 	list_del(&si->stat_list);
 	mutex_unlock(&f2fs_stat_mutex);
 
-	kvfree(si);
+	kfree(si);
 }
 
-void __init f2fs_create_root_stats(void)
+int __init f2fs_create_root_stats(void)
 {
-	f2fs_debugfs_root = debugfs_create_dir("f2fs", NULL);
+	struct dentry *file;
 
-	debugfs_create_file("status", S_IRUGO, f2fs_debugfs_root, NULL,
-			    &stat_fops);
+	f2fs_debugfs_root = debugfs_create_dir("f2fs", NULL);
+	if (!f2fs_debugfs_root)
+		return -ENOMEM;
+
+	file = debugfs_create_file("status", S_IRUGO, f2fs_debugfs_root,
+			NULL, &stat_fops);
+	if (!file) {
+		debugfs_remove(f2fs_debugfs_root);
+		f2fs_debugfs_root = NULL;
+		return -ENOMEM;
+	}
+
+	return 0;
 }
 
 void f2fs_destroy_root_stats(void)
 {
+	if (!f2fs_debugfs_root)
+		return;
+
 	debugfs_remove_recursive(f2fs_debugfs_root);
 	f2fs_debugfs_root = NULL;
 }

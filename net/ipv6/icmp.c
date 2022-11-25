@@ -585,6 +585,9 @@ static void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 		ICMP6_INC_STATS(net, idev, ICMP6_MIB_OUTERRORS);
 		ip6_flush_pending_frames(sk);
 	} else {
+#ifdef CONFIG_HISI_PAGE_TRACE
+		alloc_skb_with_frags_stats_inc(ICMP6_SEND_COUNT);
+#endif
 		err = icmpv6_push_pending_frames(sk, &fl6, &tmp_hdr,
 						 len + sizeof(struct icmp6hdr));
 	}
@@ -747,6 +750,9 @@ static void icmpv6_echo_reply(struct sk_buff *skb)
 		__ICMP6_INC_STATS(net, idev, ICMP6_MIB_OUTERRORS);
 		ip6_flush_pending_frames(sk);
 	} else {
+#ifdef CONFIG_HISI_PAGE_TRACE
+		alloc_skb_with_frags_stats_inc(ICMPV6_ECHO_REPLAY_COUNT);
+#endif
 		err = icmpv6_push_pending_frames(sk, &fl6, &tmp_hdr,
 						 skb->len + sizeof(struct icmp6hdr));
 	}

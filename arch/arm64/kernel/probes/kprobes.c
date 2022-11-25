@@ -23,9 +23,7 @@
 #include <linux/slab.h>
 #include <linux/stop_machine.h>
 #include <linux/sched/debug.h>
-#include <linux/set_memory.h>
 #include <linux/stringify.h>
-#include <linux/vmalloc.h>
 #include <asm/traps.h>
 #include <asm/ptrace.h>
 #include <asm/cacheflush.h>
@@ -44,21 +42,10 @@ DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 static void __kprobes
 post_kprobe_handler(struct kprobe_ctlblk *, struct pt_regs *);
 
-static int __kprobes patch_text(kprobe_opcode_t *addr, u32 opcode)
-{
-	void *addrs[1];
-	u32 insns[1];
-
-	addrs[0] = addr;
-	insns[0] = opcode;
-
-	return aarch64_insn_patch_text(addrs, insns, 1);
-}
-
 static void __kprobes arch_prepare_ss_slot(struct kprobe *p)
 {
 	/* prepare insn slot */
-	patch_text(p->ainsn.api.insn, p->opcode);
+	p->ainsn.api.insn[0] = cpu_to_le32(p->opcode);
 
 	flush_icache_range((uintptr_t) (p->ainsn.api.insn),
 			   (uintptr_t) (p->ainsn.api.insn) +
@@ -131,15 +118,15 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 	return 0;
 }
 
-void *alloc_insn_page(void)
+static int __kprobes patch_text(kprobe_opcode_t *addr, u32 opcode)
 {
-	void *page;
+	void *addrs[1];
+	u32 insns[1];
 
-	page = vmalloc_exec(PAGE_SIZE);
-	if (page)
-		set_memory_ro((unsigned long)page, 1);
+	addrs[0] = (void *)addr;
+	insns[0] = (u32)opcode;
 
-	return page;
+	return aarch64_insn_patch_text(addrs, insns, 1);
 }
 
 /* arm kprobe: install breakpoint in text */
@@ -458,9 +445,6 @@ kprobe_single_step_handler(struct pt_regs *regs, unsigned int esr)
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 	int retval;
 
-	if (user_mode(regs))
-		return DBG_HOOK_ERROR;
-
 	/* return error if this is not our step */
 	retval = kprobe_ss_hit(kcb, instruction_pointer(regs));
 
@@ -477,9 +461,6 @@ kprobe_single_step_handler(struct pt_regs *regs, unsigned int esr)
 int __kprobes
 kprobe_breakpoint_handler(struct pt_regs *regs, unsigned int esr)
 {
-	if (user_mode(regs))
-		return DBG_HOOK_ERROR;
-
 	kprobe_handler(regs);
 	return DBG_HOOK_HANDLED;
 }
@@ -653,6 +634,7 @@ void __kprobes __used *trampoline_probe_handler(struct pt_regs *regs)
 	return (void *)orig_ret_address;
 }
 
+#ifdef CONFIG_KRETPROBES
 void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
 				      struct pt_regs *regs)
 {
@@ -666,6 +648,7 @@ int __kprobes arch_trampoline_kprobe(struct kprobe *p)
 {
 	return 0;
 }
+#endif
 
 int __init arch_init_kprobes(void)
 {

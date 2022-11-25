@@ -55,7 +55,7 @@ struct us_data;
 struct scsi_cmnd;
 
 /*
- * Unusual device list definitions 
+ * Unusual device list definitions
  */
 
 struct us_unusual_dev {
@@ -163,6 +163,10 @@ struct us_data {
 	/* hacks for READ CAPACITY bug handling */
 	int			use_last_sector_hacks;
 	int			last_sector_retries;
+
+	/* quriks */
+#define US_UDEV_QUIRK_STOP_TRANS_PRE_RESET 0x1ul
+	unsigned long		udev_quirks;
 };
 
 /* Convert between us_data and the corresponding Scsi_Host */

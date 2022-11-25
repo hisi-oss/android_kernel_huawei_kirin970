@@ -75,9 +75,11 @@ int dma_fence_signal_locked(struct dma_fence *fence)
 	if (WARN_ON(!fence))
 		return -EINVAL;
 
+	preempt_disable();
 	if (test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
 		ret = -EINVAL;
 
+		preempt_enable();
 		/*
 		 * we might have raced with the unlocked dma_fence_signal,
 		 * still run through all callbacks
@@ -85,6 +87,7 @@ int dma_fence_signal_locked(struct dma_fence *fence)
 	} else {
 		fence->timestamp = ktime_get();
 		set_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &fence->flags);
+		preempt_enable();
 		trace_dma_fence_signaled(fence);
 	}
 
@@ -113,11 +116,15 @@ int dma_fence_signal(struct dma_fence *fence)
 	if (!fence)
 		return -EINVAL;
 
-	if (test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags))
+	preempt_disable();
+	if (test_and_set_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+		preempt_enable();
 		return -EINVAL;
+	}
 
 	fence->timestamp = ktime_get();
 	set_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &fence->flags);
+	preempt_enable();
 	trace_dma_fence_signaled(fence);
 
 	if (test_bit(DMA_FENCE_FLAG_ENABLE_SIGNAL_BIT, &fence->flags)) {

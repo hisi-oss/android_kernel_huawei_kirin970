@@ -250,9 +250,10 @@ struct sctp_association *sctp_id2assoc(struct sock *sk, sctp_assoc_t id)
 
 	spin_lock_bh(&sctp_assocs_id_lock);
 	asoc = (struct sctp_association *)idr_find(&sctp_assocs_id, (int)id);
-	if (asoc && (asoc->base.sk != sk || asoc->base.dead))
-		asoc = NULL;
 	spin_unlock_bh(&sctp_assocs_id_lock);
+
+	if (!asoc || (asoc->base.sk != sk) || asoc->base.dead)
+		return NULL;
 
 	return asoc;
 }
@@ -3750,16 +3751,32 @@ static int sctp_setsockopt_pr_supported(struct sock *sk,
 					unsigned int optlen)
 {
 	struct sctp_assoc_value params;
+	struct sctp_association *asoc;
+	int retval = -EINVAL;
 
 	if (optlen != sizeof(params))
-		return -EINVAL;
+		goto out;
 
-	if (copy_from_user(&params, optval, optlen))
-		return -EFAULT;
+	if (copy_from_user(&params, optval, optlen)) {
+		retval = -EFAULT;
+		goto out;
+	}
 
-	sctp_sk(sk)->ep->prsctp_enable = !!params.assoc_value;
+	asoc = sctp_id2assoc(sk, params.assoc_id);
+	if (asoc) {
+		asoc->prsctp_enable = !!params.assoc_value;
+	} else if (!params.assoc_id) {
+		struct sctp_sock *sp = sctp_sk(sk);
 
-	return 0;
+		sp->ep->prsctp_enable = !!params.assoc_value;
+	} else {
+		goto out;
+	}
+
+	retval = 0;
+
+out:
+	return retval;
 }
 
 static int sctp_setsockopt_default_prinfo(struct sock *sk,
@@ -4643,14 +4660,9 @@ struct sctp_transport *sctp_transport_get_next(struct net *net,
 			break;
 		}
 
-		if (!sctp_transport_hold(t))
-			continue;
-
 		if (net_eq(sock_net(t->asoc->base.sk), net) &&
 		    t->asoc->peer.primary_path == t)
 			break;
-
-		sctp_transport_put(t);
 	}
 
 	return t;
@@ -4660,18 +4672,13 @@ struct sctp_transport *sctp_transport_get_idx(struct net *net,
 					      struct rhashtable_iter *iter,
 					      int pos)
 {
-	struct sctp_transport *t;
+	void *obj = SEQ_START_TOKEN;
 
-	if (!pos)
-		return SEQ_START_TOKEN;
+	while (pos && (obj = sctp_transport_get_next(net, iter)) &&
+	       !IS_ERR(obj))
+		pos--;
 
-	while ((t = sctp_transport_get_next(net, iter)) && !IS_ERR(t)) {
-		if (!--pos)
-			break;
-		sctp_transport_put(t);
-	}
-
-	return t;
+	return obj;
 }
 
 int sctp_for_each_endpoint(int (*cb)(struct sctp_endpoint *, void *),
@@ -4731,6 +4738,8 @@ again:
 
 	tsp = sctp_transport_get_idx(net, &hti, *pos + 1);
 	for (; !IS_ERR_OR_NULL(tsp); tsp = sctp_transport_get_next(net, &hti)) {
+		if (!sctp_transport_hold(tsp))
+			continue;
 		ret = cb(tsp, p);
 		if (ret)
 			break;
@@ -7366,7 +7375,7 @@ unsigned int sctp_poll(struct file *file, struct socket *sock, poll_table *wait)
 	mask = 0;
 
 	/* Is there any exceptional events?  */
-	if (sk->sk_err || !skb_queue_empty(&sk->sk_error_queue))
+	if (sk->sk_err || !skb_queue_empty_lockless(&sk->sk_error_queue))
 		mask |= POLLERR |
 			(sock_flag(sk, SOCK_SELECT_ERR_QUEUE) ? POLLPRI : 0);
 	if (sk->sk_shutdown & RCV_SHUTDOWN)
@@ -7375,7 +7384,7 @@ unsigned int sctp_poll(struct file *file, struct socket *sock, poll_table *wait)
 		mask |= POLLHUP;
 
 	/* Is it readable?  Reconsider this code with TCP-style support.  */
-	if (!skb_queue_empty(&sk->sk_receive_queue))
+	if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
 		mask |= POLLIN | POLLRDNORM;
 
 	/* The association is either gone or not ready.  */
@@ -7711,7 +7720,7 @@ struct sk_buff *sctp_skb_recv_datagram(struct sock *sk, int flags,
 		if (sk_can_busy_loop(sk)) {
 			sk_busy_loop(sk, noblock);
 
-			if (!skb_queue_empty(&sk->sk_receive_queue))
+			if (!skb_queue_empty_lockless(&sk->sk_receive_queue))
 				continue;
 		}
 
@@ -8131,7 +8140,7 @@ void sctp_copy_sock(struct sock *newsk, struct sock *sk,
 	newinet->inet_rcv_saddr = inet->inet_rcv_saddr;
 	newinet->inet_dport = htons(asoc->peer.port);
 	newinet->pmtudisc = inet->pmtudisc;
-	newinet->inet_id = asoc->next_tsn ^ jiffies;
+	newinet->inet_id = prandom_u32();
 
 	newinet->uc_ttl = inet->uc_ttl;
 	newinet->mc_loop = 1;

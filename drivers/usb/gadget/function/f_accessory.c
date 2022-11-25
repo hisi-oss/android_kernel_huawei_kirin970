@@ -45,6 +45,9 @@
 #define MAX_INST_NAME_LEN        40
 #define BULK_BUFFER_SIZE    16384
 #define ACC_STRING_SIZE     256
+#ifdef CONFIG_USB_HICAR_SUPPORT
+#define ENVP_LEN 2
+#endif
 
 #define PROTOCOL_VERSION    2
 
@@ -95,6 +98,9 @@ struct acc_dev {
 	char version[ACC_STRING_SIZE];
 	char uri[ACC_STRING_SIZE];
 	char serial[ACC_STRING_SIZE];
+#ifdef CONFIG_USB_HICAR_SUPPORT
+	char extra_data[ACC_EXTRA_DATA_SIZE];
+#endif
 
 	/* for acc_complete_set_string */
 	int string_index;
@@ -116,6 +122,11 @@ struct acc_dev {
 
 	/* delayed work for handling ACCESSORY_START */
 	struct delayed_work start_work;
+
+#ifdef CONFIG_USB_HICAR_SUPPORT
+	/* work for handling ACCESSORY_SEND_STRING */
+	struct work_struct send_work;
+#endif
 
 	/* worker for registering and unregistering hid devices */
 	struct work_struct hid_work;
@@ -302,6 +313,9 @@ static void acc_complete_set_string(struct usb_ep *ep, struct usb_request *req)
 	struct acc_dev	*dev = ep->driver_data;
 	char *string_dest = NULL;
 	int length = req->actual;
+#ifdef CONFIG_USB_HICAR_SUPPORT
+	unsigned long flags;
+#endif
 
 	if (req->status != 0) {
 		pr_err("acc_complete_set_string, err %d\n", req->status);
@@ -327,10 +341,27 @@ static void acc_complete_set_string(struct usb_ep *ep, struct usb_request *req)
 	case ACCESSORY_STRING_SERIAL:
 		string_dest = dev->serial;
 		break;
+#ifdef CONFIG_USB_HICAR_SUPPORT
+	case ACCESSORY_STRING_EXTRA_DATA:
+		/* clear the fixed length buffer which defined in local */
+		memset(dev->extra_data, 0, ACC_EXTRA_DATA_SIZE);
+
+		if (length > ACC_EXTRA_DATA_SIZE)
+			length = ACC_EXTRA_DATA_SIZE;
+
+		spin_lock_irqsave(&dev->lock, flags);
+		memcpy(dev->extra_data, req->buf, length);
+		spin_unlock_irqrestore(&dev->lock, flags);
+
+		pr_info("schedule acc send work\n");
+		schedule_work(&dev->send_work);
+		return;
+#endif
 	}
 	if (string_dest) {
+#ifndef CONFIG_USB_HICAR_SUPPORT
 		unsigned long flags;
-
+#endif
 		if (length >= ACC_STRING_SIZE)
 			length = ACC_STRING_SIZE - 1;
 
@@ -740,6 +771,13 @@ static long acc_ioctl(struct file *fp, unsigned code, unsigned long value)
 		return dev->start_requested;
 	case ACCESSORY_GET_AUDIO_MODE:
 		return dev->audio_mode;
+#ifdef CONFIG_USB_HICAR_SUPPORT
+	case ACCESSORY_GET_EXTRA_DATA:
+		if (copy_to_user((void __user *)value, dev->extra_data,
+					ACC_EXTRA_DATA_SIZE))
+			return -EFAULT;
+		return ACC_EXTRA_DATA_SIZE;
+#endif
 	}
 	if (!src)
 		return -EINVAL;
@@ -755,6 +793,8 @@ static int acc_open(struct inode *ip, struct file *fp)
 	printk(KERN_INFO "acc_open\n");
 	if (atomic_xchg(&_acc_dev->open_excl, 1))
 		return -EBUSY;
+
+	pr_info("acc_open sucess %s(%d)\n", current->comm, task_pid_nr(current));
 
 	_acc_dev->disconnected = 0;
 	fp->private_data = _acc_dev;
@@ -854,7 +894,12 @@ int acc_ctrlrequest(struct usb_composite_dev *cdev,
 			value = w_length;
 		} else if (b_request == ACCESSORY_SET_AUDIO_MODE &&
 				w_index == 0 && w_length == 0) {
+			/* disable audio source mode on feb */
+#ifdef CONFIG_USB_DWC3_FEB
+			dev->audio_mode = 0;
+#else
 			dev->audio_mode = w_value;
+#endif
 			cdev->req->complete = acc_complete_setup_noop;
 			value = 0;
 		} else if (b_request == ACCESSORY_REGISTER_HID) {
@@ -929,6 +974,8 @@ err:
 }
 EXPORT_SYMBOL_GPL(acc_ctrlrequest);
 
+#include "function-hisi/f_accessory_chip.h"
+
 static int
 __acc_function_bind(struct usb_configuration *c,
 			struct usb_function *f, bool configfs)
@@ -975,6 +1022,16 @@ __acc_function_bind(struct usb_configuration *c,
 		acc_highspeed_out_desc.bEndpointAddress =
 			acc_fullspeed_out_desc.bEndpointAddress;
 	}
+
+#ifdef CONFIG_USB_FUNC_ADD_SS_DESC
+	/* support super speed & plus hardware */
+	if (gadget_is_superspeed(c->cdev->gadget)) {
+		acc_superspeed_in_desc.bEndpointAddress =
+			acc_fullspeed_in_desc.bEndpointAddress;
+		acc_superspeed_out_desc.bEndpointAddress =
+			acc_fullspeed_out_desc.bEndpointAddress;
+	}
+#endif
 
 	DBG(cdev, "%s speed %s: IN/%s, OUT/%s\n",
 			gadget_is_dualspeed(c->cdev->gadget) ? "dual" : "full",
@@ -1045,8 +1102,19 @@ static void acc_start_work(struct work_struct *data)
 {
 	char *envp[2] = { "ACCESSORY=START", NULL };
 
+	pr_info("%s:%d send UEvent ACCESSORY=START\n", __func__, __LINE__);
 	kobject_uevent_env(&acc_device.this_device->kobj, KOBJ_CHANGE, envp);
 }
+
+#ifdef CONFIG_USB_HICAR_SUPPORT
+static void acc_send_work(struct work_struct *data)
+{
+	char *envp[ENVP_LEN] = {"ACCESSORY=SEND", NULL};
+
+	pr_info("%s:%d send UEvent ACCESSORY=SEND\n", __func__, __LINE__);
+	kobject_uevent_env(&acc_device.this_device->kobj, KOBJ_CHANGE, envp);
+}
+#endif
 
 static int acc_hid_init(struct acc_hid_dev *hdev)
 {
@@ -1206,6 +1274,9 @@ static int acc_setup(void)
 	INIT_LIST_HEAD(&dev->new_hid_list);
 	INIT_LIST_HEAD(&dev->dead_hid_list);
 	INIT_DELAYED_WORK(&dev->start_work, acc_start_work);
+#ifdef CONFIG_USB_HICAR_SUPPORT
+	INIT_WORK(&dev->send_work, acc_send_work);
+#endif
 	INIT_WORK(&dev->hid_work, acc_hid_work);
 
 	/* _acc_dev must be set before calling usb_gadget_register_driver */
@@ -1339,6 +1410,10 @@ static struct usb_function *acc_alloc(struct usb_function_instance *fi)
 	dev->function.strings = acc_strings,
 	dev->function.fs_descriptors = fs_acc_descs;
 	dev->function.hs_descriptors = hs_acc_descs;
+#ifdef CONFIG_USB_FUNC_ADD_SS_DESC
+	dev->function.ss_descriptors = ss_acc_descs;
+	dev->function.ssp_descriptors = ss_acc_descs;
+#endif
 	dev->function.bind = acc_function_bind_configfs;
 	dev->function.unbind = acc_function_unbind;
 	dev->function.set_alt = acc_function_set_alt;

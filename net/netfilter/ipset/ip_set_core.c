@@ -668,20 +668,21 @@ ip_set_put_byindex(struct net *net, ip_set_id_t index)
 EXPORT_SYMBOL_GPL(ip_set_put_byindex);
 
 /* Get the name of a set behind a set index.
- * Set itself is protected by RCU, but its name isn't: to protect against
- * renaming, grab ip_set_ref_lock as reader (see ip_set_rename()) and copy the
- * name.
+ * We assume the set is referenced, so it does exist and
+ * can't be destroyed. The set cannot be renamed due to
+ * the referencing either.
+ *
  */
-void
-ip_set_name_byindex(struct net *net, ip_set_id_t index, char *name)
+const char *
+ip_set_name_byindex(struct net *net, ip_set_id_t index)
 {
-	struct ip_set *set = ip_set_rcu_get(net, index);
+	const struct ip_set *set = ip_set_rcu_get(net, index);
 
 	BUG_ON(!set);
+	BUG_ON(set->ref == 0);
 
-	read_lock_bh(&ip_set_ref_lock);
-	strncpy(name, set->name, IPSET_MAXNAMELEN);
-	read_unlock_bh(&ip_set_ref_lock);
+	/* Referenced, so it's safe */
+	return set->name;
 }
 EXPORT_SYMBOL_GPL(ip_set_name_byindex);
 
@@ -1127,7 +1128,7 @@ static int ip_set_rename(struct net *net, struct sock *ctnl,
 	if (!set)
 		return -ENOENT;
 
-	write_lock_bh(&ip_set_ref_lock);
+	read_lock_bh(&ip_set_ref_lock);
 	if (set->ref != 0) {
 		ret = -IPSET_ERR_REFERENCED;
 		goto out;
@@ -1144,7 +1145,7 @@ static int ip_set_rename(struct net *net, struct sock *ctnl,
 	strncpy(set->name, name2, IPSET_MAXNAMELEN);
 
 out:
-	write_unlock_bh(&ip_set_ref_lock);
+	read_unlock_bh(&ip_set_ref_lock);
 	return ret;
 }
 

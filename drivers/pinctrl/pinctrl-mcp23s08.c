@@ -643,14 +643,6 @@ static int mcp23s08_irq_setup(struct mcp23s08 *mcp)
 		return err;
 	}
 
-	return 0;
-}
-
-static int mcp23s08_irqchip_setup(struct mcp23s08 *mcp)
-{
-	struct gpio_chip *chip = &mcp->chip;
-	int err;
-
 	err =  gpiochip_irqchip_add_nested(chip,
 					   &mcp23s08_irq_chip,
 					   0,
@@ -915,7 +907,7 @@ static int mcp23s08_probe_one(struct mcp23s08 *mcp, struct device *dev,
 	}
 
 	if (mcp->irq && mcp->irq_controller) {
-		ret = mcp23s08_irqchip_setup(mcp);
+		ret = mcp23s08_irq_setup(mcp);
 		if (ret)
 			goto fail;
 	}
@@ -939,9 +931,6 @@ static int mcp23s08_probe_one(struct mcp23s08 *mcp, struct device *dev,
 		ret = PTR_ERR(mcp->pctldev);
 		goto fail;
 	}
-
-	if (mcp->irq)
-		ret = mcp23s08_irq_setup(mcp);
 
 fail:
 	if (ret < 0)

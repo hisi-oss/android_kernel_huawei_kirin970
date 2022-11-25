@@ -9,7 +9,6 @@
 #ifndef _LINUX_WATCHDOG_H
 #define _LINUX_WATCHDOG_H
 
-
 #include <linux/bitops.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
@@ -215,5 +214,21 @@ extern void watchdog_unregister_device(struct watchdog_device *);
 
 /* devres register variant */
 int devm_watchdog_register_device(struct device *dev, struct watchdog_device *);
-
+#if defined(CONFIG_HISI_SP805_WATCHDOG) || defined(CONFIG_HI_V500_WATCHDOG)
+extern void watchdog_lockup_panic_config(unsigned int enable);
+extern bool watchdog_softlockup_happen(void);
+extern bool watchdog_othercpu_hardlockup_happen(void);
+extern bool watchdog_hiwdt_hardlockup_happen(void);
+extern void watchdog_set_thresh(int timeout);
+extern void watchdog_check_hardlockup_hiwdt(void);
+extern void watchdog_shutdown_oneshot(unsigned int timeout);
+#else
+static inline void watchdog_lockup_panic_config(unsigned int enable){return;}
+static inline bool watchdog_softlockup_happen(void){return false;}
+static inline bool watchdog_othercpu_hardlockup_happen(void){return false;}
+static inline bool watchdog_hiwdt_hardlockup_happen(void){return false;}
+static inline void watchdog_set_thresh(int timeout){return;}
+static inline void watchdog_check_hardlockup_hiwdt(void){return;}
+static inline void watchdog_shutdown_oneshot(unsigned int timeout){return;}
+#endif
 #endif  /* ifndef _LINUX_WATCHDOG_H */

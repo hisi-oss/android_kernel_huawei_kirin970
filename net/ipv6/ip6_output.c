@@ -58,6 +58,13 @@
 #include <linux/mroute6.h>
 #include <net/l3mdev.h>
 #include <net/lwtunnel.h>
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+#include <hwnet/booster/hw_packet_filter_bypass.h>
+#endif
+
+#ifdef CONFIG_HW_BOOSTER
+#include <hwnet/booster/tcp_para_collec.h>
+#endif
 
 static int ip6_finish_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -133,6 +140,12 @@ static int ip6_finish_output(struct net *net, struct sock *sk, struct sk_buff *s
 	int ret;
 
 	ret = BPF_CGROUP_RUN_PROG_INET_EGRESS(sk, skb);
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+	if (skb_dst(skb) &&
+	    hw_bypass_skb(AF_INET6, HW_PFB_INET6_BPF_EGRESS, sk, skb,
+			  NULL, skb_dst(skb)->dev, ret ? DROP : PASS))
+		ret = 0;
+#endif
 	if (ret) {
 		kfree_skb(skb);
 		return ret;
@@ -144,6 +157,12 @@ static int ip6_finish_output(struct net *net, struct sock *sk, struct sk_buff *s
 		IPCB(skb)->flags |= IPSKB_REROUTED;
 		return dst_output(net, sk, skb);
 	}
+#endif
+
+#ifdef CONFIG_HW_BOOSTER
+	if (skb_dst(skb))
+		booster_update_tcp_statistics(AF_INET6, skb, NULL,
+					      skb_dst(skb)->dev);
 #endif
 
 	if ((skb->len > ip6_skb_dst_mtu(skb) && !skb_is_gso(skb)) ||
@@ -195,37 +214,37 @@ int ip6_xmit(const struct sock *sk, struct sk_buff *skb, struct flowi6 *fl6,
 	const struct ipv6_pinfo *np = inet6_sk(sk);
 	struct in6_addr *first_hop = &fl6->daddr;
 	struct dst_entry *dst = skb_dst(skb);
-	unsigned int head_room;
 	struct ipv6hdr *hdr;
 	u8  proto = fl6->flowi6_proto;
 	int seg_len = skb->len;
 	int hlimit = -1;
 	u32 mtu;
 
-	head_room = sizeof(struct ipv6hdr) + LL_RESERVED_SPACE(dst->dev);
-	if (opt)
-		head_room += opt->opt_nflen + opt->opt_flen;
-
-	if (unlikely(skb_headroom(skb) < head_room)) {
-		struct sk_buff *skb2 = skb_realloc_headroom(skb, head_room);
-		if (!skb2) {
-			IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)),
-				      IPSTATS_MIB_OUTDISCARDS);
-			kfree_skb(skb);
-			return -ENOBUFS;
-		}
-		if (skb->sk)
-			skb_set_owner_w(skb2, skb->sk);
-		consume_skb(skb);
-		skb = skb2;
-	}
-
 	if (opt) {
-		seg_len += opt->opt_nflen + opt->opt_flen;
+		unsigned int head_room;
 
+		/* First: exthdrs may take lots of space (~8K for now)
+		   MAX_HEADER is not enough.
+		 */
+		head_room = opt->opt_nflen + opt->opt_flen;
+		seg_len += head_room;
+		head_room += sizeof(struct ipv6hdr) + LL_RESERVED_SPACE(dst->dev);
+
+		if (skb_headroom(skb) < head_room) {
+			struct sk_buff *skb2 = skb_realloc_headroom(skb, head_room);
+			if (!skb2) {
+				IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)),
+					      IPSTATS_MIB_OUTDISCARDS);
+				kfree_skb(skb);
+				return -ENOBUFS;
+			}
+			if (skb->sk)
+				skb_set_owner_w(skb2, skb->sk);
+			consume_skb(skb);
+			skb = skb2;
+		}
 		if (opt->opt_flen)
 			ipv6_push_frag_opts(skb, opt, &proto);
-
 		if (opt->opt_nflen)
 			ipv6_push_nfrag_opts(skb, opt, &proto, &first_hop,
 					     &fl6->saddr);
@@ -261,6 +280,10 @@ int ip6_xmit(const struct sock *sk, struct sk_buff *skb, struct flowi6 *fl6,
 	if ((skb->len <= mtu) || skb->ignore_df || skb_is_gso(skb)) {
 		IP6_UPD_PO_STATS(net, ip6_dst_idev(skb_dst(skb)),
 			      IPSTATS_MIB_OUT, skb->len);
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+		hw_bypass_skb(AF_INET6, HW_PFB_INET6_IP_XMIT, sk, skb, NULL,
+			      dst->dev, PASS);
+#endif
 
 		/* if egress device is enslaved to an L3 master device pass the
 		 * skb to its handler for processing
@@ -1231,6 +1254,7 @@ static int ip6_setup_cork(struct sock *sk, struct inet_cork_full *cork,
 	if (mtu < IPV6_MIN_MTU)
 		return -EINVAL;
 	cork->base.fragsize = mtu;
+	cork->base.gso_size = sk->sk_type == SOCK_DGRAM ? ipc6->gso_size : 0;
 	if (dst_allfrag(rt->dst.path))
 		cork->base.flags |= IPCORK_ALLFRAG;
 	cork->base.length = 0;
@@ -1264,6 +1288,7 @@ static int __ip6_append_data(struct sock *sk,
 	struct ipv6_txoptions *opt = v6_cork->opt;
 	int csummode = CHECKSUM_NONE;
 	unsigned int maxnonfragsize, headersize;
+	bool paged;
 
 	skb = skb_peek_tail(queue);
 	if (!skb) {
@@ -1271,7 +1296,8 @@ static int __ip6_append_data(struct sock *sk,
 		dst_exthdrlen = rt->dst.header_len - rt->rt6i_nfheader_len;
 	}
 
-	mtu = cork->fragsize;
+	paged = !!cork->gso_size;
+	mtu = cork->gso_size ? IP6_MAX_MTU : cork->fragsize;
 	orig_mtu = mtu;
 
 	hh_len = LL_RESERVED_SPACE(rt->dst.dev);
@@ -1319,7 +1345,7 @@ emsgsize:
 	if (transhdrlen && sk->sk_protocol == IPPROTO_UDP &&
 	    headersize == sizeof(struct ipv6hdr) &&
 	    length <= mtu - headersize &&
-	    !(flags & MSG_MORE) &&
+	    (!(flags & MSG_MORE) || cork->gso_size) &&
 	    rt->dst.dev->features & (NETIF_F_IPV6_CSUM | NETIF_F_HW_CSUM))
 		csummode = CHECKSUM_PARTIAL;
 
@@ -1362,6 +1388,7 @@ emsgsize:
 			unsigned int fraglen;
 			unsigned int fraggap;
 			unsigned int alloclen;
+			unsigned int pagedlen = 0;
 alloc_new_skb:
 			/* There's no room in the current skb */
 			if (skb)
@@ -1384,11 +1411,19 @@ alloc_new_skb:
 
 			if (datalen > (cork->length <= mtu && !(cork->flags & IPCORK_ALLFRAG) ? mtu : maxfraglen) - fragheaderlen)
 				datalen = maxfraglen - fragheaderlen - rt->dst.trailer_len;
+			fraglen = datalen + fragheaderlen;
+
 			if ((flags & MSG_MORE) &&
-			    !(rt->dst.dev->features&NETIF_F_SG))
+			    !(rt->dst.dev->features&NETIF_F_SG)) {
 				alloclen = mtu;
-			else
-				alloclen = datalen + fragheaderlen;
+			}
+			else if (!paged) {
+				alloclen = fraglen;
+			}
+			else {
+				alloclen = min_t(int, fraglen, MAX_HEADER);
+				pagedlen = fraglen - alloclen;
+			}
 
 			alloclen += dst_exthdrlen;
 
@@ -1410,7 +1445,7 @@ alloc_new_skb:
 			 */
 			alloclen += sizeof(struct frag_hdr);
 
-			copy = datalen - transhdrlen - fraggap;
+			copy = datalen - transhdrlen - fraggap - pagedlen;
 			if (copy < 0) {
 				err = -EINVAL;
 				goto error;
@@ -1450,7 +1485,7 @@ alloc_new_skb:
 			/*
 			 *	Find where to start putting bytes
 			 */
-			data = skb_put(skb, fraglen);
+			data = skb_put(skb, fraglen - pagedlen);
 			skb_set_network_header(skb, exthdrlen);
 			data += fragheaderlen;
 			skb->transport_header = (skb->network_header +
@@ -1473,7 +1508,7 @@ alloc_new_skb:
 			}
 
 			offset += copy;
-			length -= datalen - fraggap;
+			length -= copy + transhdrlen;
 			transhdrlen = 0;
 			exthdrlen = 0;
 			dst_exthdrlen = 0;
@@ -1739,9 +1774,9 @@ struct sk_buff *ip6_make_skb(struct sock *sk,
 			     void *from, int length, int transhdrlen,
 			     struct ipcm6_cookie *ipc6, struct flowi6 *fl6,
 			     struct rt6_info *rt, unsigned int flags,
+			     struct inet_cork_full *cork,
 			     const struct sockcm_cookie *sockc)
 {
-	struct inet_cork_full cork;
 	struct inet6_cork v6_cork;
 	struct sk_buff_head queue;
 	int exthdrlen = (ipc6->opt ? ipc6->opt->opt_flen : 0);
@@ -1752,27 +1787,27 @@ struct sk_buff *ip6_make_skb(struct sock *sk,
 
 	__skb_queue_head_init(&queue);
 
-	cork.base.flags = 0;
-	cork.base.addr = 0;
-	cork.base.opt = NULL;
-	cork.base.dst = NULL;
+	cork->base.flags = 0;
+	cork->base.addr = 0;
+	cork->base.opt = NULL;
+	cork->base.dst = NULL;
 	v6_cork.opt = NULL;
-	err = ip6_setup_cork(sk, &cork, &v6_cork, ipc6, rt, fl6);
+	err = ip6_setup_cork(sk, cork, &v6_cork, ipc6, rt, fl6);
 	if (err) {
-		ip6_cork_release(&cork, &v6_cork);
+		ip6_cork_release(cork, &v6_cork);
 		return ERR_PTR(err);
 	}
 	if (ipc6->dontfrag < 0)
 		ipc6->dontfrag = inet6_sk(sk)->dontfrag;
 
-	err = __ip6_append_data(sk, fl6, &queue, &cork.base, &v6_cork,
+	err = __ip6_append_data(sk, fl6, &queue, &cork->base, &v6_cork,
 				&current->task_frag, getfrag, from,
 				length + exthdrlen, transhdrlen + exthdrlen,
 				flags, ipc6, sockc);
 	if (err) {
-		__ip6_flush_pending_frames(sk, &queue, &cork, &v6_cork);
+		__ip6_flush_pending_frames(sk, &queue, cork, &v6_cork);
 		return ERR_PTR(err);
 	}
 
-	return __ip6_make_skb(sk, &queue, &cork, &v6_cork);
+	return __ip6_make_skb(sk, &queue, cork, &v6_cork);
 }

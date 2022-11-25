@@ -4,6 +4,7 @@
 
 #include <linux/huge_mm.h>
 #include <linux/swap.h>
+#include <linux/hisi/page_tracker.h>
 
 /**
  * page_is_file_cache - should the page be on a file LRU or anon LRU?
@@ -28,8 +29,11 @@ static __always_inline void __update_lru_size(struct lruvec *lruvec,
 				int nr_pages)
 {
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
-
+#ifdef CONFIG_REFAULT_IO_VMSCAN
+	__mod_lruvec_state(lruvec, NR_LRU_BASE + lru, nr_pages);
+#else
 	__mod_node_page_state(pgdat, NR_LRU_BASE + lru, nr_pages);
+#endif
 	__mod_zone_page_state(&pgdat->node_zones[zid],
 				NR_ZONE_LRU_BASE + lru, nr_pages);
 }
@@ -49,6 +53,12 @@ static __always_inline void add_page_to_lru_list(struct page *page,
 {
 	update_lru_size(lruvec, lru, page_zonenum(page), hpage_nr_pages(page));
 	list_add(&page->lru, &lruvec->lists[lru]);
+	if ((NR_INACTIVE_ANON == NR_LRU_BASE + lru) ||
+		(NR_ACTIVE_ANON == NR_LRU_BASE + lru))
+		page_tracker_set_type(page, TRACK_ANON, 0);
+	else if ((NR_INACTIVE_FILE == NR_LRU_BASE + lru) ||
+		(NR_ACTIVE_FILE == NR_LRU_BASE + lru))
+		page_tracker_set_type(page, TRACK_FILE, 0);
 }
 
 static __always_inline void add_page_to_lru_list_tail(struct page *page,

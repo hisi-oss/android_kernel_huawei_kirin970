@@ -35,6 +35,20 @@ int pcibus_to_node(struct pci_bus *bus);
 
 #include <linux/arch_topology.h>
 
+#ifdef CONFIG_HISI_EAS_SCHED
+
+#define arch_scale_cpu_capacity(sd, cpu)		\
+	((topology_get_cpu_scale(sd, cpu) *		\
+	  topology_get_max_freq_scale(sd, cpu)) >>	\
+	 SCHED_CAPACITY_SHIFT)
+
+#define arch_scale_freq_capacity(sd, cpu)		\
+	((topology_get_freq_scale(sd, cpu) <<		\
+	  SCHED_CAPACITY_SHIFT) /			\
+	 topology_get_max_freq_scale(sd, cpu))
+
+#else /* CONFIG_HISI_EAS_SCHED */
+
 /* Replace task scheduler's default frequency-invariant accounting */
 #define arch_scale_freq_capacity topology_get_freq_scale
 
@@ -43,6 +57,8 @@ int pcibus_to_node(struct pci_bus *bus);
 
 /* Replace task scheduler's default cpu-invariant accounting */
 #define arch_scale_cpu_capacity topology_get_cpu_scale
+
+#endif /* CONFIG_HISI_EAS_SCHED */
 
 /* Enable topology flag updates */
 #define arch_update_cpu_topology topology_update_cpu_topology

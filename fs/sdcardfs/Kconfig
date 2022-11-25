@@ -11,3 +11,10 @@ config SDCARD_FS_FADV_NOACTIVE
 	default y
 	help
 	  Sdcardfs supports fadvise noactive mode.
+
+config SDCARD_FS_SHARE_PRIMARY_OBB
+	bool "sdcardfs primary user share obb"
+	depends on SDCARD_FS
+	default n
+	help
+	  primary user share Android/obb and obb

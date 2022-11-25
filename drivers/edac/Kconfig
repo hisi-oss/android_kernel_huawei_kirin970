@@ -246,8 +246,8 @@ config EDAC_PND2
 	  micro-server but may appear on others in the future.
 
 config EDAC_MPC85XX
-	tristate "Freescale MPC83xx / MPC85xx"
-	depends on FSL_SOC
+	bool "Freescale MPC83xx / MPC85xx"
+	depends on FSL_SOC && EDAC=y
 	help
 	  Support for error detection and correction on the Freescale
 	  MPC8349, MPC8560, MPC8540, MPC8548, T4240
@@ -449,6 +449,51 @@ config EDAC_SYNOPSYS
 	help
 	  Support for error detection and correction on the Synopsys DDR
 	  memory controller.
+
+config CPU_EDAC_ARM64
+	depends on ARM64
+	tristate "L1/L2/L3/SCU Caches"
+	help
+	   Support for error detection and correction on the CPUs.
+	   Reports errors caught by ECC mechanism.
+	   For debugging issues having to do with stability and overall system
+	   health, you should probably say 'Y' here.
+
+config RAS_TEST
+	depends on ARM64 && HISI_DEBUG_FS
+	tristate "RAS TEST"
+	help
+	   Support for error detection and correction on the CPUs.
+	   Reports errors caught by ECC mechanism.
+	   For debugging issues having to do with stability and overall system
+	   health, you should probably say 'Y' here.
+
+config CPU_EDAC_ARM64_PANIC_ON_CE
+	depends on CPU_EDAC_ARM64 && HISI_DEBUG_FS
+	bool "Panic on correctable errors"
+	help
+	   Forcibly cause a kernel panic if an correctable error (CE) is
+	   detected, even though the error is (by definition) correctable and
+	   would otherwise result in no adverse system effects. This can reduce
+	   debugging times on hardware which may be operating at voltages or
+	   frequencies outside normal specification.
+	   For production builds, you should definitely say 'N' here.
+
+config CPU_EDAC_ARM64_PANIC_ON_UE
+	depends on CPU_EDAC_ARM64
+	bool "Panic on uncorrectable errors"
+	help
+	   Forcibly cause a kernel panic if an uncorrectable error (UE) is
+	   detected. This can reduce debugging times on hardware which may be
+	   operating at voltages or frequencies outside normal specification.
+	   For production builds, you should probably say 'N' here.
+
+config CPU_EDAC_ARM64_DEBUG
+	depends on CPU_EDAC_ARM64 && HISI_DEBUG_FS
+	bool "Debug for CPU EDAC ECC"
+	help
+	   For debug edac ecc, you should probably say 'Y' here.
+
 
 config EDAC_XGENE
 	tristate "APM X-Gene SoC"

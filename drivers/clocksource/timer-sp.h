@@ -10,6 +10,7 @@
  *
  * Every SP804 contains two identical timers.
  */
+#ifndef CONFIG_LPCPU_HITIMER
 #define TIMER_1_BASE	0x00
 #define TIMER_2_BASE	0x20
 
@@ -29,3 +30,28 @@
 #define TIMER_RIS	0x10			/*  CVR ro */
 #define TIMER_MIS	0x14			/*  CVR ro */
 #define TIMER_BGLOAD	0x18			/*  CVR rw */
+#else
+#define TIMER_1_BASE	0x00
+#define TIMER_2_BASE	0x400
+
+#define TIMER_LOAD	0x04			/* ACVR rw */
+#define TIMER_VALUE	0x14			/* ACVR ro */
+#define TIMER_CTRL	0x08			/* ACVR rw */
+#define TIMER_CTRL_ONESHOT	(1 << 2)	/*  CVR */
+#define TIMER_CTRL_32BIT	(1 << 1)	/*  CVR */
+#define TIMER_CTRL_DIV1		(0 << 2)	/* ACVR */
+#define TIMER_CTRL_DIV16	(1 << 2)	/* ACVR */
+#define TIMER_CTRL_DIV256	(2 << 2)	/* ACVR */
+#define TIMER_CTRL_IE		(0 << 4)	/*   VR */
+#define TIMER_CTRL_INT_MASK	(1 << 4)	/* INTR MASK */
+#define TIMER_CTRL_PERIODIC	(1 << 3)	/* ACVR */
+#define TIMER_CTRL_ENABLE	(1 << 0)	/* ACVR */
+
+#define TIMER_INTCLR	0x10			/* ACVR wo */
+#define TIMER_RIS	0x10			/*  CVR ro */
+#define TIMER_MIS	0x14			/*  CVR ro */
+#define TIMER_BGLOAD	0x18			/*  CVR rw */
+
+#define LPCPU_CLK_CTRL		0x0
+#define LPCPU_CLK_CTRL_VAL	(1 << 2)
+#endif

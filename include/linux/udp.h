@@ -55,6 +55,7 @@ struct udp_sock {
 	 * when the socket is uncorked.
 	 */
 	__u16		 len;		/* total length of pending frames */
+	__u16		 gso_size;
 	/*
 	 * Fields specific to UDP-Lite.
 	 */
@@ -85,7 +86,13 @@ struct udp_sock {
 
 	/* This field is dirtied by udp_recvmsg() */
 	int		forward_deficit;
+
+#ifdef CONFIG_MPTCP
+	struct sockaddr server_addr;
+#endif
 };
+
+#define UDP_MAX_SEGMENTS	(1 << 6UL)
 
 static inline struct udp_sock *udp_sk(const struct sock *sk)
 {

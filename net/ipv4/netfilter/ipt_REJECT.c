@@ -25,6 +25,9 @@
 #endif
 
 #include <net/netfilter/ipv4/nf_reject.h>
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+#include <hwnet/booster/hw_packet_filter_bypass.h>
+#endif
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
@@ -35,34 +38,40 @@ reject_tg(struct sk_buff *skb, const struct xt_action_param *par)
 {
 	const struct ipt_reject_info *reject = par->targinfo;
 	int hook = xt_hooknum(par);
+	bool skip_reject = false;
 
-	switch (reject->with) {
-	case IPT_ICMP_NET_UNREACHABLE:
-		nf_send_unreach(skb, ICMP_NET_UNREACH, hook);
-		break;
-	case IPT_ICMP_HOST_UNREACHABLE:
-		nf_send_unreach(skb, ICMP_HOST_UNREACH, hook);
-		break;
-	case IPT_ICMP_PROT_UNREACHABLE:
-		nf_send_unreach(skb, ICMP_PROT_UNREACH, hook);
-		break;
-	case IPT_ICMP_PORT_UNREACHABLE:
-		nf_send_unreach(skb, ICMP_PORT_UNREACH, hook);
-		break;
-	case IPT_ICMP_NET_PROHIBITED:
-		nf_send_unreach(skb, ICMP_NET_ANO, hook);
-		break;
-	case IPT_ICMP_HOST_PROHIBITED:
-		nf_send_unreach(skb, ICMP_HOST_ANO, hook);
-		break;
-	case IPT_ICMP_ADMIN_PROHIBITED:
-		nf_send_unreach(skb, ICMP_PKT_FILTERED, hook);
-		break;
-	case IPT_TCP_RESET:
-		nf_send_reset(xt_net(par), skb, hook);
-	case IPT_ICMP_ECHOREPLY:
-		/* Doesn't happen. */
-		break;
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+	skip_reject = hw_hook_bypass_skb(AF_INET, hook, skb);
+#endif
+	if (!skip_reject) {
+		switch (reject->with) {
+		case IPT_ICMP_NET_UNREACHABLE:
+			nf_send_unreach(skb, ICMP_NET_UNREACH, hook);
+			break;
+		case IPT_ICMP_HOST_UNREACHABLE:
+			nf_send_unreach(skb, ICMP_HOST_UNREACH, hook);
+			break;
+		case IPT_ICMP_PROT_UNREACHABLE:
+			nf_send_unreach(skb, ICMP_PROT_UNREACH, hook);
+			break;
+		case IPT_ICMP_PORT_UNREACHABLE:
+			nf_send_unreach(skb, ICMP_PORT_UNREACH, hook);
+			break;
+		case IPT_ICMP_NET_PROHIBITED:
+			nf_send_unreach(skb, ICMP_NET_ANO, hook);
+			break;
+		case IPT_ICMP_HOST_PROHIBITED:
+			nf_send_unreach(skb, ICMP_HOST_ANO, hook);
+			break;
+		case IPT_ICMP_ADMIN_PROHIBITED:
+			nf_send_unreach(skb, ICMP_PKT_FILTERED, hook);
+			break;
+		case IPT_TCP_RESET:
+			nf_send_reset(xt_net(par), skb, hook);
+		case IPT_ICMP_ECHOREPLY:
+			/* Doesn't happen. */
+			break;
+		}
 	}
 
 	return NF_DROP;

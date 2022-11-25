@@ -116,3 +116,6 @@ __aarch32_sigret_code_start:
 
         .globl __aarch32_sigret_code_end
 __aarch32_sigret_code_end:
+#ifdef CONFIG_ARM64_HKRR
+	nop
+#endif

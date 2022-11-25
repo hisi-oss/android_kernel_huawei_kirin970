@@ -381,11 +381,46 @@ static int show_device(struct seq_file *m, void *v)
 	return 0;
 }
 
+#ifdef CONFIG_PCIE_KPORT_PC
+static int show_device_hw(struct seq_file *m, void *v)
+{
+	const struct pci_dev *dev = v;
+	const struct pci_driver *drv = NULL;
+	struct pci_bus *bus = NULL;
+
+	if (dev == NULL)
+		return 0;
+
+	bus = dev->bus;
+	drv = pci_dev_driver(dev);
+	if (pci_proc_domain(bus)) {
+		seq_printf(m, "%04x:%02x", pci_domain_nr(bus), bus->number);
+	} else {
+		seq_printf(m, "%02x", bus->number);
+	}
+	seq_printf(m, "%02x.%x ", PCI_SLOT(dev->devfn), PCI_FUNC(dev->devfn));
+
+	seq_printf(m, "\t%04x\tDevice %04x\t%s\t",
+			dev->vendor,
+			dev->device,
+			drv->name
+		);
+
+	seq_putc(m, '\t');
+	seq_putc(m, '\n');
+	return 0;
+}
+#endif
+
 static const struct seq_operations proc_bus_pci_devices_op = {
 	.start	= pci_seq_start,
 	.next	= pci_seq_next,
 	.stop	= pci_seq_stop,
+#ifdef CONFIG_PCIE_KPORT_PC
+	.show	= show_device_hw
+#else
 	.show	= show_device
+#endif
 };
 
 static struct proc_dir_entry *proc_bus_pci_dir;

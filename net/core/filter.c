@@ -53,9 +53,15 @@
 #include <net/dst_metadata.h>
 #include <net/dst.h>
 #include <net/sock_reuseport.h>
+#ifdef CONFIG_DOZE_FILTER
+#include <huawei_platform/power/wifi_filter/wifi_filter.h>
+#endif
 #include <net/busy_poll.h>
 #include <net/tcp.h>
 #include <linux/bpf_trace.h>
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+#include <hwnet/booster/hw_packet_filter_bypass.h>
+#endif
 
 /**
  *	sk_filter_trim_cap - run a packet through a socket filter
@@ -74,6 +80,10 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 {
 	int err;
 	struct sk_filter *filter;
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+	int hook = HW_PFB_INET_BPF_INGRESS;
+	struct net_device *dev = NULL;
+#endif
 
 	/*
 	 * If the skb was allocated from pfmemalloc reserves, only
@@ -85,8 +95,22 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 		return -ENOMEM;
 	}
 	err = BPF_CGROUP_RUN_PROG_INET_INGRESS(sk, skb);
-	if (err)
+#ifdef CONFIG_HW_PACKET_FILTER_BYPASS
+	if (sk->sk_family == AF_INET6)
+		hook = HW_PFB_INET6_BPF_INGRESS;
+	rcu_read_lock();
+	dev = dev_get_by_index_rcu(sock_net(sk), skb->skb_iif);
+	rcu_read_unlock();
+	if (hw_bypass_skb(sk->sk_family, hook, sk, skb, dev,
+			  NULL, err ? DROP : PASS))
+		err = 0;
+#endif
+	if (err) {
+#ifdef CONFIG_DOZE_FILTER
+		get_filter_infoEx(skb);
+#endif
 		return err;
+	}
 
 	err = security_sock_rcv_skb(sk, skb);
 	if (err)
@@ -1714,19 +1738,18 @@ static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
 static int __bpf_redirect_no_mac(struct sk_buff *skb, struct net_device *dev,
 				 u32 flags)
 {
-	unsigned int mlen = skb_network_offset(skb);
+	/* skb->mac_len is not set on normal egress */
+	unsigned int mlen = skb->network_header - skb->mac_header;
 
-	if (mlen) {
-		__skb_pull(skb, mlen);
+	__skb_pull(skb, mlen);
 
-		/* At ingress, the mac header has already been pulled once.
-		 * At egress, skb_pospull_rcsum has to be done in case that
-		 * the skb is originated from ingress (i.e. a forwarded skb)
-		 * to ensure that rcsum starts at net header.
-		 */
-		if (!skb_at_tc_ingress(skb))
-			skb_postpull_rcsum(skb, skb_mac_header(skb), mlen);
-	}
+	/* At ingress, the mac header has already been pulled once.
+	 * At egress, skb_pospull_rcsum has to be done in case that
+	 * the skb is originated from ingress (i.e. a forwarded skb)
+	 * to ensure that rcsum starts at net header.
+	 */
+	if (!skb_at_tc_ingress(skb))
+		skb_postpull_rcsum(skb, skb_mac_header(skb), mlen);
 	skb_pop_mac_header(skb);
 	skb_reset_mac_len(skb);
 	return flags & BPF_F_INGRESS ?
@@ -3063,6 +3086,58 @@ static const struct bpf_func_proto bpf_get_socket_uid_proto = {
 	.arg1_type      = ARG_PTR_TO_CTX,
 };
 
+BPF_CALL_1(bpf_get_socket_pid, struct sk_buff *, skb)
+{
+#if defined(CONFIG_HUAWEI_KSTATE)
+	struct socket *socket = NULL;
+	struct sock *sk = sk_to_full_sk(skb->sk);
+	if (!sk || !sk_fullsock(sk))
+		return 0;
+
+	socket = sk->sk_socket;
+	if (!socket)
+		return 0;
+
+	return socket->pid;
+#endif
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_get_socket_pid_proto = {
+	.func           = bpf_get_socket_pid,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+};
+
+BPF_CALL_3(bpf_get_socket_process, struct sk_buff *, skb,
+	   void *, comm, u32, size)
+{
+	struct sock *sk = NULL;
+
+	if (!comm || size < TASK_COMM_LEN)
+		return -EINVAL;
+
+	sk = sk_to_full_sk(skb->sk);
+	if (!sk || !sk_fullsock(sk))
+		return -EINVAL;
+
+#if defined(CONFIG_CGROUP_BPF)
+	strncpy(comm, sk->sk_process_name, TASK_COMM_LEN);
+#endif
+
+	return 0;
+}
+
+static const struct bpf_func_proto bpf_get_socket_process_proto = {
+	.func           = bpf_get_socket_process,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_PTR_TO_CTX,
+	.arg2_type      = ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type      = ARG_ANYTHING,
+};
+
 BPF_CALL_5(bpf_setsockopt, struct bpf_sock_ops_kern *, bpf_sock,
 	   int, level, int, optname, char *, optval, int, optlen)
 {
@@ -3191,6 +3266,8 @@ bpf_base_func_proto(enum bpf_func_id func_id)
 	case BPF_FUNC_trace_printk:
 		if (capable(CAP_SYS_ADMIN))
 			return bpf_get_trace_printk_proto();
+	case BPF_FUNC_get_socket_pid:
+		return &bpf_get_socket_pid_proto;
 	default:
 		return NULL;
 	}
@@ -3220,6 +3297,8 @@ sk_filter_func_proto(enum bpf_func_id func_id)
 		return &bpf_get_socket_cookie_proto;
 	case BPF_FUNC_get_socket_uid:
 		return &bpf_get_socket_uid_proto;
+	case BPF_FUNC_get_socket_process:
+		return &bpf_get_socket_process_proto;
 	default:
 		return bpf_base_func_proto(func_id);
 	}
@@ -3259,6 +3338,8 @@ tc_cls_act_func_proto(enum bpf_func_id func_id)
 		return &bpf_skb_adjust_room_proto;
 	case BPF_FUNC_skb_change_tail:
 		return &bpf_skb_change_tail_proto;
+	case BPF_FUNC_skb_change_head:
+		return &bpf_skb_change_head_proto;
 	case BPF_FUNC_skb_get_tunnel_key:
 		return &bpf_skb_get_tunnel_key_proto;
 	case BPF_FUNC_skb_set_tunnel_key:

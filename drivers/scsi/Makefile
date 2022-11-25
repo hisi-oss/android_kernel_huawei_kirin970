@@ -142,6 +142,7 @@ obj-$(CONFIG_VMWARE_PVSCSI)	+= vmw_pvscsi.o
 obj-$(CONFIG_XEN_SCSI_FRONTEND)	+= xen-scsifront.o
 obj-$(CONFIG_HYPERV_STORAGE)	+= hv_storvsc.o
 obj-$(CONFIG_SCSI_WD719X)	+= wd719x.o
+obj-$(CONFIG_SCSI_UFS_UNISTORE) += scsi_unistore.o
 
 obj-$(CONFIG_ARM)		+= arm/
 
@@ -200,4 +201,8 @@ ifdef GENERATE_FIRMWARE
 $(obj)/53c700_d.h: $(src)/53c700.scr $(src)/script_asm.pl
 	$(PERL) -s $(src)/script_asm.pl -ncr7x0_family $@ $(@:_d.h=_u.h) < $<
 
+endif
+
+ifeq ($(TARGET_VERSION_MODE),factory)
+	EXTRA_CFLAGS += -DBYPASS_AUTHORITY_VERIFY
 endif

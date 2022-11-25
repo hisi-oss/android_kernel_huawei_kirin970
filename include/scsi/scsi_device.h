@@ -182,6 +182,7 @@ struct scsi_device {
 	unsigned fix_capacity:1;	/* READ_CAPACITY is too high by 1 */
 	unsigned guess_capacity:1;	/* READ_CAPACITY might be too high by 1 */
 	unsigned retry_hwerror:1;	/* Retry HARDWARE_ERROR */
+	unsigned reset_hwerror:1;       /* Reset HARDWARE_ERROR */
 	unsigned last_sector_bug:1;	/* do not use multisector accesses on
 					   SD_LAST_BUGGY_SECTORS */
 	unsigned no_read_disc_info:1;	/* Avoid READ_DISC_INFO cmds */
@@ -202,6 +203,7 @@ struct scsi_device {
 	struct list_head event_list;	/* asserted events */
 	struct work_struct event_work;
 
+	unsigned int is_visible_bak;
 	unsigned int max_device_blocked; /* what device_blocked counts down from  */
 #define SCSI_DEFAULT_DEVICE_BLOCKED	3
 
@@ -435,6 +437,17 @@ static inline int scsi_execute_req(struct scsi_device *sdev,
 	return scsi_execute(sdev, cmd, data_direction, buffer,
 		bufflen, NULL, sshdr, timeout, retries,  0, 0, resid);
 }
+
+static inline int
+scsi_execute_req_with_flags(struct scsi_device *sdev, const unsigned char *cmd,
+			    int data_direction, void *buffer, unsigned bufflen,
+			    struct scsi_sense_hdr *sshdr, int timeout,
+			    int retries, u64 flags, int *resid)
+{
+	return scsi_execute(sdev, cmd, data_direction, buffer, bufflen, NULL,
+			    sshdr, timeout, retries, flags, 0, resid);
+}
+
 extern void sdev_disable_disk_events(struct scsi_device *sdev);
 extern void sdev_enable_disk_events(struct scsi_device *sdev);
 extern int scsi_vpd_lun_id(struct scsi_device *, char *, size_t);
@@ -447,6 +460,8 @@ extern void scsi_autopm_put_device(struct scsi_device *);
 static inline int scsi_autopm_get_device(struct scsi_device *d) { return 0; }
 static inline void scsi_autopm_put_device(struct scsi_device *d) {}
 #endif /* CONFIG_PM */
+extern void __set_quiesce_for_each_device(struct Scsi_Host *shost);
+extern void __clr_quiesce_for_each_device(struct Scsi_Host *shost);
 
 static inline int __must_check scsi_device_reprobe(struct scsi_device *sdev)
 {

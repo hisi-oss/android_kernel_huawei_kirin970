@@ -18,6 +18,10 @@
 #include <linux/rwsem.h>
 #include <linux/zsmalloc.h>
 #include <linux/crypto.h>
+#ifdef CONFIG_ZRAM_DEDUP
+#include <linux/cache.h>
+#include <linux/zpool.h>
+#endif
 
 #include "zcomp.h"
 
@@ -29,6 +33,11 @@
 #define ZRAM_SECTOR_PER_LOGICAL_BLOCK	\
 	(1 << (ZRAM_LOGICAL_BLOCK_SHIFT - SECTOR_SHIFT))
 
+#define ZRAM_WB_FLAGS_DISABLE		(0)
+#define WRITEBACK_LIMIT_CYCLE_DEFAULT	(24 * 60 * 60)
+#define WRITEBACK_LIMIT_CYCLE_MIN	(24 * 60 * 60)
+#define WRITEBACK_LIMIT_MAX_DEFAULT	(500 * 1024 * 1024 / 4096)
+#define WRITEBACK_LIMIT_MAX_MAX		(1024 * 1024 * 1024 / 4096)
 
 /*
  * The lower ZRAM_FLAG_SHIFT bits of table.flags is for
@@ -51,7 +60,15 @@ enum zram_pageflags {
 	ZRAM_UNDER_WB,	/* page is under writeback */
 	ZRAM_HUGE,	/* Incompressible page */
 	ZRAM_IDLE,	/* not accessed page since last idle marking */
-
+#ifdef CONFIG_ZRAM_DEDUP
+	ZRAM_INDIRECT_HANDLE,
+#endif
+#ifdef CONFIG_HP_CORE
+	ZRAM_BATCHING_OUT,
+	ZRAM_FROM_HYPERHOLD,
+	ZRAM_MCGID_CLEAR,
+#endif
+	ZRAM_IDLE_FAST,	/* not accessed page since last idle_fast marking */
 	__NR_ZRAM_PAGEFLAGS,
 };
 
@@ -79,6 +96,8 @@ struct zram_stats {
 	atomic64_t notify_free;	/* no. of swap slot free notifications */
 	atomic64_t same_pages;		/* no. of same element filled pages */
 	atomic64_t huge_pages;		/* no. of huge pages */
+	atomic64_t idle_pages;		/* no. of idle pages */
+	atomic64_t idle_fast_pages;	/* no. of idle_fast pages */
 	atomic64_t pages_stored;	/* no. of pages currently stored */
 	atomic_long_t max_used_pages;	/* no. of maximum pages stored */
 	atomic64_t writestall;		/* no. of write slow paths */
@@ -90,9 +109,33 @@ struct zram_stats {
 #endif
 };
 
+#ifdef CONFIG_ZRAM_DEDUP
+struct zram_indirect_handle {
+	struct hlist_bl_node	node;
+	unsigned long		handle;
+	atomic_t		refs;
+	u32			hash;
+	size_t			len;
+};
+
+struct zram_hashtable_head {
+	struct hlist_bl_head	head;
+};
+
+struct zram_dedup {
+	struct zram_hashtable_head	*buckets;
+	int				nbuckets;
+	unsigned long			nr_pages;
+	atomic64_t			dedups;
+};
+#endif
+
 struct zram {
 	struct zram_table_entry *table;
 	struct zs_pool *mem_pool;
+#ifdef CONFIG_ZRAM_DEDUP
+	struct zram_dedup *dedup;
+#endif
 	struct zcomp *comp;
 	struct gendisk *disk;
 	/* Prevent concurrent execution of device init */
@@ -114,17 +157,108 @@ struct zram {
 	 */
 	bool claim; /* Protected by bdev->bd_mutex */
 	struct file *backing_dev;
-#ifdef CONFIG_ZRAM_WRITEBACK
+#if (defined CONFIG_ZRAM_WRITEBACK) || (defined CONFIG_ZRAM_DEDUP) || (defined CONFIG_ZRAM_NON_COMPRESS)
 	spinlock_t wb_limit_lock;
+#endif
+#ifdef CONFIG_ZRAM_WRITEBACK
 	bool wb_limit_enable;
-	u64 bd_wb_limit;
+	unsigned long wb_flags;
+	s64 bd_wb_limit;
+	s64 bd_wb_limit_max;
+	int bd_wb_limit_cycle;
+	unsigned long pre_wb_limit_time;
+	unsigned long *bitmap;
+#endif
+#if (defined CONFIG_ZRAM_WRITEBACK) || (defined CONFIG_HP_CORE)
 	struct block_device *bdev;
 	unsigned int old_block_size;
-	unsigned long *bitmap;
 	unsigned long nr_pages;
+#endif
+#ifdef CONFIG_HP_CORE
+	struct hyperhold_area *area;
 #endif
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif
+#ifdef CONFIG_ZRAM_DEDUP
+	bool dedup_enable;
+#endif
+#ifdef CONFIG_ZRAM_NON_COMPRESS
+	bool noncompress_enable;
+#endif
 };
+
+
+static inline int zram_slot_trylock(struct zram *zram, u32 index)
+{
+	return bit_spin_trylock(ZRAM_LOCK, &zram->table[index].flags);
+}
+
+static inline void zram_slot_lock(struct zram *zram, u32 index)
+{
+	bit_spin_lock(ZRAM_LOCK, &zram->table[index].flags);
+}
+
+static inline void zram_slot_unlock(struct zram *zram, u32 index)
+{
+	bit_spin_unlock(ZRAM_LOCK, &zram->table[index].flags);
+}
+
+static inline unsigned long zram_get_handle(struct zram *zram, u32 index)
+{
+	return zram->table[index].handle;
+}
+
+static inline void zram_set_handle(struct zram *zram,
+					u32 index, unsigned long handle)
+{
+	zram->table[index].handle = handle;
+}
+
+static inline bool zram_test_flag(struct zram *zram, u32 index,
+			enum zram_pageflags flag)
+{
+	return zram->table[index].flags & BIT(flag);
+}
+
+static inline void zram_set_flag(struct zram *zram, u32 index,
+			enum zram_pageflags flag)
+{
+	zram->table[index].flags |= BIT(flag);
+}
+
+static inline void zram_clear_flag(struct zram *zram, u32 index,
+			enum zram_pageflags flag)
+{
+	zram->table[index].flags &= ~BIT(flag);
+}
+
+#ifdef CONFIG_ZRAM_DEDUP
+unsigned long zram_get_direct_handle(struct zram *zram, u32 index);
+void zram_free_handle(struct zram *zram, u32 index);
+#endif
+
+static inline void zram_set_element(struct zram *zram, u32 index,
+			unsigned long element)
+{
+	zram->table[index].element = element;
+}
+
+static inline unsigned long zram_get_element(struct zram *zram, u32 index)
+{
+	return zram->table[index].element;
+}
+
+static inline size_t zram_get_obj_size(struct zram *zram, u32 index)
+{
+	return zram->table[index].flags & (BIT(ZRAM_FLAG_SHIFT) - 1);
+}
+
+static inline void zram_set_obj_size(struct zram *zram,
+					u32 index, size_t size)
+{
+	unsigned long flags = zram->table[index].flags >> ZRAM_FLAG_SHIFT;
+
+	zram->table[index].flags = (flags << ZRAM_FLAG_SHIFT) | size;
+}
 #endif

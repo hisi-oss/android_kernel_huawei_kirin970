@@ -108,7 +108,7 @@ MODULE_PARM_DESC(scan, "sync, async, manual, or none. "
 static unsigned int scsi_inq_timeout = SCSI_TIMEOUT/HZ + 18;
 
 module_param_named(inq_timeout, scsi_inq_timeout, uint, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(inq_timeout, 
+MODULE_PARM_DESC(inq_timeout,
 		 "Timeout (in seconds) waiting for devices to answer INQUIRY."
 		 " Default is 20. Some devices may need more; most need less.");
 
@@ -198,6 +198,23 @@ static void scsi_unlock_floptical(struct scsi_device *sdev,
 			 SCSI_TIMEOUT, 3, NULL);
 }
 
+#ifdef CONFIG_HP_CORE
+static int scsi_health_query(struct request_queue *q, u8 *pre_eol_info,
+	u8 *life_time_est_a, u8 *life_time_est_b)
+{
+	struct scsi_device *sdev = q->queuedata;
+
+	if (sdev->type != TYPE_DISK || !sdev->host->hostt->get_health_info)
+		return -EINVAL;
+
+	if (sdev->host->host_self_blocked || sdev->sdev_state != SDEV_RUNNING)
+		return -EINVAL;
+
+	return sdev->host->hostt->get_health_info(sdev, pre_eol_info,
+		life_time_est_a, life_time_est_b);
+}
+#endif
+
 /**
  * scsi_alloc_sdev - allocate and setup a scsi_Device
  * @starget: which target to allocate a &scsi_device for
@@ -284,7 +301,26 @@ static struct scsi_device *scsi_alloc_sdev(struct scsi_target *starget,
 		blk_queue_init_tags(sdev->request_queue,
 				    sdev->host->cmd_per_lun, shost->bqt,
 				    shost->hostt->tag_alloc_policy);
+#ifdef CONFIG_MAS_BLK
+		/* for USB stick */
+		if (shost->queue_quirk_flag & SHOST_QUIRK(SHOST_QUIRK_IO_LATENCY_WARNING)) {
+			blk_queue_latency_warning_set(sdev->request_queue, 2000);
+			blk_queue_dump_register(sdev->request_queue, NULL);
+		}
+#endif
 	}
+#ifdef CONFIG_SCSI_UFS_INLINE_CRYPTO
+	/*
+	* We set the inline crypto flag here because ufs driver update the host
+	* flag until the ufs probe complete.
+	*/
+	blk_queue_set_inline_crypto_flag(sdev->request_queue, shost->crypto_enabled);
+#endif
+#ifdef CONFIG_HP_CORE
+	blk_dev_health_query_register(sdev->request_queue,
+		shost->hostt->get_health_info ? scsi_health_query : NULL);
+#endif
+
 	scsi_change_queue_depth(sdev, sdev->host->cmd_per_lun ?
 					sdev->host->cmd_per_lun : 1);
 
@@ -612,7 +648,7 @@ static int scsi_probe_lun(struct scsi_device *sdev, unsigned char *inq_result,
 			 * not-ready to ready transition [asc/ascq=0x28/0x0]
 			 * or power-on, reset [asc/ascq=0x29/0x0], continue.
 			 * INQUIRY should not yield UNIT_ATTENTION
-			 * but many buggy devices do so anyway. 
+			 * but many buggy devices do so anyway.
 			 */
 			if ((driver_byte(result) & DRIVER_SENSE) &&
 			    scsi_sense_valid(&sshdr)) {
@@ -858,7 +894,7 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	 * Don't set the device offline here; rather let the upper
 	 * level drivers eval the PQ to decide whether they should
 	 * attach. So remove ((inq_result[0] >> 5) & 7) == 1 check.
-	 */ 
+	 */
 
 	sdev->inq_periph_qual = (inq_result[0] >> 5) & 7;
 	sdev->lockable = sdev->removable;
@@ -872,11 +908,13 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 	if (inq_result[7] & 0x10)
 		sdev->sdtr = 1;
 
+#ifdef CONFIG_HISI_DEBUG_FS
 	sdev_printk(KERN_NOTICE, sdev, "%s %.8s %.16s %.4s PQ: %d "
 			"ANSI: %d%s\n", scsi_device_type(sdev->type),
 			sdev->vendor, sdev->model, sdev->rev,
 			sdev->inq_periph_qual, inq_result[2] & 0x07,
 			(inq_result[3] & 0x0f) == 1 ? " CCS" : "");
+#endif
 
 	if ((sdev->scsi_level >= SCSI_2) && (inq_result[7] & 2) &&
 	    !(*bflags & BLIST_NOTQ)) {
@@ -1001,7 +1039,7 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 }
 
 #ifdef CONFIG_SCSI_LOGGING
-/** 
+/**
  * scsi_inq_str - print INQUIRY data from min to max index, strip trailing whitespace
  * @buf:   Output buffer with at least end-first+1 bytes of space
  * @inq:   Inquiry buffer (input)
@@ -1501,7 +1539,7 @@ EXPORT_SYMBOL(__scsi_add_device);
 int scsi_add_device(struct Scsi_Host *host, uint channel,
 		    uint target, u64 lun)
 {
-	struct scsi_device *sdev = 
+	struct scsi_device *sdev =
 		__scsi_add_device(host, channel, target, lun, NULL);
 	if (IS_ERR(sdev))
 		return PTR_ERR(sdev);
@@ -1566,7 +1604,8 @@ static void __scsi_scan_target(struct device *parent, unsigned int channel,
 	 */
 	res = scsi_probe_and_add_lun(starget, 0, &bflags, NULL, rescan, NULL);
 	if (res == SCSI_SCAN_LUN_PRESENT || res == SCSI_SCAN_TARGET_PRESENT) {
-		if (scsi_report_lun_scan(starget, bflags, rescan) != 0)
+		if (shost->is_emulator
+		    || scsi_report_lun_scan(starget, bflags, rescan) != 0)
 			/*
 			 * The REPORT LUN did not scan the target,
 			 * do a sequential scan.
@@ -1720,15 +1759,16 @@ static void scsi_sysfs_add_devices(struct Scsi_Host *shost)
  */
 static struct async_scan_data *scsi_prep_async_scan(struct Scsi_Host *shost)
 {
-	struct async_scan_data *data;
+	struct async_scan_data *data = NULL;
 	unsigned long flags;
 
 	if (strncmp(scsi_scan_type, "sync", 4) == 0)
 		return NULL;
 
+	mutex_lock(&shost->scan_mutex);
 	if (shost->async_scan) {
 		shost_printk(KERN_DEBUG, shost, "%s called twice\n", __func__);
-		return NULL;
+		goto err;
 	}
 
 	data = kmalloc(sizeof(*data), GFP_KERNEL);
@@ -1739,7 +1779,6 @@ static struct async_scan_data *scsi_prep_async_scan(struct Scsi_Host *shost)
 		goto err;
 	init_completion(&data->prev_finished);
 
-	mutex_lock(&shost->scan_mutex);
 	spin_lock_irqsave(shost->host_lock, flags);
 	shost->async_scan = 1;
 	spin_unlock_irqrestore(shost->host_lock, flags);
@@ -1754,6 +1793,7 @@ static struct async_scan_data *scsi_prep_async_scan(struct Scsi_Host *shost)
 	return data;
 
  err:
+	mutex_unlock(&shost->scan_mutex);
 	kfree(data);
 	return NULL;
 }

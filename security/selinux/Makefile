@@ -5,10 +5,16 @@
 
 obj-$(CONFIG_SECURITY_SELINUX) := selinux.o
 
-selinux-y := avc.o hooks.o selinuxfs.o netlink.o nlmsgtab.o netif.o \
+selinux-y := selinux_avc_trace.o avc.o hooks.o selinuxfs.o netlink.o nlmsgtab.o netif.o \
 	     netnode.o netport.o ibpkey.o exports.o \
 	     ss/ebitmap.o ss/hashtab.o ss/symtab.o ss/sidtab.o ss/avtab.o \
-	     ss/policydb.o ss/services.o ss/conditional.o ss/mls.o ss/status.o
+	     ss/services.o ss/conditional.o ss/mls.o ss/status.o
+
+ifeq ($(CONFIG_HKIP_SELINUX_PROT),y)
+selinux-y += ss/policydb_hkip.o ss/selinux_harden.o
+else
+selinux-y += ss/policydb.o
+endif
 
 selinux-$(CONFIG_SECURITY_NETWORK_XFRM) += xfrm.o
 

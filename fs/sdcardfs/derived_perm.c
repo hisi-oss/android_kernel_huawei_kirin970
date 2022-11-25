@@ -20,6 +20,10 @@
 
 #include "sdcardfs.h"
 
+#ifdef CONFIG_SDCARD_FS_SHARE_PRIMARY_OBB
+#include <linux/fscrypt_common.h>
+#endif
+
 /* copy derived state from parent inode */
 static void inherit_derived_state(struct inode *parent, struct inode *child)
 {
@@ -359,8 +363,13 @@ int need_graft_path(struct dentry *dentry)
 	struct sdcardfs_inode_info *parent_info = SDCARDFS_I(d_inode(parent));
 	struct sdcardfs_sb_info *sbi = SDCARDFS_SB(dentry->d_sb);
 	struct qstr obb = QSTR_LITERAL("obb");
+	bool primary_share_obb = false;
 
-	if (!sbi->options.unshared_obb &&
+#ifdef CONFIG_SDCARD_FS_SHARE_PRIMARY_OBB
+	primary_share_obb = (parent_info->data->userid == 0) && (!sbi->obbpath_empty);
+#endif
+
+	if ((!sbi->options.unshared_obb || primary_share_obb ) &&
 			parent_info->data->perm == PERM_ANDROID &&
 			qstr_case_eq(&dentry->d_name, &obb)) {
 
@@ -474,4 +483,32 @@ int setup_obb_dentry(struct dentry *dentry, struct path *lower_path)
 	return err;
 }
 
+#ifdef CONFIG_SDCARD_FS_SHARE_PRIMARY_OBB
+bool is_empty_dir(const char *obbpath_s)
+{
+	int err;
+	bool ret = true;
+	struct path obbpath;
+	struct super_block *sb = NULL;
 
+	if (!obbpath_s)
+		goto out;
+
+	err = kern_path(obbpath_s, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &obbpath);
+	if (err) {
+		pr_info("sdcardfs: failed to find the obbpath_s(%s),err %d\n", obbpath_s, err);
+		goto out;
+	}
+
+	sb = d_inode(obbpath.dentry)->i_sb;
+	if (sb && sb->s_cop && sb->s_cop->empty_dir) {
+		ret = sb->s_cop->empty_dir(d_inode(obbpath.dentry));
+		pr_info("sdcardfs: the empty status of the obbpath_s(%s) is %d\n", obbpath_s, ret);
+	}
+
+	path_put(&obbpath);
+
+out:
+	return ret;
+}
+#endif

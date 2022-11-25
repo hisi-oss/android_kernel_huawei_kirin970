@@ -772,12 +772,13 @@ static void mld_del_delrec(struct inet6_dev *idev, struct ifmcaddr6 *im)
 		im->idev = pmc->idev;
 		im->mca_crcount = idev->mc_qrv;
 		if (im->mca_sfmode == MCAST_INCLUDE) {
-			im->mca_tomb = pmc->mca_tomb;
-			im->mca_sources = pmc->mca_sources;
+			swap(im->mca_tomb, pmc->mca_tomb);
+			swap(im->mca_sources, pmc->mca_sources);
 			for (psf = im->mca_sources; psf; psf = psf->sf_next)
 				psf->sf_crcount = im->mca_crcount;
 		}
 		in6_dev_put(pmc->idev);
+		ip6_mc_clear_src(pmc);
 		kfree(pmc);
 	}
 	spin_unlock_bh(&im->mca_lock);
@@ -1585,7 +1586,9 @@ static struct sk_buff *mld_newpack(struct inet6_dev *idev, unsigned int mtu)
 
 	if (!skb)
 		return NULL;
-
+#ifdef CONFIG_HISI_PAGE_TRACE
+	alloc_skb_with_frags_stats_inc(MLD_NEWPACK_COUNT);
+#endif
 	skb->priority = TC_PRIO_CONTROL;
 	skb_reserve(skb, hlen);
 	skb_tailroom_reserve(skb, mtu, tlen);
@@ -1996,6 +1999,9 @@ static void igmp6_send(struct in6_addr *addr, struct net_device *dev, int type)
 		rcu_read_unlock();
 		return;
 	}
+#ifdef CONFIG_HISI_PAGE_TRACE
+	alloc_skb_with_frags_stats_inc(IGMP6_SEND_COUNT);
+#endif
 	skb->priority = TC_PRIO_CONTROL;
 	skb_reserve(skb, hlen);
 

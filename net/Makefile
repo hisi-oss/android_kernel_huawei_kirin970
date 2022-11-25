@@ -20,6 +20,7 @@ obj-$(CONFIG_TLS)		+= tls/
 obj-$(CONFIG_XFRM)		+= xfrm/
 obj-$(CONFIG_UNIX)		+= unix/
 obj-$(CONFIG_NET)		+= ipv6/
+obj-$(CONFIG_MPTCP)		+= mptcp/
 obj-$(CONFIG_PACKET)		+= packet/
 obj-$(CONFIG_NET_KEY)		+= key/
 obj-$(CONFIG_BRIDGE)		+= bridge/
@@ -85,4 +86,9 @@ ifneq ($(CONFIG_NET_L3_MASTER_DEV),)
 obj-y				+= l3mdev/
 endif
 obj-$(CONFIG_QRTR)		+= qrtr/
+obj-$(CONFIG_NET)		+= hwnet/
+obj-$(CONFIG_HW_NETWORK_AWARE)  += network_aware/
+obj-$(CONFIG_HW_NETQOS_SCHED)  += netqos_sched/
 obj-$(CONFIG_NET_NCSI)		+= ncsi/
+obj-$(CONFIG_HUAWEI_TRACK_SOCKET)	+= tcp_socket/
+

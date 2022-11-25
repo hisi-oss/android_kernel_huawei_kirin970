@@ -1134,7 +1134,7 @@ static long do_fb_ioctl(struct fb_info *info, unsigned int cmd,
 	case FBIOGET_FSCREENINFO:
 		if (!lock_fb_info(info))
 			return -ENODEV;
-		fix = info->fix;
+		memcpy(&fix, &info->fix, sizeof(fix));
 		unlock_fb_info(info);
 
 		ret = copy_to_user(argp, &fix, sizeof(fix)) ? -EFAULT : 0;
@@ -1257,7 +1257,8 @@ struct fb_fix_screeninfo32 {
 	compat_caddr_t		mmio_start;
 	u32			mmio_len;
 	u32			accel;
-	u16			reserved[3];
+	u16			capabilities;
+	u16			reserved[2];
 };
 
 struct fb_cmap32 {
@@ -1329,6 +1330,7 @@ static int do_fscreeninfo_to_user(struct fb_fix_screeninfo *fix,
 
 	err |= put_user(fix->mmio_len, &fix32->mmio_len);
 	err |= put_user(fix->accel, &fix32->accel);
+	err |= put_user(fix->capabilities, &fix32->capabilities);
 	err |= copy_to_user(fix32->reserved, fix->reserved,
 			    sizeof(fix->reserved));
 

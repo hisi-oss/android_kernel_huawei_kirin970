@@ -10,27 +10,37 @@
 #include <linux/ratelimit.h>
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
+#include <linux/hisi/cfi_harden.h>
+#ifdef CONFIG_HKIP_PRMEM
+#include <linux/hisi/prmem.h>
+#endif
 #include <asm/bug.h>
 #include <asm/cacheflush.h>
 #include <asm/memory.h>
 #include <asm/set_memory.h>
+#include <chipset_common/security/saudit.h>
+
+#ifdef CONFIG_HUAWEI_VENDOR_EXCEPTION
+#include <huawei_platform/vendor_exception/vendor_exception.h>
+#endif
 
 /* Compiler-defined handler names */
-#ifdef CONFIG_CFI_PERMISSIVE
-#define cfi_failure_handler	__ubsan_handle_cfi_check_fail
-#define cfi_slowpath_handler	__cfi_slowpath_diag
-#else /* enforcing */
-#define cfi_failure_handler	__ubsan_handle_cfi_check_fail_abort
-#define cfi_slowpath_handler	__cfi_slowpath
-#endif /* CONFIG_CFI_PERMISSIVE */
+#define cfi_failure_handler     __ubsan_handle_cfi_check_fail
+#define cfi_slowpath_handler    __cfi_slowpath_diag
 
 static inline void handle_cfi_failure(void *ptr)
 {
+	saudit_log(CFI, STP_RISK, 0, "target:<%px> %pF,", ptr, ptr);
 #ifdef CONFIG_CFI_PERMISSIVE
 	WARN_RATELIMIT(1, "CFI failure (target: [<%px>] %pF):\n", ptr, ptr);
 #else
 	pr_err("CFI failure (target: [<%px>] %pF):\n", ptr, ptr);
+
+#ifdef CONFIG_HUAWEI_VENDOR_EXCEPTION
+	VENDOR_EXCEPTION(VENDOR_MODID_AP_S_CFI, 0, 0);
+#else
 	BUG();
+#endif
 #endif
 }
 
@@ -45,8 +55,6 @@ struct shadow_range {
 	unsigned long max_page;
 };
 
-#define SHADOW_ORDER	1
-#define SHADOW_PAGES	(1 << SHADOW_ORDER)
 #define SHADOW_SIZE \
 	((SHADOW_PAGES * PAGE_SIZE - sizeof(struct shadow_range)) / sizeof(u16))
 #define SHADOW_INVALID	0xFFFF
@@ -59,7 +67,11 @@ struct cfi_shadow {
 };
 
 static DEFINE_SPINLOCK(shadow_update_lock);
-static struct cfi_shadow __rcu *cfi_shadow __read_mostly = NULL;
+#ifdef CONFIG_HKIP_CFI_HARDEN
+static struct cfi_shadow __rcu *cfi_shadow __wr;
+#else
+static struct cfi_shadow __rcu *cfi_shadow __read_mostly;
+#endif
 
 static inline int ptr_to_shadow(const struct cfi_shadow *s, unsigned long ptr)
 {
@@ -136,7 +148,7 @@ static void add_module_to_shadow(struct cfi_shadow *s, struct module *mod)
 	unsigned long ptr;
 	unsigned long min_page_addr;
 	unsigned long max_page_addr;
-	unsigned long check = (unsigned long)mod->cfi_check;
+	unsigned long check = (unsigned long)fetch_cfi_check_fn(mod);
 	int check_index = ptr_to_shadow(s, check);
 
 	BUG_ON((check & PAGE_MASK) != check); /* Must be page aligned */
@@ -184,8 +196,7 @@ static void update_shadow(struct module *mod, unsigned long min_addr,
 	unsigned long max_addr, update_shadow_fn fn)
 {
 	struct cfi_shadow *prev;
-	struct cfi_shadow *next = (struct cfi_shadow *)
-		__get_free_pages(GFP_KERNEL, SHADOW_ORDER);
+	struct cfi_shadow *next = (struct cfi_shadow *)cfi_alloc_shadow_pages();
 
 	BUG_ON(!next);
 
@@ -199,16 +210,18 @@ static void update_shadow(struct module *mod, unsigned long min_addr,
 	prepare_next_shadow(prev, next);
 
 	fn(next, mod);
-	set_memory_ro((unsigned long)next, SHADOW_PAGES);
+	cfi_protect_shadow_pages(next);
+#ifdef CONFIG_HKIP_CFI_HARDEN
+	wr_rcu_assign_pointer(cfi_shadow, next);
+#else
 	rcu_assign_pointer(cfi_shadow, next);
+#endif
 
 	spin_unlock(&shadow_update_lock);
 	synchronize_rcu();
 
-	if (prev) {
-		set_memory_rw((unsigned long)prev, SHADOW_PAGES);
-		free_pages((unsigned long)prev, SHADOW_ORDER);
-	}
+	if (prev)
+		cfi_free_shadow_pages(prev);
 }
 
 void cfi_module_add(struct module *mod, unsigned long min_addr,
@@ -253,7 +266,7 @@ static inline cfi_check_fn find_module_cfi_check(void *ptr)
 	preempt_enable();
 
 	if (mod)
-		return mod->cfi_check;
+		return fetch_cfi_check_fn(mod);
 
 	return CFI_CHECK_FN;
 }

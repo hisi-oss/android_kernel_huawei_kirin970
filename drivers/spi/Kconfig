@@ -508,6 +508,12 @@ config SPI_PL022
 	  controller. If you have an embedded system with an AMBA(R)
 	  bus and a PL022 controller, say Y or M here.
 
+config HISI_SPI_MASTER
+	tristate "SPI_V500 controller"
+	help
+	  If you say yes to this option,support will be inclued for spi
+	  controller on v500.
+
 config SPI_PPC4xx
 	tristate "PPC4xx SPI Controller"
 	depends on PPC32 && 4xx
@@ -785,6 +791,9 @@ config SPI_LOOPBACK_TEST
 
 	  primarily used for development of spi_master drivers
 	  and to detect regressions
+
+config HISI_SPI
+	bool "Using spi_pl022 extra added code"
 
 config SPI_TLE62X0
 	tristate "Infineon TLE62X0 (for power switching)"

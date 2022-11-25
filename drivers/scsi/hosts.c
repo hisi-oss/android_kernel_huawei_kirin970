@@ -40,7 +40,9 @@
 
 #include "scsi_priv.h"
 #include "scsi_logging.h"
-
+#ifdef CONFIG_HUAWEI_DSM_IOMT_UFS_HOST
+#include <linux/iomt_host/dsm_iomt_ufs_host.h>
+#endif
 
 static DEFINE_IDA(host_index_ida);
 
@@ -158,6 +160,7 @@ void scsi_remove_host(struct Scsi_Host *shost)
 {
 	unsigned long flags;
 
+	shost_printk(KERN_INFO, shost, "%s:++\n", __func__);
 	mutex_lock(&shost->scan_mutex);
 	spin_lock_irqsave(shost->host_lock, flags);
 	if (scsi_host_set_state(shost, SHOST_CANCEL))
@@ -182,6 +185,7 @@ void scsi_remove_host(struct Scsi_Host *shost)
 	transport_unregister_device(&shost->shost_gendev);
 	device_unregister(&shost->shost_dev);
 	device_del(&shost->shost_gendev);
+	pr_info("%s:--\n", __func__);
 }
 EXPORT_SYMBOL(scsi_remove_host);
 
@@ -316,6 +320,7 @@ static void scsi_host_dev_release(struct device *dev)
 	struct Scsi_Host *shost = dev_to_shost(dev);
 	struct device *parent = dev->parent;
 
+	shost_printk(KERN_INFO, shost, "%s:++\n", __func__);
 	scsi_proc_hostdir_rm(shost->hostt);
 
 	/* Wait for functions invoked through call_rcu(&shost->rcu, ...) */
@@ -354,6 +359,7 @@ static void scsi_host_dev_release(struct device *dev)
 	if (parent)
 		put_device(parent);
 	kfree(shost);
+	pr_info("%s:--\n", __func__);
 }
 
 static int shost_eh_deadline = -1;
@@ -392,6 +398,10 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	shost = kzalloc(sizeof(struct Scsi_Host) + privsize, gfp_mask);
 	if (!shost)
 		return NULL;
+
+#ifdef CONFIG_HUAWEI_DSM_IOMT_UFS_HOST
+	shost->iomt_host_info = NULL;
+#endif
 
 	shost->host_lock = &shost->default_lock;
 	spin_lock_init(shost->host_lock);
@@ -497,7 +507,7 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	}
 
 	shost->tmf_work_q = alloc_workqueue("scsi_tmf_%d",
-					    WQ_UNBOUND | WQ_MEM_RECLAIM,
+					    WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI,
 					   1, shost->host_no);
 	if (!shost->tmf_work_q) {
 		shost_printk(KERN_WARNING, shost,

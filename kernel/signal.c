@@ -40,6 +40,7 @@
 #include <linux/cn_proc.h>
 #include <linux/compiler.h>
 #include <linux/posix-timers.h>
+#include <linux/xreclaimer.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/signal.h>
@@ -50,6 +51,22 @@
 #include <asm/siginfo.h>
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
+#ifdef CONFIG_HUAWEI_KSTATE
+#include <huawei_platform/power/hw_kcollect.h>
+#endif
+
+#ifdef CONFIG_HW_DIE_CATCH
+#include <chipset_common/hwzrhung/hung_wp_screen.h>
+#endif
+
+#ifdef CONFIG_BOOST_KILL
+extern void hisi_get_fast_cpus(struct cpumask *cpumask);
+
+/* Add apportunity to config enable/disable boost
+ * killing action
+ */
+unsigned int sysctl_boost_killing;
+#endif
 
 /*
  * SLAB caches for signal bits.
@@ -80,6 +97,11 @@ static int sig_task_ignored(struct task_struct *t, int sig, bool force)
 	if (unlikely(t->signal->flags & SIGNAL_UNKILLABLE) &&
 	    handler == SIG_DFL && !(force && sig_kernel_only(sig)))
 		return 1;
+
+	/* Only allow kernel generated signals to this kthread */
+	if (unlikely((t->flags & PF_KTHREAD) &&
+		     (handler == SIG_KTHREAD_KERNEL) && !force))
+		return true;
 
 	return sig_handler_ignored(handler, sig);
 }
@@ -936,6 +958,12 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 	struct signal_struct *signal = p->signal;
 	struct task_struct *t;
 
+/*lint -save -e504*/
+#ifdef CONFIG_BOOST_KILL
+	cpumask_t new_mask = CPU_MASK_ALL;
+#endif
+/*lint -restore*/
+
 	/*
 	 * Now find a thread we can wake up to take the signal off the queue.
 	 *
@@ -991,6 +1019,14 @@ static void complete_signal(int sig, struct task_struct *p, int group)
 			signal->group_stop_count = 0;
 			t = p;
 			do {
+#ifdef CONFIG_BOOST_KILL
+				if (sysctl_boost_killing) {
+					set_user_nice(t, -20);
+					hisi_get_fast_cpus(&new_mask);
+					cpumask_copy(&t->cpus_allowed, &new_mask);
+					t->nr_cpus_allowed = cpumask_weight(&new_mask);
+				}
+#endif
 				task_clear_jobctl_pending(t, JOBCTL_PENDING_MASK);
 				sigaddset(&t->pending.signal, SIGKILL);
 				signal_wake_up(t, 1);
@@ -1200,11 +1236,61 @@ int do_send_sig_info(int sig, struct siginfo *info, struct task_struct *p,
 	unsigned long flags;
 	int ret = -ESRCH;
 
+#ifdef CONFIG_HW_DIE_CATCH
+	#define DBUG_SIG 35
+	#define SI_CODE_MAGIC 78569
+	unsigned short catch_flags = 0;
+	pid_t to_pid = 0;
+	#define EXIT_CATCH_FORAPP_FLAG      (0x8)
+	#define KILL_CATCH_OLD_FLAG         (KILL_CATCH_FLAG | EXIT_CATCH_FLAG | EXIT_CATCH_ABORT_FLAG)
+	char dst_comm[TASK_COMM_LEN] = {0};
+#endif
+
+#if (defined CONFIG_HW_DIE_CATCH) && (defined CONFIG_HW_ZEROHUNG)
+	unsigned short cur_flags = 0;
+	struct siginfo new_sigino;
+#endif
+
+#ifdef CONFIG_HUAWEI_KSTATE
+	if (sig == SIGKILL || sig == SIGTERM || sig == SIGABRT || sig == SIGQUIT)
+		hwkillinfo(p->tgid, sig);
+#endif
 	if (lock_task_sighand(p, &flags)) {
+#ifdef CONFIG_HW_DIE_CATCH
+		catch_flags = p->signal->unexpected_die_catch_flags;
+		if ((sig == SIGKILL || sig == SIGTERM) && (catch_flags & EXIT_CATCH_FORAPP_FLAG)) {
+			p->signal->unexpected_die_catch_flags = 0;
+			memcpy(dst_comm, p->comm, TASK_COMM_LEN);
+		}
+		to_pid = p->pid;
+		/*if the process have KILL_CATCH_FLAG, need to catch it in android platform*/
+		if (catch_flags & KILL_CATCH_FLAG) {
+			pr_warn("ExitCatch: %s(%d) send_sig %d to %s(%d)\n",
+			current->comm, current->pid, sig, p->comm, p->pid);
+			/*if current is init, don't consider it*/
+			if (current->pid != 1) {
+				sig = (sig == SIGKILL || sig == SIGTERM) ? SIGABRT : sig;
+			}
+		}
+#endif
 		ret = send_signal(sig, info, p, group);
 		unlock_task_sighand(p, &flags);
 	}
 
+	xreclaimer_cond_quick_reclaim(p, sig, info, (ret != 0) || !fatal_signal_pending(p));
+#if (defined CONFIG_HW_DIE_CATCH) && (defined CONFIG_HW_ZEROHUNG)
+	cur_flags = current->signal->unexpected_die_catch_flags;
+	if ((catch_flags & EXIT_CATCH_FORAPP_FLAG) && !(cur_flags & KILL_CATCH_OLD_FLAG) && hung_wp_screen_getbl()) {
+		if (current->pid != 1 && (sig == SIGKILL || sig == SIGTERM) && to_pid != current->pid) {
+			new_sigino.si_signo = DBUG_SIG;
+			new_sigino.si_errno = 0;
+			new_sigino.si_code = SI_CODE_MAGIC;
+			pr_warn("ExitCatch:%s:%d send signal %d to dst_process %s:%d\n",
+				current->comm, current->pid, sig, dst_comm, to_pid);
+			force_sig_info(DBUG_SIG, &new_sigino, current);
+		}
+	}
+#endif
 	return ret;
 }
 
@@ -1661,7 +1747,7 @@ bool do_notify_parent(struct task_struct *tsk, int sig)
 		 * This is only possible if parent == real_parent.
 		 * Check if it has changed security domain.
 		 */
-		if (tsk->parent_exec_id != tsk->parent->self_exec_id)
+		if (tsk->parent_exec_id != READ_ONCE(tsk->parent->self_exec_id))
 			sig = SIGCHLD;
 	}
 
@@ -2271,6 +2357,8 @@ relock:
 	if (signal_group_exit(signal)) {
 		ksig->info.si_signo = signr = SIGKILL;
 		sigdelset(&current->pending.signal, SIGKILL);
+		trace_signal_deliver(SIGKILL, SEND_SIG_NOINFO,
+				&sighand->action[SIGKILL - 1]);
 		recalc_sigpending();
 		goto fatal;
 	}
@@ -2597,6 +2685,14 @@ void __set_current_blocked(const sigset_t *newset)
 	spin_unlock_irq(&tsk->sighand->siglock);
 }
 
+static void try_ignore_term(struct task_struct *tsk, sigset_t *set)
+{
+	// tun2socks and ss-local is sub-process for ssr VPN
+	if (strstr(tsk->comm, "tun2socks") || strstr(tsk->comm, "ss-local")) {
+		sigdelset(set, SIGTERM);
+	}
+}
+
 /*
  * This is also useful for kernel threads that want to temporarily
  * (or permanently) block certain signals.
@@ -2616,12 +2712,14 @@ int sigprocmask(int how, sigset_t *set, sigset_t *oldset)
 
 	switch (how) {
 	case SIG_BLOCK:
+		try_ignore_term(tsk, set);
 		sigorsets(&newset, &tsk->blocked, set);
 		break;
 	case SIG_UNBLOCK:
 		sigandnsets(&newset, &tsk->blocked, set);
 		break;
 	case SIG_SETMASK:
+		try_ignore_term(tsk, set);
 		newset = *set;
 		break;
 	default:
@@ -3787,6 +3885,14 @@ void __init signals_init(void)
 
 	sigqueue_cachep = KMEM_CACHE(sigqueue, SLAB_PANIC);
 }
+
+#ifdef CONFIG_HISI_SWAP_ZDATA
+int reclaim_sigusr_pending(struct task_struct *tsk)
+{
+	return sigismember(&tsk->pending.signal, SIGUSR2) ||
+		sigismember(&tsk->signal->shared_pending.signal, SIGUSR2);
+}
+#endif
 
 #ifdef CONFIG_KGDB_KDB
 #include <linux/kdb.h>

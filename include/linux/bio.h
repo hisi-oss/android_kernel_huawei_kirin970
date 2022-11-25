@@ -123,6 +123,11 @@ static inline void *bio_data(struct bio *bio)
 	return NULL;
 }
 
+static inline bool bio_full(struct bio *bio)
+{
+	return bio->bi_vcnt >= bio->bi_max_vecs;
+}
+
 /*
  * will die
  */
@@ -260,7 +265,7 @@ static inline void bio_cnt_set(struct bio *bio, unsigned int count)
 {
 	if (count != 1) {
 		bio->bi_flags |= (1 << BIO_REFFED);
-		smp_mb__before_atomic();
+		smp_mb();
 	}
 	atomic_set(&bio->__bi_cnt, count);
 }
@@ -375,7 +380,6 @@ static inline void bip_set_seed(struct bio_integrity_payload *bip,
 extern void bio_trim(struct bio *bio, int offset, int size);
 extern struct bio *bio_split(struct bio *bio, int sectors,
 			     gfp_t gfp, struct bio_set *bs);
-
 /**
  * bio_next_split - get next @sectors from a bio, splitting if necessary
  * @bio:	bio to split
@@ -459,6 +463,10 @@ void bio_chain(struct bio *, struct bio *);
 extern int bio_add_page(struct bio *, struct page *, unsigned int,unsigned int);
 extern int bio_add_pc_page(struct request_queue *, struct bio *, struct page *,
 			   unsigned int, unsigned int);
+bool __bio_try_merge_page(struct bio *bio, struct page *page,
+		unsigned int len, unsigned int off);
+void __bio_add_page(struct bio *bio, struct page *page,
+		unsigned int len, unsigned int off);
 int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter);
 struct rq_map_data;
 extern struct bio *bio_map_user_iov(struct request_queue *,
@@ -658,6 +666,36 @@ static inline void bio_list_merge(struct bio_list *bl, struct bio_list *bl2)
 
 	bl->tail = bl2->tail;
 }
+
+
+/*
+ * be careful using bio_list_insert !!!
+ * especially when pre == bl->head.
+ */
+ #ifdef CONFIG_MAS_UNISTORE_PRESERVE
+static inline void bio_list_insert(struct bio_list *bl, struct bio *pre,
+		struct bio *bio)
+{
+	struct bio * bi;
+
+	bio_list_for_each(bi, bl)
+		if (pre == bi)
+			break;
+
+	if (pre != bi)
+		return;
+
+	if (!bl->tail) {
+		bio_list_add_head(bl, bio);
+		return;
+	} else {
+		bio->bi_next = pre->bi_next;
+		pre->bi_next = bio;
+		if (pre == bl->tail)
+			bl->tail = bio;
+	}
+}
+#endif
 
 static inline void bio_list_merge_head(struct bio_list *bl,
 				       struct bio_list *bl2)

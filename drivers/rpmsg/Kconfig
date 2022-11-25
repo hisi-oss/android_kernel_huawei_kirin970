@@ -51,4 +51,8 @@ config RPMSG_VIRTIO
 	select RPMSG
 	select VIRTIO
 
+config HISTAR_ISP
+	tristate "Histar ISP rpmsg client"
+	depends on RPMSG
+	depends on ARCH_HISI
 endmenu

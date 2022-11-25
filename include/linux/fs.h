@@ -38,6 +38,7 @@
 
 #include <asm/byteorder.h>
 #include <uapi/linux/fs.h>
+#include <linux/hisi/pagecache_debug.h>
 
 struct backing_dev_info;
 struct bdi_writeback;
@@ -59,6 +60,12 @@ struct workqueue_struct;
 struct iov_iter;
 struct fscrypt_info;
 struct fscrypt_operations;
+
+struct hp_file_cfg {
+	__u32 pin;
+	unsigned long long len;
+	unsigned long addr;
+};
 
 extern void __init inode_init(void);
 extern void __init inode_init_early(void);
@@ -148,6 +155,9 @@ typedef int (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
 /* Has write method(s) */
 #define FMODE_CAN_WRITE         ((__force fmode_t)0x40000)
 
+/* File is stream-like */
+#define FMODE_STREAM		((__force fmode_t)0x200000)
+
 /* File was opened by fanotify and shouldn't generate fanotify events */
 #define FMODE_NONOTIFY		((__force fmode_t)0x4000000)
 
@@ -161,6 +171,8 @@ typedef int (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
  * points too.
  */
 #define CHECK_IOVEC_ONLY -1
+
+#define WRITE_FLUSH_FUA         (REQ_SYNC | REQ_NOIDLE | REQ_PREFLUSH | REQ_FUA)
 
 /*
  * Attribute flags.  These should be or-ed together to figure out what
@@ -409,7 +421,7 @@ struct address_space {
 	struct list_head	private_list;	/* for use by the address_space */
 	void			*private_data;	/* ditto */
 	errseq_t		wb_err;
-} __attribute__((aligned(sizeof(long)))) __randomize_layout;
+} __attribute__((aligned(sizeof(long))));
 	/*
 	 * On most architectures that alignment is already the case; but
 	 * must be enforced here for CRIS, to let the least significant bit
@@ -453,7 +465,7 @@ struct block_device {
 	int			bd_fsfreeze_count;
 	/* Mutex for freeze */
 	struct mutex		bd_fsfreeze_mutex;
-} __randomize_layout;
+};
 
 /*
  * Radix-tree tags, for tagging dirty and writeback pages within the pagecache
@@ -642,6 +654,7 @@ struct inode {
 		struct rcu_head		i_rcu;
 	};
 	u64			i_version;
+	atomic64_t		i_sequence; /* see futex */
 	atomic_t		i_count;
 	atomic_t		i_dio_count;
 	atomic_t		i_writecount;
@@ -672,7 +685,14 @@ struct inode {
 #endif
 
 	void			*i_private; /* fs or device private pointer */
-} __randomize_layout;
+#if defined(CONFIG_TASK_PROTECT_LRU) || defined(CONFIG_MEMCG_PROTECT_LRU)
+	int			i_protect;
+#endif
+
+#ifdef CONFIG_FILE_MAP
+	struct file_map_entry *i_file_map;
+#endif
+};
 
 static inline unsigned int i_blocksize(const struct inode *node)
 {
@@ -838,6 +858,9 @@ struct file_ra_state {
 					   there are only # of pages ahead */
 
 	unsigned int ra_pages;		/* Maximum readahead window */
+#ifdef CONFIG_HISI_BUFFERED_READAHEAD
+	unsigned int ra_pages_cr;
+#endif
 	unsigned int mmap_miss;		/* Cache miss stat for mmap accesses */
 	loff_t prev_pos;		/* Cache last read() position */
 };
@@ -889,7 +912,13 @@ struct file {
 #endif /* #ifdef CONFIG_EPOLL */
 	struct address_space	*f_mapping;
 	errseq_t		f_wb_err;
-} __randomize_layout
+#ifdef CONFIG_MAS_ORDER_PRESERVE
+	unsigned char f_fsync_flag;
+#endif
+#ifdef CONFIG_HMFS_FS
+	unsigned char hm_fsync_flag;
+#endif
+}
   __attribute__((aligned(4)));	/* lest something weird decides that 2 is OK */
 
 struct file_handle {
@@ -1300,6 +1329,12 @@ extern int send_sigurg(struct fown_struct *fown);
 #define SB_ACTIVE	(1<<30)
 #define SB_NOUSER	(1<<31)
 
+/* These flags relate to encoding and casefolding */
+#define SB_ENC_STRICT_MODE_FL	(1 << 0)
+
+#define sb_has_enc_strict_mode(sb) \
+	(sb->s_encoding_flags & SB_ENC_STRICT_MODE_FL)
+
 /*
  *	Umount options
  */
@@ -1363,6 +1398,10 @@ struct super_block {
 	const struct fscrypt_operations	*s_cop;
 
 	struct hlist_bl_head	s_anon;		/* anonymous dentries for (nfs) exporting */
+#ifdef CONFIG_UNICODE
+	struct unicode_map *s_encoding;
+	__u16 s_encoding_flags;
+#endif
 	struct list_head	s_mounts;	/* list of mounts; _not_ for fs use */
 	struct block_device	*s_bdev;
 	struct backing_dev_info *s_bdi;
@@ -1408,6 +1447,10 @@ struct super_block {
 	/* Number of inodes with nlink == 0 but still referenced */
 	atomic_long_t s_remove_count;
 
+	/* Pending fsnotify inode refs */
+	struct wait_queue_head  s_fsnotify_inode_refs_waitq;
+	atomic_long_t s_fsnotify_inode_refs;
+
 	/* Being remounted read-only */
 	int s_readonly_remount;
 
@@ -1444,7 +1487,7 @@ struct super_block {
 
 	spinlock_t		s_inode_wblist_lock;
 	struct list_head	s_inodes_wb;	/* writeback inodes */
-} __randomize_layout;
+};
 
 /* Helper functions so that in most cases filesystems will
  * not need to deal directly with kuid_t and kgid_t and can
@@ -1738,7 +1781,7 @@ struct file_operations {
 			u64);
 	ssize_t (*dedupe_file_range)(struct file *, u64, u64, struct file *,
 			u64);
-} __randomize_layout;
+};
 
 struct inode_operations {
 	struct dentry * (*lookup) (struct inode *,struct dentry *, unsigned int);
@@ -1799,6 +1842,8 @@ extern ssize_t vfs_read(struct file *, char __user *, size_t, loff_t *);
 extern ssize_t vfs_write(struct file *, const char __user *, size_t, loff_t *);
 extern ssize_t vfs_readv(struct file *, const struct iovec __user *,
 		unsigned long, loff_t *, rwf_t);
+extern ssize_t vfs_writev(struct file *, const struct iovec __user *,
+               unsigned long, loff_t *, int);
 extern ssize_t vfs_copy_file_range(struct file *, loff_t , struct file *,
 				   loff_t, size_t, unsigned int);
 extern int vfs_clone_file_prep_inodes(struct inode *inode_in, loff_t pos_in,
@@ -1850,6 +1895,10 @@ struct super_operations {
 				  struct shrink_control *);
 	long (*free_cached_objects)(struct super_block *,
 				    struct shrink_control *);
+#ifdef CONFIG_F2FS_JOURNAL_APPEND
+        void (*flush_mbio)(struct super_block *sb );
+#endif
+
 };
 
 /*
@@ -1874,6 +1923,7 @@ struct super_operations {
 #define S_DAX		0	/* Make all the DAX code disappear */
 #endif
 #define S_ENCRYPTED	16384	/* Encrypted file (using fs/crypto/) */
+#define S_CASEFOLD	32768	/* Casefolded file */
 
 /*
  * Note that nosuid etc flags are inode-specific: setting some file-system
@@ -1914,6 +1964,7 @@ static inline bool sb_rdonly(const struct super_block *sb) { return sb->s_flags 
 #define IS_NOSEC(inode)		((inode)->i_flags & S_NOSEC)
 #define IS_DAX(inode)		((inode)->i_flags & S_DAX)
 #define IS_ENCRYPTED(inode)	((inode)->i_flags & S_ENCRYPTED)
+#define IS_CASEFOLDED(inode)	((inode)->i_flags & S_CASEFOLD)
 
 #define IS_WHITEOUT(inode)	(S_ISCHR(inode->i_mode) && \
 				 (inode)->i_rdev == WHITEOUT_DEV)
@@ -2001,6 +2052,10 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
  * I_OVL_INUSE		Used by overlayfs to get exclusive ownership on upper
  *			and work dirs among overlayfs mounts.
  *
+ * I_SYNC_QUEUED	Inode is queued in b_io or b_more_io writeback lists.
+ *			Used to detect that mark_inode_dirty() should not move
+ * 			inode between dirty lists.
+ *
  * Q: What is the difference between I_WILL_FREE and I_FREEING?
  */
 #define I_DIRTY_SYNC		(1 << 0)
@@ -2018,10 +2073,10 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
 #define I_DIO_WAKEUP		(1 << __I_DIO_WAKEUP)
 #define I_LINKABLE		(1 << 10)
 #define I_DIRTY_TIME		(1 << 11)
-#define __I_DIRTY_TIME_EXPIRED	12
-#define I_DIRTY_TIME_EXPIRED	(1 << __I_DIRTY_TIME_EXPIRED)
+#define I_DIRTY_TIME_EXPIRED	(1 << 12)
 #define I_WB_SWITCH		(1 << 13)
 #define I_OVL_INUSE			(1 << 14)
+#define I_SYNC_QUEUED		(1 << 17)
 
 #define I_DIRTY (I_DIRTY_SYNC | I_DIRTY_DATASYNC | I_DIRTY_PAGES)
 #define I_DIRTY_ALL (I_DIRTY | I_DIRTY_TIME)
@@ -2598,6 +2653,8 @@ extern int filemap_flush(struct address_space *);
 extern int filemap_fdatawait_keep_errors(struct address_space *mapping);
 extern int filemap_fdatawait_range(struct address_space *, loff_t lstart,
 				   loff_t lend);
+extern int filemap_fdatawait_range_keep_errors(struct address_space *mapping,
+		loff_t start_byte, loff_t end_byte);
 
 static inline int filemap_fdatawait(struct address_space *mapping)
 {
@@ -2689,6 +2746,9 @@ extern int vfs_fsync(struct file *file, int datasync);
  */
 static inline ssize_t generic_write_sync(struct kiocb *iocb, ssize_t count)
 {
+        pgcache_log_path(BIT_GENERIC_WRITE_DUMP, &(iocb->ki_filp->f_path),
+                        "generic write sync, offset, %ld, size, %ld",
+                        iocb->ki_pos, count);
 	if (iocb->ki_flags & IOCB_DSYNC) {
 		int ret = vfs_fsync_range(iocb->ki_filp,
 				iocb->ki_pos - count, iocb->ki_pos - 1,
@@ -2919,6 +2979,56 @@ extern void inode_sb_list_add(struct inode *inode);
 #ifdef CONFIG_BLOCK
 extern int bdev_read_only(struct block_device *);
 #endif
+#ifdef CONFIG_BLK_DEV_THROTTLING
+#define THROTL_WB_SYNC_PAGE_CNT	128
+#define THROTL_WB_SYNC_BIO_CNT	8
+extern bool blk_throtl_get_quota(struct block_device *,
+				 unsigned int, unsigned long, bool);
+static inline void blk_throtl_get_quotas(struct block_device *bdev,
+					 unsigned int size,
+					 unsigned long jiffies_time_out,
+					 bool wait,
+					 unsigned int cnt)
+{
+	while (cnt--)
+		blk_throtl_get_quota(bdev, PAGE_SIZE,
+				     jiffies_time_out,
+				     wait);
+}
+#else
+static inline bool blk_throtl_get_quota(struct block_device *bdev,
+					unsigned int size,
+					unsigned long jiffies_time_out,
+					bool wait)
+{
+	return true;
+}
+static inline void blk_throtl_get_quotas(struct block_device *bdev,
+					 unsigned int size,
+					 unsigned long jiffies_time_out,
+					 bool wait,
+					 unsigned int cnt)
+{
+}
+#endif
+#ifdef CONFIG_BLK_WBT
+int wbt_max_bio_blocks(struct block_device *bdev, unsigned int opf, int max,
+		       bool *nomerge);
+bool wbt_need_kick_bio(struct bio *bio);
+bool wbt_fs_get_quota(struct request_queue *q, struct writeback_control *wbc);
+void wbt_fs_wait(struct request_queue *q, struct writeback_control *wbc);
+#else
+static inline bool wbt_need_kick_bio(struct bio *bio)
+{
+	return false;
+}
+static inline int wbt_max_bio_blocks(struct block_device *bdev,
+				     unsigned int opf,
+				     int max, bool *nomerge)
+{
+	return max;
+}
+#endif
 extern int set_blocksize(struct block_device *, int);
 extern int sb_set_blocksize(struct super_block *, int);
 extern int sb_min_blocksize(struct super_block *, int);
@@ -2969,6 +3079,7 @@ extern loff_t no_seek_end_llseek_size(struct file *, loff_t, int, loff_t);
 extern loff_t no_seek_end_llseek(struct file *, loff_t, int);
 extern int generic_file_open(struct inode * inode, struct file * filp);
 extern int nonseekable_open(struct inode * inode, struct file * filp);
+extern int stream_open(struct inode * inode, struct file * filp);
 
 #ifdef CONFIG_BLOCK
 typedef void (dio_submit_t)(struct bio *bio, struct inode *inode,
@@ -3168,6 +3279,18 @@ extern int __generic_file_fsync(struct file *, loff_t, loff_t, int);
 extern int generic_file_fsync(struct file *, loff_t, loff_t, int);
 
 extern int generic_check_addressable(unsigned, u64);
+
+#ifdef CONFIG_UNICODE
+extern int generic_ci_d_hash(const struct dentry *dentry, struct qstr *str);
+extern int generic_ci_d_compare(const struct dentry *dentry, unsigned int len,
+				const char *str, const struct qstr *name);
+extern bool needs_casefold(const struct inode *dir);
+#else
+static inline bool needs_casefold(const struct inode *dir)
+{
+	return 0;
+}
+#endif
 
 #ifdef CONFIG_MIGRATION
 extern int buffer_migrate_page(struct address_space *,

@@ -8,7 +8,11 @@
 obj-$(CONFIG_USB)		+= core/
 obj-$(CONFIG_USB_SUPPORT)	+= phy/
 
+obj-$(CONFIG_USB_PROXY_HCD)	+= proxy-hcd/
+obj-$(CONFIG_USB_HIUSBC)	+= hiusbc/
+obj-y				+= hisi-usb/
 obj-$(CONFIG_USB_DWC3)		+= dwc3/
+obj-$(CONFIG_USB_VBUS_SPMI)	+= hisi-usb-vbus/
 obj-$(CONFIG_USB_DWC2)		+= dwc2/
 obj-$(CONFIG_USB_ISP1760)	+= isp1760/
 

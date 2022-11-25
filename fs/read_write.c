@@ -20,6 +20,8 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
+#include <linux/fscrypt_common.h>
+#include <chipset_common/security/kshield.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -442,6 +444,11 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 
 	ret = rw_verify_area(READ, file, pos, count);
 	if (!ret) {
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		ret = rw_begin(file);
+		if (ret)
+			return ret;
+#endif
 		if (count > MAX_RW_COUNT)
 			count =  MAX_RW_COUNT;
 		ret = __vfs_read(file, buf, count, pos);
@@ -450,6 +457,9 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 			add_rchar(current, ret);
 		}
 		inc_syscr(current);
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		rw_finish(READ, file);
+#endif
 	}
 
 	return ret;
@@ -540,6 +550,11 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 
 	ret = rw_verify_area(WRITE, file, pos, count);
 	if (!ret) {
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		ret = rw_begin(file);
+		if (ret)
+			return ret;
+#endif
 		if (count > MAX_RW_COUNT)
 			count =  MAX_RW_COUNT;
 		file_start_write(file);
@@ -550,6 +565,9 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		}
 		inc_syscw(current);
 		file_end_write(file);
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		rw_finish(WRITE, file);
+#endif
 	}
 
 	return ret;
@@ -559,12 +577,13 @@ EXPORT_SYMBOL(vfs_write);
 
 static inline loff_t file_pos_read(struct file *file)
 {
-	return file->f_pos;
+	return file->f_mode & FMODE_STREAM ? 0 : file->f_pos;
 }
 
 static inline void file_pos_write(struct file *file, loff_t pos)
 {
-	file->f_pos = pos;
+	if ((file->f_mode & FMODE_STREAM) == 0)
+		file->f_pos = pos;
 }
 
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
@@ -915,6 +934,11 @@ static ssize_t do_iter_read(struct file *file, struct iov_iter *iter,
 	ret = rw_verify_area(READ, file, pos, tot_len);
 	if (ret < 0)
 		return ret;
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	ret = rw_begin(file);
+	if (ret)
+		return ret;
+#endif
 
 	if (file->f_op->read_iter)
 		ret = do_iter_readv_writev(file, iter, pos, READ, flags);
@@ -923,6 +947,10 @@ static ssize_t do_iter_read(struct file *file, struct iov_iter *iter,
 out:
 	if (ret >= 0)
 		fsnotify_access(file);
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	rw_finish(READ, file);
+#endif
 	return ret;
 }
 
@@ -952,6 +980,11 @@ static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
 	ret = rw_verify_area(WRITE, file, pos, tot_len);
 	if (ret < 0)
 		return ret;
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	ret = rw_begin(file);
+	if (ret)
+		return ret;
+#endif
 
 	if (file->f_op->write_iter)
 		ret = do_iter_readv_writev(file, iter, pos, WRITE, flags);
@@ -959,6 +992,10 @@ static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
 		ret = do_loop_readv_writev(file, iter, pos, WRITE, flags);
 	if (ret > 0)
 		fsnotify_modify(file);
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	rw_finish(WRITE, file);
+#endif
 	return ret;
 }
 
@@ -979,6 +1016,9 @@ ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
 	struct iov_iter iter;
 	ssize_t ret;
 
+	if (vlen > UIO_FASTIOV && vlen < UIO_MAXIOV)
+		kshield_chk_heap_spray(1);
+
 	ret = import_iovec(READ, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
 	if (ret >= 0) {
 		ret = do_iter_read(file, &iter, pos, flags);
@@ -988,13 +1028,16 @@ ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
 	return ret;
 }
 
-static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
+ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
 		   unsigned long vlen, loff_t *pos, rwf_t flags)
 {
 	struct iovec iovstack[UIO_FASTIOV];
 	struct iovec *iov = iovstack;
 	struct iov_iter iter;
 	ssize_t ret;
+
+	if (vlen > UIO_FASTIOV && vlen < UIO_MAXIOV)
+		kshield_chk_heap_spray(1);
 
 	ret = import_iovec(WRITE, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
 	if (ret >= 0) {
@@ -1160,6 +1203,9 @@ static size_t compat_readv(struct file *file,
 	struct iov_iter iter;
 	ssize_t ret;
 
+	if (vlen > UIO_FASTIOV && vlen < UIO_MAXIOV)
+		kshield_chk_heap_spray(1);
+
 	ret = compat_import_iovec(READ, vec, vlen, UIO_FASTIOV, &iov, &iter);
 	if (ret >= 0) {
 		ret = do_iter_read(file, &iter, pos, flags);
@@ -1267,6 +1313,9 @@ static size_t compat_writev(struct file *file,
 	struct iovec *iov = iovstack;
 	struct iov_iter iter;
 	ssize_t ret;
+
+	if (vlen > UIO_FASTIOV && vlen < UIO_MAXIOV)
+		kshield_chk_heap_spray(1);
 
 	ret = compat_import_iovec(WRITE, vec, vlen, UIO_FASTIOV, &iov, &iter);
 	if (ret >= 0) {
@@ -1401,16 +1450,28 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 		goto fput_in;
 	if (count > MAX_RW_COUNT)
 		count =  MAX_RW_COUNT;
-
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	retval = rw_begin(in.file);
+	if (retval < 0)
+		goto fput_in;
+#endif
 	/*
 	 * Get output file, and verify that it is ok..
 	 */
 	retval = -EBADF;
 	out = fdget(out_fd);
-	if (!out.file)
+	if (!out.file) {
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		rw_finish(READ, in.file);
+#endif
 		goto fput_in;
-	if (!(out.file->f_mode & FMODE_WRITE))
+	}
+	if (!(out.file->f_mode & FMODE_WRITE)) {
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+		rw_finish(READ, in.file);
+#endif
 		goto fput_out;
+	}
 	retval = -EINVAL;
 	in_inode = file_inode(in.file);
 	out_inode = file_inode(out.file);
@@ -1418,14 +1479,24 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	retval = rw_verify_area(WRITE, out.file, &out_pos, count);
 	if (retval < 0)
 		goto fput_out;
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	retval = rw_begin(out.file);
+	if (retval)
+		goto fput_out;
+#endif
 
 	if (!max)
 		max = min(in_inode->i_sb->s_maxbytes, out_inode->i_sb->s_maxbytes);
 
 	if (unlikely(pos + count > max)) {
 		retval = -EOVERFLOW;
-		if (pos >= max)
+		if (pos >= max) {
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+			rw_finish(READ, in.file);
+			rw_finish(WRITE, out.file);
+#endif
 			goto fput_out;
+		}
 		count = max - pos;
 	}
 
@@ -1460,6 +1531,11 @@ static ssize_t do_sendfile(int out_fd, int in_fd, loff_t *ppos,
 	inc_syscw(current);
 	if (pos > max)
 		retval = -EOVERFLOW;
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	rw_finish(READ, in.file);
+	rw_finish(WRITE, out.file);
+#endif
 
 fput_out:
 	fdput(out);
@@ -1586,6 +1662,15 @@ ssize_t vfs_copy_file_range(struct file *file_in, loff_t pos_in,
 	if (len == 0)
 		return 0;
 
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	ret = rw_begin(file_in);
+	if (ret)
+		return ret;
+	ret = rw_begin(file_out);
+	if (ret)
+		return ret;
+#endif
+
 	file_start_write(file_out);
 
 	/*
@@ -1623,6 +1708,11 @@ done:
 	inc_syscw(current);
 
 	file_end_write(file_out);
+
+#ifdef CONFIG_SCSI_UFS_ENHANCED_INLINE_CRYPTO_V3
+	rw_finish(READ, file_in);
+	rw_finish(WRITE, file_out);
+#endif
 
 	return ret;
 }
@@ -1711,6 +1801,34 @@ static int clone_verify_area(struct file *file, loff_t pos, u64 len, bool write)
 	}
 
 	return security_file_permission(file, write ? MAY_WRITE : MAY_READ);
+}
+/*
+ * Ensure that we don't remap a partial EOF block in the middle of something
+ * else.  Assume that the offsets have already been checked for block
+ * alignment.
+ *
+ * For deduplication we always scale down to the previous block because we
+ * can't meaningfully compare post-EOF contents.
+ *
+ * For clone we only link a partial EOF block above the destination file's EOF.
+ */
+static int generic_remap_check_len(struct inode *inode_in,
+				   struct inode *inode_out,
+				   loff_t pos_out,
+				   u64 *len,
+				   bool is_dedupe)
+{
+	u64 blkmask = i_blocksize(inode_in) - 1;
+
+	if ((*len & blkmask) == 0)
+		return 0;
+
+	if (is_dedupe)
+		*len &= ~blkmask;
+	else if (pos_out + *len < i_size_read(inode_out))
+		return -EINVAL;
+
+	return 0;
 }
 
 /*
@@ -1818,6 +1936,11 @@ int vfs_clone_file_prep_inodes(struct inode *inode_in, loff_t pos_in,
 			return -EBADE;
 	}
 
+	ret = generic_remap_check_len(inode_in, inode_out, pos_out, len,
+			is_dedupe);
+	if (ret)
+		return ret;
+
 	return 1;
 }
 EXPORT_SYMBOL(vfs_clone_file_prep_inodes);
@@ -1885,10 +2008,7 @@ int vfs_clone_file_range(struct file *file_in, loff_t pos_in,
 }
 EXPORT_SYMBOL(vfs_clone_file_range);
 
-/*
- * Read a page's worth of file data into the page cache.  Return the page
- * locked.
- */
+/* Read a page's worth of file data into the page cache. */
 static struct page *vfs_dedupe_get_page(struct inode *inode, loff_t offset)
 {
 	struct address_space *mapping;
@@ -1904,8 +2024,30 @@ static struct page *vfs_dedupe_get_page(struct inode *inode, loff_t offset)
 		put_page(page);
 		return ERR_PTR(-EIO);
 	}
-	lock_page(page);
 	return page;
+}
+
+/*
+ * Lock two pages, ensuring that we lock in offset order if the pages are from
+ * the same file.
+ */
+static void vfs_lock_two_pages(struct page *page1, struct page *page2)
+{
+	/* Always lock in order of increasing index. */
+	if (page1->index > page2->index)
+		swap(page1, page2);
+
+	lock_page(page1);
+	if (page1 != page2)
+		lock_page(page2);
+}
+
+/* Unlock two pages, being careful not to unlock the same page twice. */
+static void vfs_unlock_two_pages(struct page *page1, struct page *page2)
+{
+	unlock_page(page1);
+	if (page1 != page2)
+		unlock_page(page2);
 }
 
 /*
@@ -1945,10 +2087,24 @@ int vfs_dedupe_file_range_compare(struct inode *src, loff_t srcoff,
 		dest_page = vfs_dedupe_get_page(dest, destoff);
 		if (IS_ERR(dest_page)) {
 			error = PTR_ERR(dest_page);
-			unlock_page(src_page);
 			put_page(src_page);
 			goto out_error;
 		}
+
+		vfs_lock_two_pages(src_page, dest_page);
+
+		/*
+		 * Now that we've locked both pages, make sure they're still
+		 * mapped to the file data we're interested in.  If not,
+		 * someone is invalidating pages on us and we lose.
+		 */
+		if (!PageUptodate(src_page) || !PageUptodate(dest_page) ||
+		    src_page->mapping != src->i_mapping ||
+		    dest_page->mapping != dest->i_mapping) {
+			same = false;
+			goto unlock;
+		}
+
 		src_addr = kmap_atomic(src_page);
 		dest_addr = kmap_atomic(dest_page);
 
@@ -1960,8 +2116,8 @@ int vfs_dedupe_file_range_compare(struct inode *src, loff_t srcoff,
 
 		kunmap_atomic(dest_addr);
 		kunmap_atomic(src_addr);
-		unlock_page(dest_page);
-		unlock_page(src_page);
+unlock:
+		vfs_unlock_two_pages(src_page, dest_page);
 		put_page(dest_page);
 		put_page(src_page);
 

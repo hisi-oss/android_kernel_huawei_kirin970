@@ -66,9 +66,17 @@ struct blk_mq_hw_ctx {
 	struct srcu_struct	queue_rq_srcu[0];
 };
 
+#ifdef CONFIG_MAS_BLK
+struct blk_tagset_ops;
+#endif
 struct blk_mq_tag_set {
-	unsigned int		*mq_map;
+	unsigned int		*mq_map; /* map cpu to hw queue */
 	const struct blk_mq_ops	*ops;
+#ifdef CONFIG_MAS_BLK
+	struct blk_dev_lld lld_func;
+	struct blk_tagset_ops *mas_tagset_ops;
+	unsigned int 		high_prio_tags;
+#endif
 	unsigned int		nr_hw_queues;
 	unsigned int		queue_depth;	/* max hw supported */
 	unsigned int		reserved_tags;

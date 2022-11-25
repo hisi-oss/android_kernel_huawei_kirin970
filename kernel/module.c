@@ -65,13 +65,22 @@
 #include <linux/dynamic_debug.h>
 #include <linux/audit.h>
 #include <uapi/linux/module.h>
+#include <linux/hisi/cfi_harden.h>
 #include "module-internal.h"
+#ifdef CONFIG_MODULE_SIG
+#include <chipset_common/security/saudit.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/module.h>
 
 #ifndef ARCH_SHF_SMALL
 #define ARCH_SHF_SMALL 0
+#endif
+
+#ifdef CONFIG_HHEE
+#include <linux/hisi/hkip_hhee.h>
+static unsigned long clarify_token;
 #endif
 
 /*
@@ -97,6 +106,8 @@
 DEFINE_MUTEX(module_mutex);
 EXPORT_SYMBOL_GPL(module_mutex);
 static LIST_HEAD(modules);
+DEFINE_MUTEX(klp_mutex);
+EXPORT_SYMBOL_GPL(klp_mutex);
 
 #ifdef CONFIG_MODULES_TREE_LOOKUP
 
@@ -610,6 +621,27 @@ static struct module *find_module_all(const char *name, size_t len,
 	return NULL;
 }
 
+/*
+ * Search for module by name:,only get module info
+ * Notice:this interface use in safety, and this module not in unsmod processing
+ */
+struct module *find_hisi_module(const char *name, size_t len)
+{
+	struct module *mod = NULL;
+
+	if (!name) {
+		pr_warn("[%s]:module name is null\n", __func__);
+		return NULL;
+	}
+
+	list_for_each_entry_rcu(mod, &modules, list) {
+		pr_warn("%s: mod->name = %s\n", __func__, mod->name);
+		if (strlen(mod->name) == len && !memcmp(mod->name, name, len))
+			return mod;
+	}
+	return NULL;
+}
+
 struct module *find_module(const char *name)
 {
 	module_assert_mutex();
@@ -1011,7 +1043,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		mod->exit();
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
-	klp_module_going(mod);
+//	klp_module_going(mod);
 	ftrace_release_mod(mod);
 
 	async_synchronize_full();
@@ -1695,6 +1727,8 @@ static int add_usage_links(struct module *mod)
 	return ret;
 }
 
+static void module_remove_modinfo_attrs(struct module *mod, int end);
+
 static int module_add_modinfo_attrs(struct module *mod)
 {
 	struct module_attribute *attr;
@@ -1709,24 +1743,34 @@ static int module_add_modinfo_attrs(struct module *mod)
 		return -ENOMEM;
 
 	temp_attr = mod->modinfo_attrs;
-	for (i = 0; (attr = modinfo_attrs[i]) && !error; i++) {
+	for (i = 0; (attr = modinfo_attrs[i]); i++) {
 		if (!attr->test || attr->test(mod)) {
 			memcpy(temp_attr, attr, sizeof(*temp_attr));
 			sysfs_attr_init(&temp_attr->attr);
 			error = sysfs_create_file(&mod->mkobj.kobj,
 					&temp_attr->attr);
+			if (error)
+				goto error_out;
 			++temp_attr;
 		}
 	}
+
+	return 0;
+
+error_out:
+	if (i > 0)
+		module_remove_modinfo_attrs(mod, --i);
 	return error;
 }
 
-static void module_remove_modinfo_attrs(struct module *mod)
+static void module_remove_modinfo_attrs(struct module *mod, int end)
 {
 	struct module_attribute *attr;
 	int i;
 
 	for (i = 0; (attr = &mod->modinfo_attrs[i]); i++) {
+		if (end >= 0 && i > end)
+			break;
 		/* pick a field to test for end of list */
 		if (!attr->attr.name)
 			break;
@@ -1814,7 +1858,7 @@ static int mod_sysfs_setup(struct module *mod,
 	return 0;
 
 out_unreg_modinfo_attrs:
-	module_remove_modinfo_attrs(mod);
+	module_remove_modinfo_attrs(mod, -1);
 out_unreg_param:
 	module_param_sysfs_remove(mod);
 out_unreg_holders:
@@ -1850,7 +1894,7 @@ static void mod_sysfs_fini(struct module *mod)
 {
 }
 
-static void module_remove_modinfo_attrs(struct module *mod)
+static void module_remove_modinfo_attrs(struct module *mod, int end)
 {
 }
 
@@ -1866,7 +1910,7 @@ static void init_param_lock(struct module *mod)
 static void mod_sysfs_teardown(struct module *mod)
 {
 	del_usage_links(mod);
-	module_remove_modinfo_attrs(mod);
+	module_remove_modinfo_attrs(mod, -1);
 	module_param_sysfs_remove(mod);
 	kobject_put(mod->mkobj.drivers_dir);
 	kobject_put(mod->holders_dir);
@@ -1939,6 +1983,24 @@ void module_disable_ro(const struct module *mod)
 	frob_rodata(&mod->init_layout, set_memory_rw);
 }
 
+static inline void hhee_lkm_update(const struct module_layout *layout)
+{
+#ifdef CONFIG_HHEE
+	struct arm_smccc_res res;
+
+	if (hhee_check_enable() != HHEE_ENABLE)
+		return;
+	arm_smccc_hvc(HHEE_LKM_UPDATE, (unsigned long)layout->base,
+			layout->text_size, clarify_token, 0, 0, 0, 0, &res);
+
+	if (res.a0)
+		pr_err("service from hhee failed test.\n");
+
+#else
+	(void *)layout;
+#endif
+}
+
 void module_enable_ro(const struct module *mod, bool after_init)
 {
 	if (!rodata_enabled)
@@ -1951,6 +2013,13 @@ void module_enable_ro(const struct module *mod, bool after_init)
 
 	if (after_init)
 		frob_ro_after_init(&mod->core_layout, set_memory_ro);
+
+	/*
+	 * Note: make sure this is the last time
+	 * u change the page table to x or RO.
+	 */
+	hhee_lkm_update(&mod->init_layout);
+	hhee_lkm_update(&mod->core_layout);
 }
 
 static void module_enable_nx(const struct module *mod)
@@ -2770,6 +2839,8 @@ static int module_sig_check(struct load_info *info, int flags)
 	int err = -ENOKEY;
 	const unsigned long markerlen = sizeof(MODULE_SIG_STRING) - 1;
 	const void *mod = info->hdr;
+	struct stp_item item;
+	(void)memset(&item, 0, sizeof(item));
 
 	/*
 	 * Require flags == 0, as a module with version information
@@ -2787,6 +2858,8 @@ static int module_sig_check(struct load_info *info, int flags)
 		info->sig_ok = true;
 		return 0;
 	}
+
+	saudit_log(MOD_SIGN, STP_RISK, 0, "result=%d,", err);
 
 	/* Not having a signature is only an error if we're strict. */
 	if (err == -ENOKEY && !sig_enforce)
@@ -3402,8 +3475,7 @@ static bool finished_loading(const char *name)
 	sched_annotate_sleep();
 	mutex_lock(&module_mutex);
 	mod = find_module_all(name, strlen(name), true);
-	ret = !mod || mod->state == MODULE_STATE_LIVE
-		|| mod->state == MODULE_STATE_GOING;
+	ret = !mod || mod->state == MODULE_STATE_LIVE;
 	mutex_unlock(&module_mutex);
 
 	return ret;
@@ -3540,7 +3612,6 @@ fail:
 	module_put(mod);
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
-	klp_module_going(mod);
 	ftrace_release_mod(mod);
 	free_module(mod);
 	wake_up_all(&module_wq);
@@ -3571,8 +3642,7 @@ again:
 	mutex_lock(&module_mutex);
 	old = find_module_all(mod->name, strlen(mod->name), true);
 	if (old != NULL) {
-		if (old->state == MODULE_STATE_COMING
-		    || old->state == MODULE_STATE_UNFORMED) {
+		if (old->state != MODULE_STATE_LIVE) {
 			/* Wait in case it fails to load. */
 			mutex_unlock(&module_mutex);
 			err = wait_event_interruptible(module_wq,
@@ -3626,15 +3696,7 @@ out:
 
 static int prepare_coming_module(struct module *mod)
 {
-	int err;
-
 	ftrace_module_enable(mod);
-	err = klp_module_coming(mod);
-	if (err)
-		return err;
-
-	blocking_notifier_call_chain(&module_notify_list,
-				     MODULE_STATE_COMING, mod);
 	return 0;
 }
 
@@ -3721,21 +3783,26 @@ static int load_module(struct load_info *info, const char __user *uargs,
 
 	/* Set up MODINFO_ATTR fields */
 	setup_modinfo(mod, info);
-
+	mutex_lock(&klp_mutex);
 	/* Fix up syms, so that st_value is a pointer to location. */
 	err = simplify_symbols(mod, info);
-	if (err < 0)
+	if (err < 0) {
+		mutex_unlock(&klp_mutex);
 		goto free_modinfo;
+	}
 
 	err = apply_relocations(mod, info);
-	if (err < 0)
+	if (err < 0) {
+		mutex_unlock(&klp_mutex);
 		goto free_modinfo;
-
+	}
 	err = post_relocation(mod, info);
-	if (err < 0)
+	if (err < 0) {
+		mutex_unlock(&klp_mutex);
 		goto free_modinfo;
-
+	}
 	flush_module_icache(mod);
+	mutex_unlock(&klp_mutex);
 
 	/* Now copy in args */
 	mod->args = strndup_user(uargs, ~0UL >> 1);
@@ -3781,13 +3848,13 @@ static int load_module(struct load_info *info, const char __user *uargs,
 			goto sysfs_cleanup;
 	}
 
-	/* Get rid of temporary copy. */
-	free_copy(info);
-
 	/* Done! */
 	trace_module_load(mod);
 
-	return do_init_module(mod);
+	err = do_init_module(mod);
+	/* Get rid of temporary copy. */
+	free_copy(info);
+	return err;
 
  sysfs_cleanup:
 	mod_sysfs_teardown(mod);
@@ -3796,7 +3863,6 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	destroy_params(mod->kp, mod->num_kp);
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
-	klp_module_going(mod);
  bug_cleanup:
 	/* module_bug_cleanup needs module_mutex protection */
 	mutex_lock(&module_mutex);
@@ -4071,7 +4137,7 @@ static unsigned long mod_find_symname(struct module *mod, const char *name)
 
 	for (i = 0; i < kallsyms->num_symtab; i++)
 		if (strcmp(name, symname(kallsyms, i)) == 0 &&
-		    kallsyms->symtab[i].st_shndx != SHN_UNDEF)
+		    kallsyms->symtab[i].st_info != 'U')
 			return kallsyms->symtab[i].st_value;
 	return 0;
 }
@@ -4117,10 +4183,6 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 		if (mod->state == MODULE_STATE_UNFORMED)
 			continue;
 		for (i = 0; i < kallsyms->num_symtab; i++) {
-
-			if (kallsyms->symtab[i].st_shndx == SHN_UNDEF)
-				continue;
-
 			ret = fn(data, symname(kallsyms, i),
 				 mod, kallsyms->symtab[i].st_value);
 			if (ret != 0)
@@ -4134,8 +4196,7 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 static void cfi_init(struct module *mod)
 {
 #ifdef CONFIG_CFI_CLANG
-	mod->cfi_check =
-		(cfi_check_fn)mod_find_symname(mod, CFI_CHECK_FN_NAME);
+	cfi_harden_module_init(mod, mod_find_symname(mod, CFI_CHECK_FN_NAME));
 	cfi_module_add(mod, module_addr_min, module_addr_max);
 #endif
 }
@@ -4143,6 +4204,7 @@ static void cfi_init(struct module *mod)
 static void cfi_cleanup(struct module *mod)
 {
 #ifdef CONFIG_CFI_CLANG
+	cfi_harden_module_cleanup(mod);
 	cfi_module_remove(mod, module_addr_min, module_addr_max);
 #endif
 }
@@ -4251,6 +4313,21 @@ static int __init proc_modules_init(void)
 	return 0;
 }
 module_init(proc_modules_init);
+#endif
+
+#ifdef CONFIG_HHEE
+static int __init module_token_init(void)
+{
+	struct arm_smccc_res res;
+
+	if (hhee_check_enable() == HHEE_ENABLE) {
+		arm_smccc_hvc(HHEE_HVC_TOKEN, 0, 0,
+			0, 0, 0, 0, 0, &res);
+		clarify_token = res.a1;
+	}
+	return 0;
+}
+module_init(module_token_init);
 #endif
 
 /* Given an address, look for it in the module exception tables. */

@@ -151,6 +151,10 @@ bool cpus_are_stuck_in_kernel(void);
 extern void crash_smp_send_stop(void);
 extern bool smp_crash_stop_failed(void);
 
+#ifdef CONFIG_HISI_BB
+extern unsigned int g_cpu_in_ipi_stop;
+#endif
+
 #endif /* ifndef __ASSEMBLY__ */
 
 #endif /* ifndef __ASM_SMP_H */

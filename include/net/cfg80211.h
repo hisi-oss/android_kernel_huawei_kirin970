@@ -1149,7 +1149,11 @@ struct cfg80211_tid_stats {
  *	(IEEE80211_NUM_TIDS) index for MSDUs not encapsulated in QoS-MPDUs.
  */
 struct station_info {
+#ifdef CONFIG_HW_GET_EXT_SIG
 	u64 filled;
+#else
+	u32 filled;
+#endif
 	u32 connected_time;
 	u32 inactive_time;
 	u64 rx_bytes;
@@ -1191,7 +1195,39 @@ struct station_info {
 	u64 rx_duration;
 	u8 rx_beacon_signal_avg;
 	struct cfg80211_tid_stats pertid[IEEE80211_NUM_TIDS + 1];
+#ifdef CONFIG_HW_GET_EXT_SIG
+	s32 noise;
+	s32 snr;
+	s32 chload;
+#endif
+
+#ifdef CONFIG_HW_GET_EXT_SIG_ULDELAY
+	s32 ul_delay;
+#endif
 };
+
+#ifdef CONFIG_HW_NETWORK_QOE
+struct wifi_info {
+	char name[IFNAMSIZ];
+	u16 flag;
+	u32 rx_bytes;
+	u32 tx_bytes;
+	s8 rssi;
+	u32 txrate;
+	u32 rxrate;
+	u32 rx_packets;
+	u32 tx_packets;
+	u32 tx_failed;
+#ifdef CONFIG_HW_GET_EXT_SIG
+	s32 noise;
+	s32 snr;
+	s32 chload;
+#endif
+#ifdef CONFIG_HW_GET_EXT_SIG_ULDELAY
+	s32 ul_delay;
+#endif
+};
+#endif
 
 #if IS_ENABLED(CONFIG_CFG80211)
 /**
@@ -1897,11 +1933,16 @@ struct cfg80211_auth_request {
  * @ASSOC_REQ_DISABLE_HT:  Disable HT (802.11n)
  * @ASSOC_REQ_DISABLE_VHT:  Disable VHT
  * @ASSOC_REQ_USE_RRM: Declare RRM capability in this association
+ * @CONNECT_REQ_EXTERNAL_AUTH_SUPPORT: User space indicates external
+ *	authentication capability. Drivers can offload authentication to
+ *	userspace if this flag is set. Only applicable for cfg80211_connect()
+ *	request (connect callback).
  */
 enum cfg80211_assoc_req_flags {
-	ASSOC_REQ_DISABLE_HT		= BIT(0),
-	ASSOC_REQ_DISABLE_VHT		= BIT(1),
-	ASSOC_REQ_USE_RRM		= BIT(2),
+	ASSOC_REQ_DISABLE_HT			= BIT(0),
+	ASSOC_REQ_DISABLE_VHT			= BIT(1),
+	ASSOC_REQ_USE_RRM			= BIT(2),
+	CONNECT_REQ_EXTERNAL_AUTH_SUPPORT	= BIT(3),
 };
 
 /**
@@ -2588,6 +2629,33 @@ struct cfg80211_pmk_conf {
 };
 
 /**
+ * struct cfg80211_external_auth_params - Trigger External authentication.
+ *
+ * Commonly used across the external auth request and event interfaces.
+ *
+ * @action: action type / trigger for external authentication. Only significant
+ *	for the authentication request event interface (driver to user space).
+ * @bssid: BSSID of the peer with which the authentication has
+ *	to happen. Used by both the authentication request event and
+ *	authentication response command interface.
+ * @ssid: SSID of the AP.  Used by both the authentication request event and
+ *	authentication response command interface.
+ * @key_mgmt_suite: AKM suite of the respective authentication. Used by the
+ *	authentication request event interface.
+ * @status: status code, %WLAN_STATUS_SUCCESS for successful authentication,
+ *	use %WLAN_STATUS_UNSPECIFIED_FAILURE if user space cannot give you
+ *	the real status code for failures. Used only for the authentication
+ *	response command interface (user space to driver).
+ */
+struct cfg80211_external_auth_params {
+	enum nl80211_external_auth_action action;
+	u8 bssid[ETH_ALEN] __aligned(2);
+	struct cfg80211_ssid ssid;
+	unsigned int key_mgmt_suite;
+	u16 status;
+};
+
+/**
  * struct cfg80211_ops - backend description for wireless configuration
  *
  * This struct is registered by fullmac card drivers and/or wireless stacks
@@ -2843,6 +2911,9 @@ struct cfg80211_pmk_conf {
  *
  * @start_radar_detection: Start radar detection in the driver.
  *
+ * @end_cac: End running CAC, probably because a related CAC
+ *	was finished on another phy.
+ *
  * @update_ft_ies: Provide updated Fast BSS Transition information to the
  *	driver. If the SME is in the driver/firmware, this information can be
  *	used in building Authentication and Reassociation Request frames.
@@ -2910,6 +2981,9 @@ struct cfg80211_pmk_conf {
  *	(invoked with the wireless_dev mutex held)
  * @del_pmk: delete the previously configured PMK for the given authenticator.
  *	(invoked with the wireless_dev mutex held)
+ *
+ * @external_auth: indicates result of offloaded authentication processing from
+ *     user space
  */
 struct cfg80211_ops {
 	int	(*suspend)(struct wiphy *wiphy, struct cfg80211_wowlan *wow);
@@ -3140,6 +3214,10 @@ struct cfg80211_ops {
 				    struct wireless_dev *wdev);
 	void	(*stop_p2p_device)(struct wiphy *wiphy,
 				   struct wireless_dev *wdev);
+#ifdef CONFIG_HW_GET_P2P_TX_RATE
+	int	(*get_p2p_tx_rate)(struct wiphy *wiphy, struct net_device *dev,
+			       struct station_info *sinfo);
+#endif /* CONFIG_HW_GET_P2P_TX_RATE */
 
 	int	(*set_mac_acl)(struct wiphy *wiphy, struct net_device *dev,
 			       const struct cfg80211_acl_data *params);
@@ -3148,6 +3226,8 @@ struct cfg80211_ops {
 					 struct net_device *dev,
 					 struct cfg80211_chan_def *chandef,
 					 u32 cac_time_ms);
+	void	(*end_cac)(struct wiphy *wiphy,
+				struct net_device *dev);
 	int	(*update_ft_ies)(struct wiphy *wiphy, struct net_device *dev,
 				 struct cfg80211_update_ft_ies_params *ftie);
 	int	(*crit_proto_start)(struct wiphy *wiphy,
@@ -3203,6 +3283,8 @@ struct cfg80211_ops {
 			   const struct cfg80211_pmk_conf *conf);
 	int	(*del_pmk)(struct wiphy *wiphy, struct net_device *dev,
 			   const u8 *aa);
+	int     (*external_auth)(struct wiphy *wiphy, struct net_device *dev,
+				 struct cfg80211_external_auth_params *params);
 };
 
 /*
@@ -3262,6 +3344,7 @@ enum wiphy_flags {
 	WIPHY_FLAG_4ADDR_STATION		= BIT(6),
 	WIPHY_FLAG_CONTROL_PORT_PROTOCOL	= BIT(7),
 	WIPHY_FLAG_IBSS_RSN			= BIT(8),
+	WIPHY_FLAG_SUPPORTS_DFS_OFFLOAD		= BIT(9),
 	WIPHY_FLAG_MESH_AUTH			= BIT(10),
 	/* use hole at 11 */
 	/* use hole at 12 */
@@ -4480,6 +4563,17 @@ const u8 *cfg80211_find_vendor_ie(unsigned int oui, int oui_type,
 				  const u8 *ies, int len);
 
 /**
+ * cfg80211_send_layer2_update - send layer 2 update frame
+ *
+ * @dev: network device
+ * @addr: STA MAC address
+ *
+ * Wireless drivers can use this function to update forwarding tables in bridge
+ * devices upon STA association.
+ */
+void cfg80211_send_layer2_update(struct net_device *dev, const u8 *addr);
+
+/**
  * DOC: Regulatory enforcement infrastructure
  *
  * TODO
@@ -5495,6 +5589,27 @@ void cfg80211_roamed(struct net_device *dev, struct cfg80211_roam_info *info,
 void cfg80211_disconnected(struct net_device *dev, u16 reason,
 			   const u8 *ie, size_t ie_len,
 			   bool locally_generated, gfp_t gfp);
+#ifdef CONFIG_HW_VOWIFI
+/**
+ * cfg80211_drv_vowifi - notification of vowifi event
+ *
+ * @dev: network device
+ * @gfp: allocation flags
+ *
+ */
+void cfg80211_drv_vowifi(struct net_device *dev, gfp_t gfp);
+#endif
+
+#ifdef CONFIG_HW_ABS
+/**
+ * cfg80211_drv_ant - notification of ant event
+ *
+ * @dev: network device
+ * @gfp: allocation flags
+ *
+ */
+void cfg80211_drv_ant(struct net_device *dev, gfp_t gfp);
+#endif
 
 /**
  * cfg80211_ready_on_channel - notification of remain_on_channel start
@@ -6187,6 +6302,17 @@ void cfg80211_nan_func_terminated(struct wireless_dev *wdev,
 
 /* ethtool helper */
 void cfg80211_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info);
+
+/**
+ * cfg80211_external_auth_request - userspace request for authentication
+ * @netdev: network device
+ * @params: External authentication parameters
+ * @gfp: allocation flags
+ * Returns: 0 on success, < 0 on error
+ */
+int cfg80211_external_auth_request(struct net_device *netdev,
+				   struct cfg80211_external_auth_params *params,
+				   gfp_t gfp);
 
 /* Logging, debugging and troubleshooting/diagnostic helpers. */
 

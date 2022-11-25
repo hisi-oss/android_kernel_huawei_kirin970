@@ -552,11 +552,8 @@ static int i2s_set_sysclk(struct snd_soc_dai *dai,
 			}
 
 			ret = clk_prepare_enable(i2s->op_clk);
-			if (ret) {
-				clk_put(i2s->op_clk);
-				i2s->op_clk = NULL;
+			if (ret)
 				goto err;
-			}
 			i2s->rclk_srcrate = clk_get_rate(i2s->op_clk);
 
 			/* Over-ride the other's */

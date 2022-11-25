@@ -1084,7 +1084,7 @@ static void throttlectl_cpu_level_cfg(struct tegra_soctherm *ts, int level)
  * function programs the pulse skippers based on @throt and platform
  * data.  This function is used on SoCs which have CPU-local pulse
  * skipper control, such as T13x. It programs soctherm's interface to
- * Denver:CCROC NV_THERM in terms of Low, Medium and HIGH throttling
+ * Pisces:CCROC NV_THERM in terms of Low, Medium and HIGH throttling
  * vectors. PSKIP_BYPASS mode is set as required per HW spec.
  */
 static void throttlectl_cpu_level_select(struct tegra_soctherm *ts,
@@ -1092,7 +1092,7 @@ static void throttlectl_cpu_level_select(struct tegra_soctherm *ts,
 {
 	u32 r, throt_vect;
 
-	/* Denver:CCROC NV_THERM interface N:3 Mapping */
+	/* Pisces:CCROC NV_THERM interface N:3 Mapping */
 	switch (ts->throt_cfgs[throt].cpu_throt_level) {
 	case TEGRA_SOCTHERM_THROT_LEVEL_LOW:
 		throt_vect = THROT_VECT_LOW;

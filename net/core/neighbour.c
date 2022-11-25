@@ -1017,6 +1017,7 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 
 			atomic_set(&neigh->probes,
 				   NEIGH_VAR(neigh->parms, UCAST_PROBES));
+			neigh_del_timer(neigh);
 			neigh->nud_state     = NUD_INCOMPLETE;
 			neigh->updated = now;
 			next = now + max(NEIGH_VAR(neigh->parms, RETRANS_TIME),
@@ -1033,6 +1034,7 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 		}
 	} else if (neigh->nud_state & NUD_STALE) {
 		neigh_dbg(2, "neigh %p is delayed\n", neigh);
+		neigh_del_timer(neigh);
 		neigh->nud_state = NUD_DELAY;
 		neigh->updated = jiffies;
 		neigh_add_timer(neigh, jiffies +
@@ -1086,7 +1088,7 @@ static void neigh_update_hhs(struct neighbour *neigh)
 
 	if (update) {
 		hh = &neigh->hh;
-		if (hh->hh_len) {
+		if (READ_ONCE(hh->hh_len)) {
 			write_seqlock_bh(&hh->hh_lock);
 			update(hh, neigh->dev, neigh->ha);
 			write_sequnlock_bh(&hh->hh_lock);
@@ -1347,7 +1349,7 @@ int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 		struct net_device *dev = neigh->dev;
 		unsigned int seq;
 
-		if (dev->header_ops->cache && !neigh->hh.hh_len)
+		if (dev->header_ops->cache && !READ_ONCE(neigh->hh.hh_len))
 			neigh_hh_init(neigh);
 
 		do {
@@ -1357,8 +1359,9 @@ int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 					      neigh->ha, NULL, skb->len);
 		} while (read_seqretry(&neigh->ha_lock, seq));
 
-		if (err >= 0)
+		if (err >= 0) {
 			rc = dev_queue_xmit(skb);
+		}
 		else
 			goto out_kfree_skb;
 	}
@@ -1869,8 +1872,8 @@ static int neightbl_fill_info(struct sk_buff *skb, struct neigh_table *tbl,
 		goto nla_put_failure;
 	{
 		unsigned long now = jiffies;
-		unsigned int flush_delta = now - tbl->last_flush;
-		unsigned int rand_delta = now - tbl->last_rand;
+		long flush_delta = now - tbl->last_flush;
+		long rand_delta = now - tbl->last_rand;
 		struct neigh_hash_table *nht;
 		struct ndt_config ndc = {
 			.ndtc_key_len		= tbl->key_len,
@@ -2419,6 +2422,46 @@ out:
 
 }
 
+static int is_wifi_gateway(u32 gateway, struct neighbour *n)
+{
+	u32 wlan_gateway;
+
+	if (n == NULL || gateway == 0)
+		return 0;
+	if (n->tbl->key_len != 4)
+		return 0;
+	wlan_gateway = *((u32 *)n->primary_key);
+	if (wlan_gateway == gateway)
+		return 1;
+	return 0;
+}
+
+u32 get_wifi_arp_state(const char *name, int name_size, u32 gateway)
+{
+	int h;
+	struct neigh_table *tbl = neigh_tables[NEIGH_ARP_TABLE];
+	struct neighbour *n = NULL;
+	struct neigh_hash_table *nht = NULL;
+
+	if (name == NULL || gateway == 0 || name_size == 0)
+		return 0;
+
+	rcu_read_lock_bh();
+	nht = rcu_dereference_bh(tbl->nht);
+	for (h = 0; h < (1 << nht->hash_shift); h++) {
+		for (n = rcu_dereference_bh(nht->hash_buckets[h]); n != NULL;
+			n = rcu_dereference_bh(n->next)) {
+			if (strcmp(n->dev->name, name) == 0 &&
+				is_wifi_gateway(gateway, n)) {
+				rcu_read_unlock_bh();
+				return (u32)n->nud_state;
+			}
+		}
+	}
+	rcu_read_unlock_bh();
+	return 0;
+}
+
 static int neigh_dump_info(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct neigh_table *tbl;
@@ -2736,6 +2779,7 @@ static void *neigh_get_idx_any(struct seq_file *seq, loff_t *pos)
 }
 
 void *neigh_seq_start(struct seq_file *seq, loff_t *pos, struct neigh_table *tbl, unsigned int neigh_seq_flags)
+	__acquires(tbl->lock)
 	__acquires(rcu_bh)
 {
 	struct neigh_seq_state *state = seq->private;
@@ -2746,6 +2790,7 @@ void *neigh_seq_start(struct seq_file *seq, loff_t *pos, struct neigh_table *tbl
 
 	rcu_read_lock_bh();
 	state->nht = rcu_dereference_bh(tbl->nht);
+	read_lock(&tbl->lock);
 
 	return *pos ? neigh_get_idx_any(seq, pos) : SEQ_START_TOKEN;
 }
@@ -2779,8 +2824,13 @@ out:
 EXPORT_SYMBOL(neigh_seq_next);
 
 void neigh_seq_stop(struct seq_file *seq, void *v)
+	__releases(tbl->lock)
 	__releases(rcu_bh)
 {
+	struct neigh_seq_state *state = seq->private;
+	struct neigh_table *tbl = state->tbl;
+
+	read_unlock(&tbl->lock);
 	rcu_read_unlock_bh();
 }
 EXPORT_SYMBOL(neigh_seq_stop);

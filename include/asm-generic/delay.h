@@ -11,6 +11,10 @@ extern void __ndelay(unsigned long nsecs);
 extern void __const_udelay(unsigned long xloops);
 extern void __delay(unsigned long loops);
 
+#ifdef CONFIG_ARCH_HISI
+extern void __hrdelay(unsigned long loops);
+extern void __hrudelay(unsigned long usecs);
+#endif
 /*
  * The weird n/20000 thing suppresses a "comparison is always false due to
  * limited range of data type" warning with non-const 8-bit arguments.

@@ -17,7 +17,7 @@ ssize_t fb_sys_read(struct fb_info *info, char __user *buf, size_t count,
 		    loff_t *ppos)
 {
 	unsigned long p = *ppos;
-	void *src;
+	void *src = NULL;
 	int err = 0;
 	unsigned long total_size;
 
@@ -57,7 +57,7 @@ ssize_t fb_sys_write(struct fb_info *info, const char __user *buf,
 		     size_t count, loff_t *ppos)
 {
 	unsigned long p = *ppos;
-	void *dst;
+	void *dst = NULL;
 	int err = 0;
 	unsigned long total_size;
 

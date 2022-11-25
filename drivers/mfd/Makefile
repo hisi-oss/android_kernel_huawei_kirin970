@@ -227,3 +227,15 @@ obj-$(CONFIG_MFD_SUN4I_GPADC)	+= sun4i-gpadc.o
 obj-$(CONFIG_MFD_STM32_LPTIMER)	+= stm32-lptimer.o
 obj-$(CONFIG_MFD_STM32_TIMERS) 	+= stm32-timers.o
 obj-$(CONFIG_MFD_MXS_LRADC)     += mxs-lradc.o
+
+obj-$(CONFIG_HISI_PMIC_PMU_I2C)+= hisi_pmic_i2c.o
+obj-$(CONFIG_HISI_PMIC_PMU_SPMI)+= hisi_pmic_spmi.o
+obj-$(CONFIG_HISI_PMIC_PMU_SPMI)+= hisi_pmic_sim_hpd.o
+obj-$(CONFIG_HISI_PMIC_DCXO) += pmic_dcxo/
+obj-$(CONFIG_HISI_PMIC_MNTN_SPMI)     += hisi_pmic_mntn/
+obj-$(CONFIG_HISI_PMIC_MNTN_SPMI)     += hisi_pmic_ramp.o
+obj-$(CONFIG_MFD_HISI_IP_CORE)	+= ip_core.o
+obj-$(CONFIG_HISI_FREQ_AUTODOWN)+= freq_autodown.o
+obj-$(CONFIG_HISI_CHARGER_POWER)+= hisi_charger_power.o
+obj-$(CONFIG_HISI_VBAT_DROP_PRT)     += hisi_vbat_drop_protect/
+obj-$(CONFIG_HISI_HI6562_PMIC_MIPI) += hisi_hi6562_pmic_mipi/

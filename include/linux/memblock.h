@@ -55,6 +55,17 @@ struct memblock {
 #endif
 };
 
+#ifdef CONFIG_HISI_LB_L3_EXTENSION
+#define MAX_LB_MEMBLK_SP	1
+struct lb_memory_block {
+	const char *name;
+	phys_addr_t base;
+	phys_addr_t size;
+};
+
+extern struct lb_memory_block lb_memblk_sp[MAX_LB_MEMBLK_SP];
+#endif
+
 extern struct memblock memblock;
 extern int memblock_debug;
 

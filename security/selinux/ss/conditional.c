@@ -195,7 +195,9 @@ int cond_index_bool(void *key, void *datum, void *datap)
 {
 	struct policydb *p;
 	struct cond_bool_datum *booldatum;
+#ifndef CONFIG_HKIP_SELINUX_PROT
 	struct flex_array *fa;
+#endif
 
 	booldatum = datum;
 	p = datap;
@@ -203,10 +205,14 @@ int cond_index_bool(void *key, void *datum, void *datap)
 	if (!booldatum->value || booldatum->value > p->p_bools.nprim)
 		return -EINVAL;
 
+#ifdef CONFIG_HKIP_SELINUX_PROT
+	p->sym_val_to_name[SYM_BOOLS][booldatum->value - 1] = key;
+#else
 	fa = p->sym_val_to_name[SYM_BOOLS];
 	if (flex_array_put_ptr(fa, booldatum->value - 1, key,
 			       GFP_KERNEL | __GFP_ZERO))
 		BUG();
+#endif
 	p->bool_val_to_struct[booldatum->value - 1] = booldatum;
 
 	return 0;

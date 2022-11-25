@@ -61,10 +61,18 @@ obj-$(CONFIG_ARC_PLAT_AXS10X)		+= axs10x/
 obj-y					+= bcm/
 obj-$(CONFIG_ARCH_BERLIN)		+= berlin/
 obj-$(CONFIG_H8300)			+= h8300/
-obj-$(CONFIG_ARCH_HISI)			+= hisilicon/
+ifeq ($(CONFIG_ARCH_HISI_CLK_EXTREME), y)
+obj-$(CONFIG_ARCH_HISI)		+= hisi_extreme/
+else
+obj-$(CONFIG_ARCH_HISI)		+= hisi/
+endif
+obj-$(CONFIG_ARCH_HI3xxx)      += hisilicon/
+obj-$(CONFIG_ARCH_HIP04)       += hisilicon/
+obj-$(CONFIG_ARCH_HIX5HD2)         += hisilicon/
 obj-y					+= imgtec/
 obj-$(CONFIG_ARCH_MXC)			+= imx/
 obj-$(CONFIG_MACH_INGENIC)		+= ingenic/
+obj-$(CONFIG_ARCH_K3)			+= keystone/
 obj-$(CONFIG_ARCH_KEYSTONE)		+= keystone/
 obj-$(CONFIG_MACH_LOONGSON32)		+= loongson1/
 obj-$(CONFIG_ARCH_MEDIATEK)		+= mediatek/

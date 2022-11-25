@@ -23,28 +23,12 @@
 
 #include "gpiolib.h"
 
-/**
- * struct acpi_gpio_event - ACPI GPIO event handler data
- *
- * @node:	  list-entry of the events list of the struct acpi_gpio_chip
- * @handle:	  handle of ACPI method to execute when the IRQ triggers
- * @handler:	  irq_handler to pass to request_irq when requesting the IRQ
- * @pin:	  GPIO pin number on the gpio_chip
- * @irq:	  Linux IRQ number for the event, for request_ / free_irq
- * @irqflags:     flags to pass to request_irq when requesting the IRQ
- * @irq_is_wake:  If the ACPI flags indicate the IRQ is a wakeup source
- * @is_requested: True if request_irq has been done
- * @desc:	  gpio_desc for the GPIO pin for this event
- */
 struct acpi_gpio_event {
 	struct list_head node;
+	struct list_head initial_sync_list;
 	acpi_handle handle;
-	irq_handler_t handler;
 	unsigned int pin;
 	unsigned int irq;
-	unsigned long irqflags;
-	bool irq_is_wake;
-	bool irq_requested;
 	struct gpio_desc *desc;
 };
 
@@ -65,19 +49,10 @@ struct acpi_gpio_chip {
 	struct mutex conn_lock;
 	struct gpio_chip *chip;
 	struct list_head events;
-	struct list_head deferred_req_irqs_list_entry;
 };
 
-/*
- * For gpiochips which call acpi_gpiochip_request_interrupts() before late_init
- * (so builtin drivers) we register the ACPI GpioInt IRQ handlers from a
- * late_initcall_sync handler, so that other builtin drivers can register their
- * OpRegions before the event handlers can run.  This list contains gpiochips
- * for which the acpi_gpiochip_request_irqs() call has been deferred.
- */
-static DEFINE_MUTEX(acpi_gpio_deferred_req_irqs_lock);
-static LIST_HEAD(acpi_gpio_deferred_req_irqs_list);
-static bool acpi_gpio_deferred_req_irqs_done;
+static LIST_HEAD(acpi_gpio_initial_sync_list);
+static DEFINE_MUTEX(acpi_gpio_initial_sync_list_lock);
 
 static int acpi_gpiochip_find(struct gpio_chip *gc, void *data)
 {
@@ -171,6 +146,21 @@ static struct gpio_desc *acpi_get_gpiod(char *path, int pin)
 	return gpiochip_get_desc(chip, offset);
 }
 
+static void acpi_gpio_add_to_initial_sync_list(struct acpi_gpio_event *event)
+{
+	mutex_lock(&acpi_gpio_initial_sync_list_lock);
+	list_add(&event->initial_sync_list, &acpi_gpio_initial_sync_list);
+	mutex_unlock(&acpi_gpio_initial_sync_list_lock);
+}
+
+static void acpi_gpio_del_from_initial_sync_list(struct acpi_gpio_event *event)
+{
+	mutex_lock(&acpi_gpio_initial_sync_list_lock);
+	if (!list_empty(&event->initial_sync_list))
+		list_del_init(&event->initial_sync_list);
+	mutex_unlock(&acpi_gpio_initial_sync_list_lock);
+}
+
 static irqreturn_t acpi_gpio_irq_handler(int irq, void *data)
 {
 	struct acpi_gpio_event *event = data;
@@ -211,42 +201,8 @@ bool acpi_gpio_get_irq_resource(struct acpi_resource *ares,
 }
 EXPORT_SYMBOL_GPL(acpi_gpio_get_irq_resource);
 
-static void acpi_gpiochip_request_irq(struct acpi_gpio_chip *acpi_gpio,
-				      struct acpi_gpio_event *event)
-{
-	int ret, value;
-
-	ret = request_threaded_irq(event->irq, NULL, event->handler,
-				   event->irqflags, "ACPI:Event", event);
-	if (ret) {
-		dev_err(acpi_gpio->chip->parent,
-			"Failed to setup interrupt handler for %d\n",
-			event->irq);
-		return;
-	}
-
-	if (event->irq_is_wake)
-		enable_irq_wake(event->irq);
-
-	event->irq_requested = true;
-
-	/* Make sure we trigger the initial state of edge-triggered IRQs */
-	value = gpiod_get_raw_value_cansleep(event->desc);
-	if (((event->irqflags & IRQF_TRIGGER_RISING) && value == 1) ||
-	    ((event->irqflags & IRQF_TRIGGER_FALLING) && value == 0))
-		event->handler(event->irq, event);
-}
-
-static void acpi_gpiochip_request_irqs(struct acpi_gpio_chip *acpi_gpio)
-{
-	struct acpi_gpio_event *event;
-
-	list_for_each_entry(event, &acpi_gpio->events, node)
-		acpi_gpiochip_request_irq(acpi_gpio, event);
-}
-
-static acpi_status acpi_gpiochip_alloc_event(struct acpi_resource *ares,
-					     void *context)
+static acpi_status acpi_gpiochip_request_interrupt(struct acpi_resource *ares,
+						   void *context)
 {
 	struct acpi_gpio_chip *acpi_gpio = context;
 	struct gpio_chip *chip = acpi_gpio->chip;
@@ -255,7 +211,8 @@ static acpi_status acpi_gpiochip_alloc_event(struct acpi_resource *ares,
 	struct acpi_gpio_event *event;
 	irq_handler_t handler = NULL;
 	struct gpio_desc *desc;
-	int ret, pin, irq;
+	unsigned long irqflags;
+	int ret, pin, irq, value;
 
 	if (!acpi_gpio_get_irq_resource(ares, &agpio))
 		return AE_OK;
@@ -290,6 +247,8 @@ static acpi_status acpi_gpiochip_alloc_event(struct acpi_resource *ares,
 
 	gpiod_direction_input(desc);
 
+	value = gpiod_get_value(desc);
+
 	ret = gpiochip_lock_as_irq(chip, pin);
 	if (ret) {
 		dev_err(chip->parent, "Failed to lock GPIO as interrupt\n");
@@ -302,42 +261,66 @@ static acpi_status acpi_gpiochip_alloc_event(struct acpi_resource *ares,
 		goto fail_unlock_irq;
 	}
 
-	event = kzalloc(sizeof(*event), GFP_KERNEL);
-	if (!event)
-		goto fail_unlock_irq;
-
-	event->irqflags = IRQF_ONESHOT;
+	irqflags = IRQF_ONESHOT;
 	if (agpio->triggering == ACPI_LEVEL_SENSITIVE) {
 		if (agpio->polarity == ACPI_ACTIVE_HIGH)
-			event->irqflags |= IRQF_TRIGGER_HIGH;
+			irqflags |= IRQF_TRIGGER_HIGH;
 		else
-			event->irqflags |= IRQF_TRIGGER_LOW;
+			irqflags |= IRQF_TRIGGER_LOW;
 	} else {
 		switch (agpio->polarity) {
 		case ACPI_ACTIVE_HIGH:
-			event->irqflags |= IRQF_TRIGGER_RISING;
+			irqflags |= IRQF_TRIGGER_RISING;
 			break;
 		case ACPI_ACTIVE_LOW:
-			event->irqflags |= IRQF_TRIGGER_FALLING;
+			irqflags |= IRQF_TRIGGER_FALLING;
 			break;
 		default:
-			event->irqflags |= IRQF_TRIGGER_RISING |
-					   IRQF_TRIGGER_FALLING;
+			irqflags |= IRQF_TRIGGER_RISING |
+				    IRQF_TRIGGER_FALLING;
 			break;
 		}
 	}
 
+	event = kzalloc(sizeof(*event), GFP_KERNEL);
+	if (!event)
+		goto fail_unlock_irq;
+
 	event->handle = evt_handle;
-	event->handler = handler;
 	event->irq = irq;
-	event->irq_is_wake = agpio->wake_capable == ACPI_WAKE_CAPABLE;
 	event->pin = pin;
 	event->desc = desc;
+	INIT_LIST_HEAD(&event->initial_sync_list);
+
+	ret = request_threaded_irq(event->irq, NULL, handler, irqflags,
+				   "ACPI:Event", event);
+	if (ret) {
+		dev_err(chip->parent,
+			"Failed to setup interrupt handler for %d\n",
+			event->irq);
+		goto fail_free_event;
+	}
+
+	if (agpio->wake_capable == ACPI_WAKE_CAPABLE)
+		enable_irq_wake(irq);
 
 	list_add_tail(&event->node, &acpi_gpio->events);
 
+	/*
+	 * Make sure we trigger the initial state of the IRQ when using RISING
+	 * or FALLING.  Note we run the handlers on late_init, the AML code
+	 * may refer to OperationRegions from other (builtin) drivers which
+	 * may be probed after us.
+	 */
+	if (handler == acpi_gpio_irq_handler &&
+	    (((irqflags & IRQF_TRIGGER_RISING) && value == 1) ||
+	     ((irqflags & IRQF_TRIGGER_FALLING) && value == 0)))
+		acpi_gpio_add_to_initial_sync_list(event);
+
 	return AE_OK;
 
+fail_free_event:
+	kfree(event);
 fail_unlock_irq:
 	gpiochip_unlock_as_irq(chip, pin);
 fail_free_desc:
@@ -361,7 +344,6 @@ void acpi_gpiochip_request_interrupts(struct gpio_chip *chip)
 	struct acpi_gpio_chip *acpi_gpio;
 	acpi_handle handle;
 	acpi_status status;
-	bool defer;
 
 	if (!chip->parent || !chip->to_irq)
 		return;
@@ -375,19 +357,7 @@ void acpi_gpiochip_request_interrupts(struct gpio_chip *chip)
 		return;
 
 	acpi_walk_resources(handle, "_AEI",
-			    acpi_gpiochip_alloc_event, acpi_gpio);
-
-	mutex_lock(&acpi_gpio_deferred_req_irqs_lock);
-	defer = !acpi_gpio_deferred_req_irqs_done;
-	if (defer)
-		list_add(&acpi_gpio->deferred_req_irqs_list_entry,
-			 &acpi_gpio_deferred_req_irqs_list);
-	mutex_unlock(&acpi_gpio_deferred_req_irqs_lock);
-
-	if (defer)
-		return;
-
-	acpi_gpiochip_request_irqs(acpi_gpio);
+			    acpi_gpiochip_request_interrupt, acpi_gpio);
 }
 EXPORT_SYMBOL_GPL(acpi_gpiochip_request_interrupts);
 
@@ -416,21 +386,15 @@ void acpi_gpiochip_free_interrupts(struct gpio_chip *chip)
 	if (ACPI_FAILURE(status))
 		return;
 
-	mutex_lock(&acpi_gpio_deferred_req_irqs_lock);
-	if (!list_empty(&acpi_gpio->deferred_req_irqs_list_entry))
-		list_del_init(&acpi_gpio->deferred_req_irqs_list_entry);
-	mutex_unlock(&acpi_gpio_deferred_req_irqs_lock);
-
 	list_for_each_entry_safe_reverse(event, ep, &acpi_gpio->events, node) {
 		struct gpio_desc *desc;
 
-		if (event->irq_requested) {
-			if (event->irq_is_wake)
-				disable_irq_wake(event->irq);
+		acpi_gpio_del_from_initial_sync_list(event);
 
-			free_irq(event->irq, event);
-		}
+		if (irqd_is_wakeup_set(irq_get_irq_data(event->irq)))
+			disable_irq_wake(event->irq);
 
+		free_irq(event->irq, event);
 		desc = event->desc;
 		if (WARN_ON(IS_ERR(desc)))
 			continue;
@@ -1137,7 +1101,6 @@ void acpi_gpiochip_add(struct gpio_chip *chip)
 
 	acpi_gpio->chip = chip;
 	INIT_LIST_HEAD(&acpi_gpio->events);
-	INIT_LIST_HEAD(&acpi_gpio->deferred_req_irqs_list_entry);
 
 	status = acpi_attach_data(handle, acpi_gpio_chip_dh, acpi_gpio);
 	if (ACPI_FAILURE(status)) {
@@ -1284,21 +1247,20 @@ bool acpi_can_fallback_to_crs(struct acpi_device *adev, const char *con_id)
 	return con_id == NULL;
 }
 
-/* Run deferred acpi_gpiochip_request_irqs() */
-static int acpi_gpio_handle_deferred_request_irqs(void)
+/* Sync the initial state of handlers after all builtin drivers have probed */
+static int acpi_gpio_initial_sync(void)
 {
-	struct acpi_gpio_chip *acpi_gpio, *tmp;
+	struct acpi_gpio_event *event, *ep;
 
-	mutex_lock(&acpi_gpio_deferred_req_irqs_lock);
-	list_for_each_entry_safe(acpi_gpio, tmp,
-				 &acpi_gpio_deferred_req_irqs_list,
-				 deferred_req_irqs_list_entry)
-		acpi_gpiochip_request_irqs(acpi_gpio);
-
-	acpi_gpio_deferred_req_irqs_done = true;
-	mutex_unlock(&acpi_gpio_deferred_req_irqs_lock);
+	mutex_lock(&acpi_gpio_initial_sync_list_lock);
+	list_for_each_entry_safe(event, ep, &acpi_gpio_initial_sync_list,
+				 initial_sync_list) {
+		acpi_evaluate_object(event->handle, NULL, NULL, NULL);
+		list_del_init(&event->initial_sync_list);
+	}
+	mutex_unlock(&acpi_gpio_initial_sync_list_lock);
 
 	return 0;
 }
 /* We must use _sync so that this runs after the first deferred_probe run */
-late_initcall_sync(acpi_gpio_handle_deferred_request_irqs);
+late_initcall_sync(acpi_gpio_initial_sync);

@@ -517,9 +517,6 @@ static int check_mapping(struct ubi_device *ubi, struct ubi_volume *vol, int lnu
 	if (!ubi->fast_attach)
 		return 0;
 
-	if (!vol->checkmap || test_bit(lnum, vol->checkmap))
-		return 0;
-
 	vidb = ubi_alloc_vid_buf(ubi, GFP_NOFS);
 	if (!vidb)
 		return -ENOMEM;
@@ -554,7 +551,6 @@ static int check_mapping(struct ubi_device *ubi, struct ubi_volume *vol, int lnu
 		goto out_free;
 	}
 
-	set_bit(lnum, vol->checkmap);
 	err = 0;
 
 out_free:

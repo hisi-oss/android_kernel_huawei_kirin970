@@ -75,6 +75,13 @@ static struct {
 kprobe_opcode_t * __weak kprobe_lookup_name(const char *name,
 					unsigned int __unused)
 {
+#ifdef CONFIG_CFI_CLANG
+	char namebuf[KSYM_NAME_LEN] = {0};
+	if (name != NULL && strlen(name) < KSYM_NAME_LEN - 4) { /* 4:size .cfi */
+		sprintf(namebuf, "%s.cfi", name);
+		return ((kprobe_opcode_t *)(kallsyms_lookup_name(namebuf)));
+	}
+#endif
 	return ((kprobe_opcode_t *)(kallsyms_lookup_name(name)));
 }
 
@@ -546,8 +553,14 @@ static void do_free_cleaned_kprobes(void)
 	struct optimized_kprobe *op, *tmp;
 
 	list_for_each_entry_safe(op, tmp, &freeing_list, list) {
-		BUG_ON(!kprobe_unused(&op->kp));
 		list_del_init(&op->list);
+		if (WARN_ON_ONCE(!kprobe_unused(&op->kp))) {
+			/*
+			 * This must not happen, but if there is a kprobe
+			 * still in use, keep it on kprobes hash list.
+			 */
+			continue;
+		}
 		free_aggr_kprobe(&op->kp);
 	}
 }
@@ -703,6 +716,7 @@ static void unoptimize_kprobe(struct kprobe *p, bool force)
 static int reuse_unused_kprobe(struct kprobe *ap)
 {
 	struct optimized_kprobe *op;
+	int ret;
 
 	BUG_ON(!kprobe_unused(ap));
 	/*
@@ -716,8 +730,9 @@ static int reuse_unused_kprobe(struct kprobe *ap)
 	/* Enable the probe again */
 	ap->flags &= ~KPROBE_FLAG_DISABLED;
 	/* Optimize it again (remove from op->list) */
-	if (!kprobe_optready(ap))
-		return -EINVAL;
+	ret = kprobe_optready(ap);
+	if (ret)
+		return ret;
 
 	optimize_kprobe(ap);
 	return 0;
@@ -1851,6 +1866,25 @@ void unregister_jprobes(struct jprobe **jps, int num)
 }
 EXPORT_SYMBOL_GPL(unregister_jprobes);
 
+bool __weak arch_kprobe_on_func_entry(unsigned long offset)
+{
+	return !offset;
+}
+
+bool kprobe_on_func_entry(kprobe_opcode_t *addr, const char *sym, unsigned long offset)
+{
+	kprobe_opcode_t *kp_addr = _kprobe_addr(addr, sym, offset);
+
+	if (IS_ERR(kp_addr))
+		return false;
+
+	if (!kallsyms_lookup_size_offset((unsigned long)kp_addr, NULL, &offset) ||
+						!arch_kprobe_on_func_entry(offset))
+		return false;
+
+	return true;
+}
+
 #ifdef CONFIG_KRETPROBES
 /*
  * This kprobe pre_handler is registered with every kretprobe. When probe
@@ -1906,25 +1940,6 @@ static int pre_handler_kretprobe(struct kprobe *p, struct pt_regs *regs)
 	return 0;
 }
 NOKPROBE_SYMBOL(pre_handler_kretprobe);
-
-bool __weak arch_kprobe_on_func_entry(unsigned long offset)
-{
-	return !offset;
-}
-
-bool kprobe_on_func_entry(kprobe_opcode_t *addr, const char *sym, unsigned long offset)
-{
-	kprobe_opcode_t *kp_addr = _kprobe_addr(addr, sym, offset);
-
-	if (IS_ERR(kp_addr))
-		return false;
-
-	if (!kallsyms_lookup_size_offset((unsigned long)kp_addr, NULL, &offset) ||
-						!arch_kprobe_on_func_entry(offset))
-		return false;
-
-	return true;
-}
 
 int register_kretprobe(struct kretprobe *rp)
 {
@@ -2081,6 +2096,13 @@ static void kill_kprobe(struct kprobe *p)
 	 * the original probed function (which will be freed soon) any more.
 	 */
 	arch_remove_kprobe(p);
+
+	/*
+	 * The module is going away. We should disarm the kprobe which
+	 * is using ftrace.
+	 */
+	if (kprobe_ftrace(p))
+		disarm_kprobe_ftrace(p);
 }
 
 /* Disable one kprobe */

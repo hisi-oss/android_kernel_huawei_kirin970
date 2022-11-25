@@ -169,7 +169,11 @@ DECLARE_EVENT_CLASS(block_rq,
 
 		blk_fill_rwbs(__entry->rwbs, rq->cmd_flags, blk_rq_bytes(rq));
 		__get_str(cmd)[0] = '\0';
+#ifdef CONFIG_MAS_BLK
+		memcpy(__entry->comm, rq->mas_req.task_comm, TASK_COMM_LEN);
+#else
 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+#endif
 	),
 
 	TP_printk("%d,%d %s %u (%s) %llu + %u [%s]",
@@ -635,8 +639,57 @@ TRACE_EVENT(block_rq_remap,
 		  (unsigned long long)__entry->old_sector, __entry->nr_bios)
 );
 
+#ifdef CONFIG_MAS_IO_TRACE
+#define HISI_IO_TRACE_LEN   128
+TRACE_EVENT(hisi_io,
+
+	TP_PROTO(const char *func, const char *str_info, const unsigned int len),
+
+	TP_ARGS(func, str_info),
+
+	TP_STRUCT__entry(
+		__dynamic_array(char, info_func, strlen(func) + 1);
+		__dynamic_array(char, info_string, strlen(str_info) + 1);),
+
+	TP_fast_assign(
+		memset(__get_str(info_func), 0x00, strlen(func) + 1);
+		memcpy(__get_str(info_func), func, strlen(func));
+		memset(__get_str(info_string), 0x00, strlen(str_info) + 1);
+		memcpy(__get_str(info_string), str_info, strlen(str_info));),
+
+	TP_printk("[%s]:%s", __get_str(info_func), __get_str(info_string)));
+
+TRACE_EVENT(block_submit_bio,
+
+	TP_PROTO(struct bio *bio, int enter),
+
+	TP_ARGS(bio, enter),
+
+	TP_STRUCT__entry(
+		__field( dev_t,		dev			)
+		__field( sector_t,	sector			)
+		__field( unsigned int,	nr_sector		)
+		__array( char,		rwbs,	RWBS_LEN	)
+		__array( char,		comm,	TASK_COMM_LEN	)
+        __field( unsigned int,	is_enter		)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= bio_dev(bio);
+		__entry->sector		= bio->bi_iter.bi_sector;
+		__entry->nr_sector	= bio_sectors(bio);
+		blk_fill_rwbs(__entry->rwbs, bio->bi_opf, bio->bi_iter.bi_size);
+		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+        __entry->is_enter = enter
+	),
+
+	TP_printk("%d,%d %s %llu + %u %d [%s]",
+		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->rwbs,
+		  (unsigned long long)__entry->sector,
+		  __entry->nr_sector, __entry->is_enter, __entry->comm)
+);
+#endif /* CONFIG_MAS_IO_TRACE */
 #endif /* _TRACE_BLOCK_H */
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>
-

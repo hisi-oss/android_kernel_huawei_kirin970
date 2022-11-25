@@ -379,7 +379,7 @@ static int tpm_tis_send_main(struct tpm_chip *chip, const u8 *buf, size_t len)
 			goto out_err;
 		}
 	}
-	return 0;
+	return len;
 out_err:
 	tpm_tis_ready(chip);
 	return rc;

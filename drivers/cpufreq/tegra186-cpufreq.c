@@ -32,7 +32,7 @@ struct tegra186_cpufreq_cluster_info {
 
 #define NO_CPU -1
 static const struct tegra186_cpufreq_cluster_info tegra186_clusters[] = {
-	/* Denver cluster */
+	/* Leo cluster */
 	{
 		.offset = SZ_64K * 7,
 		.cpus = { 1, 2, NO_CPU, NO_CPU },

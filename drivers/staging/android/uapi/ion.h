@@ -38,11 +38,22 @@ enum ion_heap_type {
 	ION_HEAP_TYPE_CARVEOUT,
 	ION_HEAP_TYPE_CHUNK,
 	ION_HEAP_TYPE_DMA,
+	ION_HEAP_TYPE_DMA_POOL,
+	ION_HEAP_TYPE_CPUDRAW,
+	ION_HEAP_TYPE_IOMMU,
+	ION_HEAP_TYPE_SECCM,
+	ION_HEAP_TYPE_SEC_CONTIG,
+	ION_HEAP_TYPE_SECSG,
+	ION_HEAP_TYPE_CPA,
 	ION_HEAP_TYPE_CUSTOM, /*
 			       * must be last so device specific heaps always
 			       * are at the end of this enum
 			       */
 };
+
+#define ION_HEAP_TYPE_DMA_POOL_MASK	(1 << ION_HEAP_TYPE_DMA_POOL)
+#define ION_HEAP_CPUDRAW_MASK		(1 << ION_HEAP_TYPE_CPUDRAW)
+#define ION_HEAP_TYPE_IOMMU_MASK	(1 << ION_HEAP_TYPE_IOMMU)
 
 #define ION_NUM_HEAP_IDS		(sizeof(unsigned int) * 8)
 
@@ -56,6 +67,32 @@ enum ion_heap_type {
  * when the buffer is mapped for dma
  */
 #define ION_FLAG_CACHED 1
+
+/*
+ * mappings of this buffer will created at mmap time, if this is set
+ * caches must be managed manually
+ */
+#define ION_FLAG_CACHED_NEEDS_SYNC (0x1 << 1)
+#define ION_FLAG_NOT_ZERO_BUFFER (0x1 << 2)	 /* do not zero buffer*/
+#define ION_FLAG_SECURE_BUFFER (0x1 << 3)
+#define ION_FLAG_GRAPHIC_BUFFER (0x1 << 4)
+#define ION_FLAG_GRAPHIC_GPU_BUFFER (0x1 << 5)
+#define ION_FLAG_ALLOC_NOWARN_BUFFER (0x1 << 6)
+#define ION_FLAG_NO_SHRINK_BUFFER (0x1 << 7)
+#define ION_FLAG_SMMUV3_BUFFER (0x1 << 8)
+#define ION_FLAG_DRM_HEAP_ONLY (0x1 << 9)
+#ifdef CONFIG_ZONE_MEDIA_OPT
+#define ION_FLAG_CAM_CMA_BUFFER (0x1 << 10)
+#endif
+#ifdef CONFIG_HISI_LB
+#define ION_FLAG_HISI_LB_PLC_S    (0x1UL << 12)
+#define ION_FLAG_HISI_LB_PLC_E    (0x1UL << 19)
+#define ION_FLAG_HISI_LB_SHIFT    12
+#define ION_FLAG_MM_LB_MASK     (0xffUL << 12)
+
+#define ION_FLAG_2_PLC_ID(flags) \
+	((flags & ION_FLAG_MM_LB_MASK) >> ION_FLAG_HISI_LB_SHIFT)
+#endif
 
 /**
  * DOC: Ion Userspace API

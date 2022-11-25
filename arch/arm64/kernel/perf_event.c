@@ -29,6 +29,8 @@
 #include <linux/perf/arm_pmu.h>
 #include <linux/platform_device.h>
 
+static DEFINE_PER_CPU(bool, is_hotplugging);
+
 /*
  * ARMv8 PMUv3 Performance Events handling code.
  * Common event types (some are defined in asm/perf_event.h).
@@ -82,6 +84,14 @@
 #define ARMV8_PMUV3_PERFCTR_L2I_TLB_REFILL			0x2E
 #define ARMV8_PMUV3_PERFCTR_L2D_TLB				0x2F
 #define ARMV8_PMUV3_PERFCTR_L2I_TLB				0x30
+#define ARMV8_PMUV3_PERFCTR_REMOTE_ACCESS			0x31
+#define ARMV8_PMUV3_PERFCTR_LL_CACHE				0x32
+#define ARMV8_PMUV3_PERFCTR_LL_CACHE_MISS			0x33
+#define ARMV8_PMUV3_PERFCTR_DTLB_WALK				0x34
+#define ARMV8_PMUV3_PERFCTR_ITLB_WALK				0x35
+#define ARMV8_PMUV3_PERFCTR_LL_CACHE_RD				0x36
+#define ARMV8_PMUV3_PERFCTR_LL_CACHE_MISS_RD			0x37
+#define ARMV8_PMUV3_PERFCTR_REMOTE_ACCESS_RD			0x38
 
 /* ARMv8 recommended implementation defined event types */
 #define ARMV8_IMPDEF_PERFCTR_L1D_CACHE_RD			0x40
@@ -175,6 +185,9 @@
 /* ARMv8 Cortex-A53 specific event types. */
 #define ARMV8_A53_PERFCTR_PREF_LINEFILL				0xC2
 
+/* ARMv8 Cortex-A55 specific event types. */
+#define ARMV8_A55_L1D_CACHE_REFILL_PREFETCH			0xC2
+
 /* ARMv8 Cavium ThunderX specific event types. */
 #define ARMV8_THUNDER_PERFCTR_L1D_CACHE_MISS_ST			0xE9
 #define ARMV8_THUNDER_PERFCTR_L1D_CACHE_PREF_ACCESS		0xEA
@@ -192,11 +205,19 @@
 static const unsigned armv8_pmuv3_perf_map[PERF_COUNT_HW_MAX] = {
 	PERF_MAP_ALL_UNSUPPORTED,
 	[PERF_COUNT_HW_CPU_CYCLES]		= ARMV8_PMUV3_PERFCTR_CPU_CYCLES,
+#ifdef CONFIG_HISI_HW_PERF_EVENTS
+	[PERF_COUNT_HW_INSTRUCTIONS]		= HW_OP_UNSUPPORTED,
+	[PERF_COUNT_HW_CACHE_REFERENCES]	= HW_OP_UNSUPPORTED,
+	[PERF_COUNT_HW_CACHE_MISSES]		= HW_OP_UNSUPPORTED,
+	[PERF_COUNT_HW_BRANCH_MISSES]		= HW_OP_UNSUPPORTED,
+#else
 	[PERF_COUNT_HW_INSTRUCTIONS]		= ARMV8_PMUV3_PERFCTR_INST_RETIRED,
 	[PERF_COUNT_HW_CACHE_REFERENCES]	= ARMV8_PMUV3_PERFCTR_L1D_CACHE,
 	[PERF_COUNT_HW_CACHE_MISSES]		= ARMV8_PMUV3_PERFCTR_L1D_CACHE_REFILL,
 	[PERF_COUNT_HW_BRANCH_INSTRUCTIONS]	= ARMV8_PMUV3_PERFCTR_PC_WRITE_RETIRED,
 	[PERF_COUNT_HW_BRANCH_MISSES]		= ARMV8_PMUV3_PERFCTR_BR_MIS_PRED,
+#endif
+	[PERF_COUNT_HW_BRANCH_INSTRUCTIONS]	= ARMV8_PMUV3_PERFCTR_PC_WRITE_RETIRED,
 	[PERF_COUNT_HW_BUS_CYCLES]		= ARMV8_PMUV3_PERFCTR_BUS_CYCLES,
 	[PERF_COUNT_HW_STALLED_CYCLES_FRONTEND]	= ARMV8_PMUV3_PERFCTR_STALL_FRONTEND,
 	[PERF_COUNT_HW_STALLED_CYCLES_BACKEND]	= ARMV8_PMUV3_PERFCTR_STALL_BACKEND,
@@ -238,6 +259,24 @@ static const unsigned armv8_a53_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
 };
 
+static const unsigned armv8_a55_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
+					      [PERF_COUNT_HW_CACHE_OP_MAX]
+					      [PERF_COUNT_HW_CACHE_RESULT_MAX] = {
+	PERF_CACHE_MAP_ALL_UNSUPPORTED,
+
+	[C(L1D)][C(OP_READ)][C(RESULT_ACCESS)]   = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_RD,
+	[C(L1D)][C(OP_READ)][C(RESULT_MISS)]     = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_REFILL_RD,
+	[C(L1D)][C(OP_WRITE)][C(RESULT_ACCESS)]  = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_WR,
+	[C(L1D)][C(OP_WRITE)][C(RESULT_MISS)]    = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_REFILL_WR,
+	[C(L1D)][C(OP_PREFETCH)][C(RESULT_MISS)] = ARMV8_A55_L1D_CACHE_REFILL_PREFETCH,
+
+	[C(LL)][C(OP_READ)][C(RESULT_ACCESS)]    = ARMV8_PMUV3_PERFCTR_LL_CACHE_RD,
+	[C(LL)][C(OP_READ)][C(RESULT_MISS)]      = ARMV8_PMUV3_PERFCTR_LL_CACHE_MISS_RD,
+
+	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]  = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
+	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
+};
+
 static const unsigned armv8_a57_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 					      [PERF_COUNT_HW_CACHE_OP_MAX]
 					      [PERF_COUNT_HW_CACHE_RESULT_MAX] = {
@@ -267,6 +306,28 @@ static const unsigned armv8_a73_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
 
 	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]	= ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
+	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
+};
+
+static const unsigned armv8_a77_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
+					      [PERF_COUNT_HW_CACHE_OP_MAX]
+					      [PERF_COUNT_HW_CACHE_RESULT_MAX] = {
+	PERF_CACHE_MAP_ALL_UNSUPPORTED,
+
+	[C(L1D)][C(OP_READ)][C(RESULT_ACCESS)]   = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_RD,
+	[C(L1D)][C(OP_READ)][C(RESULT_MISS)]     = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_REFILL_RD,
+	[C(L1D)][C(OP_WRITE)][C(RESULT_ACCESS)]  = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_WR,
+	[C(L1D)][C(OP_WRITE)][C(RESULT_MISS)]    = ARMV8_IMPDEF_PERFCTR_L1D_CACHE_REFILL_WR,
+
+	[C(LL)][C(OP_READ)][C(RESULT_ACCESS)]    = ARMV8_PMUV3_PERFCTR_LL_CACHE_RD,
+	[C(LL)][C(OP_READ)][C(RESULT_MISS)]      = ARMV8_PMUV3_PERFCTR_LL_CACHE_MISS_RD,
+
+	[C(DTLB)][C(OP_READ)][C(RESULT_ACCESS)]  = ARMV8_IMPDEF_PERFCTR_L1D_TLB_RD,
+	[C(DTLB)][C(OP_READ)][C(RESULT_MISS)]    = ARMV8_IMPDEF_PERFCTR_L1D_TLB_REFILL_RD,
+	[C(DTLB)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_L1D_TLB_WR,
+	[C(DTLB)][C(OP_WRITE)][C(RESULT_MISS)]   = ARMV8_IMPDEF_PERFCTR_L1D_TLB_REFILL_WR,
+
+	[C(NODE)][C(OP_READ)][C(RESULT_ACCESS)]  = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_RD,
 	[C(NODE)][C(OP_WRITE)][C(RESULT_ACCESS)] = ARMV8_IMPDEF_PERFCTR_BUS_ACCESS_WR,
 };
 
@@ -518,6 +579,27 @@ static inline int armv8pmu_select_counter(int idx)
 	return idx;
 }
 
+#ifdef CONFIG_HISI_HARDEN_BRANCH_PREDICTOR
+u32 armv8pmu_get_counter(struct perf_event *event)
+{
+	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
+	struct hw_perf_event *hwc = &event->hw;
+	int idx = hwc->idx;
+	u32 counter = 0;
+
+	if (!armv8pmu_counter_valid(cpu_pmu, idx)) {
+		pr_err("CPU%u reading wrong counter %d\n",
+			smp_processor_id(), idx);
+		/* set the value to zero */
+		counter = ARMV8_IDX_CYCLE_COUNTER;
+	}  else	{
+		counter = ARMV8_IDX_TO_COUNTER(idx);
+	}
+
+	return counter;
+}
+#endif
+
 static inline u32 armv8pmu_read_counter(struct perf_event *event)
 {
 	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
@@ -676,6 +758,42 @@ static void armv8pmu_disable_event(struct perf_event *event)
 	raw_spin_unlock_irqrestore(&events->pmu_lock, flags);
 }
 
+#ifdef CONFIG_HISI_PMU_WORKAROUND
+static inline u32 armv8pmu_get_enabled_ints(void)
+{
+	u32 int_enset;
+
+	int_enset = read_sysreg(pmintenset_el1);
+	write_sysreg(0xffffffff, pmintenclr_el1);
+	isb();
+	return int_enset;
+}
+
+static inline u32 armv8pmu_update_enabled_ints(u32 value, int idx, int set)
+{
+	if (set)
+		value |=  BIT(ARMV8_IDX_TO_COUNTER(idx));
+	else
+		value &= ~(BIT(ARMV8_IDX_TO_COUNTER(idx)));
+
+	return value;
+}
+
+static inline void armv8pmu_set_enabled_ints(u32 mask)
+{
+	write_sysreg(mask, pmintenset_el1);
+	isb();
+}
+#else
+static inline u32 armv8pmu_get_enabled_ints(void)
+{ return 0; }
+
+static inline u32 armv8pmu_update_enabled_ints(u32 value, int idx, int set)
+{ return value; }
+
+static inline void armv8pmu_set_enabled_ints(u32 mask) { }
+#endif
+
 static irqreturn_t armv8pmu_handle_irq(int irq_num, void *dev)
 {
 	u32 pmovsr;
@@ -684,6 +802,12 @@ static irqreturn_t armv8pmu_handle_irq(int irq_num, void *dev)
 	struct pmu_hw_events *cpuc = this_cpu_ptr(cpu_pmu->hw_events);
 	struct pt_regs *regs;
 	int idx;
+	u32 enabled_ints;
+
+	/*
+	 * Get enabled the PMU interrupts and mask all PMU interrupts.
+	 */
+	enabled_ints = armv8pmu_get_enabled_ints();
 
 	/*
 	 * Get and reset the IRQ flags
@@ -705,8 +829,8 @@ static irqreturn_t armv8pmu_handle_irq(int irq_num, void *dev)
 		struct perf_event *event = cpuc->events[idx];
 		struct hw_perf_event *hwc;
 
-		/* Ignore if we don't have an event. */
-		if (!event)
+		/* Ignore if we don't have an event */
+		if (!event || event->state != PERF_EVENT_STATE_ACTIVE)
 			continue;
 
 		/*
@@ -722,8 +846,16 @@ static irqreturn_t armv8pmu_handle_irq(int irq_num, void *dev)
 		if (!armpmu_event_set_period(event))
 			continue;
 
-		if (perf_event_overflow(event, &data, regs))
+		if (perf_event_overflow(event, &data, regs)) {
 			cpu_pmu->disable(event);
+
+			/*
+			 * Update the list of interrupts
+			 * that should be reenabled.
+			 */
+			enabled_ints = armv8pmu_update_enabled_ints(
+					enabled_ints, idx, 0);
+		}
 	}
 
 	/*
@@ -734,6 +866,11 @@ static irqreturn_t armv8pmu_handle_irq(int irq_num, void *dev)
 	 * will not work.
 	 */
 	irq_work_run();
+
+	/*
+	 * Re-enable the PMU interrupts
+	 */
+	armv8pmu_set_enabled_ints(enabled_ints);
 
 	return IRQ_HANDLED;
 }
@@ -794,9 +931,6 @@ static int armv8pmu_set_event_filter(struct hw_perf_event *event,
 {
 	unsigned long config_base = 0;
 
-	if (attr->exclude_idle)
-		return -EPERM;
-
 	/*
 	 * If we're running in hyp mode, then we *are* the hypervisor.
 	 * Therefore we ignore exclude_hv in this configuration, since
@@ -845,8 +979,8 @@ static void armv8pmu_reset(void *info)
 	 * Initialize & Reset PMNC. Request overflow interrupt for
 	 * 64 bit cycle counter but cheat in armv8pmu_write_counter().
 	 */
-	armv8pmu_pmcr_write(ARMV8_PMU_PMCR_P | ARMV8_PMU_PMCR_C |
-			    ARMV8_PMU_PMCR_LC);
+	armv8pmu_pmcr_write(armv8pmu_pmcr_read() | ARMV8_PMU_PMCR_P |
+			ARMV8_PMU_PMCR_C | ARMV8_PMU_PMCR_LC);
 }
 
 static int __armv8_pmuv3_map_event(struct perf_event *event,
@@ -884,6 +1018,11 @@ static int armv8_a53_map_event(struct perf_event *event)
 	return __armv8_pmuv3_map_event(event, NULL, &armv8_a53_perf_cache_map);
 }
 
+static int armv8_a55_map_event(struct perf_event *event)
+{
+	return __armv8_pmuv3_map_event(event, NULL, &armv8_a55_perf_cache_map);
+}
+
 static int armv8_a57_map_event(struct perf_event *event)
 {
 	return __armv8_pmuv3_map_event(event, NULL, &armv8_a57_perf_cache_map);
@@ -892,6 +1031,11 @@ static int armv8_a57_map_event(struct perf_event *event)
 static int armv8_a73_map_event(struct perf_event *event)
 {
 	return __armv8_pmuv3_map_event(event, NULL, &armv8_a73_perf_cache_map);
+}
+
+static int armv8_a77_map_event(struct perf_event *event)
+{
+	return __armv8_pmuv3_map_event(event, NULL, &armv8_a77_perf_cache_map);
 }
 
 static int armv8_thunder_map_event(struct perf_event *event)
@@ -942,6 +1086,55 @@ static void __armv8pmu_probe_pmu(void *info)
 			     ARRAY_SIZE(pmceid));
 }
 
+static void armv8pmu_idle_update(struct arm_pmu *cpu_pmu)
+{
+	struct pmu_hw_events *hw_events;
+	struct perf_event *event;
+	int idx;
+
+	if (!cpu_pmu)
+		return;
+
+	if (__this_cpu_read(is_hotplugging))
+		return;
+
+	hw_events = this_cpu_ptr(cpu_pmu->hw_events);
+
+	if (!hw_events)
+		return;
+
+	for (idx = 0; idx < cpu_pmu->num_events; ++idx) {
+
+		if (!test_bit(idx, hw_events->used_mask))
+			continue;
+
+		event = hw_events->events[idx];
+
+		if (!event || !event->attr.exclude_idle ||
+				event->state != PERF_EVENT_STATE_ACTIVE)
+			continue;
+
+		cpu_pmu->pmu.read(event);
+	}
+}
+
+struct arm_pmu_and_idle_nb {
+	struct arm_pmu *cpu_pmu;
+	struct notifier_block perf_cpu_idle_nb;
+};
+
+static int perf_cpu_idle_notifier(struct notifier_block *nb,
+				unsigned long action, void *data)
+{
+	struct arm_pmu_and_idle_nb *pmu_nb = container_of(nb,
+				struct arm_pmu_and_idle_nb, perf_cpu_idle_nb);
+
+	if (action == IDLE_START)
+		armv8pmu_idle_update(pmu_nb->cpu_pmu);
+
+	return NOTIFY_OK;
+}
+
 static int armv8pmu_probe_pmu(struct arm_pmu *cpu_pmu)
 {
 	struct armv8pmu_probe_info probe = {
@@ -949,6 +1142,15 @@ static int armv8pmu_probe_pmu(struct arm_pmu *cpu_pmu)
 		.present = false,
 	};
 	int ret;
+	struct arm_pmu_and_idle_nb *pmu_idle_nb;
+
+	pmu_idle_nb = devm_kzalloc(&cpu_pmu->plat_device->dev,
+					sizeof(*pmu_idle_nb), GFP_KERNEL);
+	if (!pmu_idle_nb)
+		return -ENOMEM;
+
+	pmu_idle_nb->cpu_pmu = cpu_pmu;
+	pmu_idle_nb->perf_cpu_idle_nb.notifier_call = perf_cpu_idle_notifier;
 
 	ret = smp_call_function_any(&cpu_pmu->supported_cpus,
 				    __armv8pmu_probe_pmu,
@@ -956,7 +1158,12 @@ static int armv8pmu_probe_pmu(struct arm_pmu *cpu_pmu)
 	if (ret)
 		return ret;
 
-	return probe.present ? 0 : -ENODEV;
+	if (!probe.present)
+		return -ENODEV;
+
+	idle_notifier_register(&pmu_idle_nb->perf_cpu_idle_nb);
+
+	return 0;
 }
 
 static int armv8_pmu_init(struct arm_pmu *cpu_pmu)
@@ -975,6 +1182,9 @@ static int armv8_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->stop			= armv8pmu_stop,
 	cpu_pmu->reset			= armv8pmu_reset,
 	cpu_pmu->max_period		= (1LLU << 32) - 1,
+#ifdef CONFIG_HISI_HW_PERF_EVENTS
+	cpu_pmu->min_period		= 0xfffff,
+#endif
 	cpu_pmu->set_event_filter	= armv8pmu_set_event_filter;
 	cpu_pmu->filter_match		= armv8pmu_filter_match;
 
@@ -1021,6 +1231,22 @@ static int armv8_a53_pmu_init(struct arm_pmu *cpu_pmu)
 
 	cpu_pmu->name			= "armv8_cortex_a53";
 	cpu_pmu->map_event		= armv8_a53_map_event;
+	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_EVENTS] =
+		&armv8_pmuv3_events_attr_group;
+	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_FORMATS] =
+		&armv8_pmuv3_format_attr_group;
+
+	return 0;
+}
+
+static int armv8_a55_pmu_init(struct arm_pmu *cpu_pmu)
+{
+	int ret = armv8_pmu_init(cpu_pmu);
+	if (ret)
+		return ret;
+
+	cpu_pmu->name			= "armv8_cortex_a55";
+	cpu_pmu->map_event		= armv8_a55_map_event;
 	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_EVENTS] =
 		&armv8_pmuv3_events_attr_group;
 	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_FORMATS] =
@@ -1077,6 +1303,22 @@ static int armv8_a73_pmu_init(struct arm_pmu *cpu_pmu)
 	return 0;
 }
 
+static int armv8_a77_pmu_init(struct arm_pmu *cpu_pmu)
+{
+	int ret = armv8_pmu_init(cpu_pmu);
+	if (ret)
+		return ret;
+
+	cpu_pmu->name			= "armv8_cortex_a77";
+	cpu_pmu->map_event		= armv8_a77_map_event;
+	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_EVENTS] =
+		&armv8_pmuv3_events_attr_group;
+	cpu_pmu->attr_groups[ARMPMU_ATTR_GROUP_FORMATS] =
+		&armv8_pmuv3_format_attr_group;
+
+	return 0;
+}
+
 static int armv8_thunder_pmu_init(struct arm_pmu *cpu_pmu)
 {
 	int ret = armv8_pmu_init(cpu_pmu);
@@ -1113,17 +1355,72 @@ static const struct of_device_id armv8_pmu_of_device_ids[] = {
 	{.compatible = "arm,armv8-pmuv3",	.data = armv8_pmuv3_init},
 	{.compatible = "arm,cortex-a35-pmu",	.data = armv8_a35_pmu_init},
 	{.compatible = "arm,cortex-a53-pmu",	.data = armv8_a53_pmu_init},
+	{.compatible = "arm,cortex-a55-pmu",	.data = armv8_a55_pmu_init},
 	{.compatible = "arm,cortex-a57-pmu",	.data = armv8_a57_pmu_init},
 	{.compatible = "arm,cortex-a72-pmu",	.data = armv8_a72_pmu_init},
 	{.compatible = "arm,cortex-a73-pmu",	.data = armv8_a73_pmu_init},
+	{.compatible = "arm,cortex-a77-pmu",	.data = armv8_a77_pmu_init},
 	{.compatible = "cavium,thunder-pmu",	.data = armv8_thunder_pmu_init},
 	{.compatible = "brcm,vulcan-pmu",	.data = armv8_vulcan_pmu_init},
 	{},
 };
 
+#ifdef CONFIG_HOTPLUG_CPU
+static int perf_event_hotplug_coming_up(unsigned int cpu)
+{
+	per_cpu(is_hotplugging, cpu) = false;
+	return 0;
+}
+
+static int perf_event_hotplug_going_down(unsigned int cpu)
+{
+	per_cpu(is_hotplugging, cpu) = true;
+	return 0;
+}
+
+static int perf_event_cpu_hp_init(void)
+{
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_NOTIFY_PERF_ONLINE,
+				"PERF_EVENT/CPUHP_AP_NOTIFY_PERF_ONLINE",
+				perf_event_hotplug_coming_up,
+				perf_event_hotplug_going_down);
+	if (ret)
+		pr_err("CPU hotplug notifier for perf_event.c could not be registered: %d\n",
+		       ret);
+
+	return ret;
+}
+#else
+static int perf_event_cpu_hp_init(void) { return 0; }
+#endif
+
+/*
+ * Non DT systems have their micro/arch events probed at run-time.
+ * A fairly complete list of generic events are provided and ones that
+ * aren't supported by the current PMU are disabled.
+ */
+static const struct pmu_probe_info armv8_pmu_probe_table[] = {
+	PMU_PROBE(0, 0, armv8_pmuv3_init), /* enable all defined counters */
+	{ /* sentinel value */ }
+};
+
 static int armv8_pmu_device_probe(struct platform_device *pdev)
 {
-	return arm_pmu_device_probe(pdev, armv8_pmu_of_device_ids, NULL);
+	int ret, cpu;
+
+	/* set to true so armv8pmu_idle_update doesn't try to load
+	 * hw_events before arm_pmu_device_probe has initialized it.
+	 */
+	for_each_possible_cpu(cpu) {
+		per_cpu(is_hotplugging, cpu) = false;
+	}
+
+	ret = arm_pmu_device_probe(pdev, armv8_pmu_of_device_ids,
+		(acpi_disabled ?  NULL : armv8_pmu_probe_table));
+
+	return ret;
 }
 
 static struct platform_driver armv8_pmu_driver = {
@@ -1137,6 +1434,12 @@ static struct platform_driver armv8_pmu_driver = {
 
 static int __init armv8_pmu_driver_init(void)
 {
+	int ret;
+
+	ret = perf_event_cpu_hp_init();
+	if (ret < 0)
+	    return ret;
+
 	if (acpi_disabled)
 		return platform_driver_register(&armv8_pmu_driver);
 	else

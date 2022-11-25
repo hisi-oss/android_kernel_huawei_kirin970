@@ -47,6 +47,17 @@
 #include <net/raw.h>
 
 #define TCPUDP_MIB_MAX max_t(u32, UDP_MIB_MAX, TCP_MIB_MAX)
+#ifndef CONFIG_HW_WIFIPRO
+#undef CONFIG_HW_WIFIPRO_PROC
+#endif
+
+#ifdef CONFIG_HW_WIFIPRO_PROC
+#include <hwnet/ipv4/wifipro_tcp_monitor.h>
+#endif
+
+#ifdef CONFIG_HW_CHR_TCP_SMALL_WIN_PROC
+#include <hwnet/ipv4/tcp_small_window_chr_monitor.h>
+#endif
 
 /*
  *	Report socket allocation statistics [mea@utu.fi]
@@ -299,6 +310,8 @@ static const struct snmp_mib snmp4_net_list[] = {
 	SNMP_MIB_ITEM("TCPKeepAlive", LINUX_MIB_TCPKEEPALIVE),
 	SNMP_MIB_ITEM("TCPMTUPFail", LINUX_MIB_TCPMTUPFAIL),
 	SNMP_MIB_ITEM("TCPMTUPSuccess", LINUX_MIB_TCPMTUPSUCCESS),
+	SNMP_MIB_ITEM("TCPWqueueTooBig", LINUX_MIB_TCPWQUEUETOOBIG),
+	SNMP_MIB_ITEM("TCPAckCompressed", LINUX_MIB_TCPACKCOMPRESSED),
 	SNMP_MIB_SENTINEL
 };
 
@@ -533,6 +546,15 @@ static __net_init int ip_proc_init_net(struct net *net)
 		goto out_netstat;
 	if (!proc_create("snmp", S_IRUGO, net->proc_net, &snmp_seq_fops))
 		goto out_snmp;
+#ifdef CONFIG_HW_WIFIPRO_PROC
+	if (wifipro_init_proc(net))
+		WIFIPRO_WARNING("wifipro_init_proc fail!");
+#endif
+
+#ifdef CONFIG_HW_CHR_TCP_SMALL_WIN_PROC
+	if (tcp_small_win_init_proc(net))
+		hw_chr_err("tcp_small_win_init_proc fail!");
+#endif
 
 	return 0;
 

@@ -246,7 +246,6 @@ static int vpd_section_destroy(struct vpd_section *sec)
 		sysfs_remove_bin_file(vpd_kobj, &sec->bin_attr);
 		kfree(sec->raw_name);
 		memunmap(sec->baseaddr);
-		sec->enabled = false;
 	}
 
 	return 0;
@@ -280,10 +279,8 @@ static int vpd_sections_init(phys_addr_t physaddr)
 		ret = vpd_section_init("rw", &rw_vpd,
 				       physaddr + sizeof(struct vpd_cbmem) +
 				       header.ro_size, header.rw_size);
-		if (ret) {
-			vpd_section_destroy(&ro_vpd);
+		if (ret)
 			return ret;
-		}
 	}
 
 	return 0;

@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
+#include <chipset_common/security/kshield.h>
 
 #include <asm/pgtable.h>
 #include <asm/set_memory.h>
@@ -47,6 +48,9 @@ static int __change_memory_common(unsigned long start, unsigned long size,
 	struct page_change_data data;
 	int ret;
 
+	if (kshield_chk_change_mem(start, size, set_mask, clear_mask))
+		return -EINVAL;
+
 	data.set_mask = set_mask;
 	data.clear_mask = clear_mask;
 
@@ -56,6 +60,28 @@ static int __change_memory_common(unsigned long start, unsigned long size,
 	flush_tlb_kernel_range(start, start + size);
 	return ret;
 }
+
+#ifdef CONFIG_HKIP_PRMEM
+int __change_prmem_common(unsigned long start, unsigned long size,
+			  pgprot_t set_mask, pgprot_t clear_mask)
+{
+	struct page_change_data data;
+	int ret;
+
+	if (kshield_chk_change_mem(start, size, set_mask, clear_mask))
+		return -EINVAL;
+
+	data.set_mask = set_mask;
+	data.clear_mask = clear_mask;
+
+	ret = apply_to_page_range(&init_mm, start, size, change_page_range,
+					&data);
+
+	flush_tlb_kernel_range(start, start + size);
+	return ret;
+
+}
+#endif /* CONFIG_HKIP_PRMEM */
 
 static int change_memory_common(unsigned long addr, int numpages,
 				pgprot_t set_mask, pgprot_t clear_mask)

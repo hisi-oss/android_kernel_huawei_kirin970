@@ -197,6 +197,7 @@
 const char *scsi_trace_parse_cdb(struct trace_seq*, unsigned char*, int);
 #define __parse_cdb(cdb, len) scsi_trace_parse_cdb(p, cdb, len)
 
+#ifdef CONFIG_SCSI
 TRACE_EVENT(scsi_dispatch_cmd_start,
 
 	TP_PROTO(struct scsi_cmnd *cmd),
@@ -359,6 +360,7 @@ TRACE_EVENT(scsi_eh_wakeup,
 );
 
 #endif /*  _TRACE_SCSI_H */
+#endif
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>

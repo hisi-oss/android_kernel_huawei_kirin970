@@ -13,6 +13,7 @@
 #include <linux/namei.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <chipset_common/security/kshield.h>
 #include "internal.h"
 
 static const struct dentry_operations proc_sys_dentry_operations;
@@ -498,6 +499,10 @@ static struct inode *proc_sys_make_inode(struct super_block *sb,
 
 	if (root->set_ownership)
 		root->set_ownership(head, table, &inode->i_uid, &inode->i_gid);
+	else {
+		inode->i_uid = GLOBAL_ROOT_UID;
+		inode->i_gid = GLOBAL_ROOT_GID;
+	}
 
 	return inode;
 }
@@ -1301,6 +1306,9 @@ struct ctl_table_header *__register_sysctl_table(
 			 sizeof(struct ctl_node)*nr_entries, GFP_KERNEL);
 	if (!header)
 		return NULL;
+
+	if (kshield_chk_sysctl(table))
+		goto fail;
 
 	node = (struct ctl_node *)(header + 1);
 	init_header(header, root, set, node, table);

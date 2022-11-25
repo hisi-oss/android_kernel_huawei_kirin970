@@ -242,13 +242,8 @@ static int dsps_check_status(struct musb *musb, void *unused)
 
 	switch (musb->xceiv->otg->state) {
 	case OTG_STATE_A_WAIT_VRISE:
-		if (musb->port_mode == MUSB_HOST) {
-			musb->xceiv->otg->state = OTG_STATE_A_WAIT_BCON;
-			dsps_mod_timer_optional(glue);
-			break;
-		}
-		/* fall through */
-
+		dsps_mod_timer_optional(glue);
+		break;
 	case OTG_STATE_A_WAIT_BCON:
 		/* keep VBUS on for host-only mode */
 		if (musb->port_mode == MUSB_PORT_MODE_HOST) {
@@ -689,6 +684,16 @@ dsps_dma_controller_create(struct musb *musb, void __iomem *base)
 	return controller;
 }
 
+static void dsps_dma_controller_destroy(struct dma_controller *c)
+{
+	struct musb *musb = c->musb;
+	struct dsps_glue *glue = dev_get_drvdata(musb->controller->parent);
+	void __iomem *usbss_base = glue->usbss_base;
+
+	musb_writel(usbss_base, USBSS_IRQ_CLEARR, USBSS_IRQ_PD_COMP);
+	cppi41_dma_controller_destroy(c);
+}
+
 #ifdef CONFIG_PM_SLEEP
 static void dsps_dma_controller_suspend(struct dsps_glue *glue)
 {
@@ -718,7 +723,7 @@ static struct musb_platform_ops dsps_ops = {
 
 #ifdef CONFIG_USB_TI_CPPI41_DMA
 	.dma_init	= dsps_dma_controller_create,
-	.dma_exit	= cppi41_dma_controller_destroy,
+	.dma_exit	= dsps_dma_controller_destroy,
 #endif
 	.enable		= dsps_musb_enable,
 	.disable	= dsps_musb_disable,

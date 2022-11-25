@@ -55,15 +55,23 @@ struct mmc_queue_req {
 	int			drv_op_result;
 	void			*drv_op_data;
 	unsigned int		ioc_count;
+	struct mmc_cmdq_req	mmc_cmdq_req;
 };
 
 struct mmc_queue {
 	struct mmc_card		*card;
+	struct mmc_ctx		ctx;
+	struct blk_mq_tag_set	tag_set;
 	struct task_struct	*thread;
 	struct semaphore	thread_sem;
 	bool			suspended;
 	bool			asleep;
 	struct mmc_blk_data	*blkdata;
+	int			(*issue_fn)(struct mmc_queue *, struct request *);
+	int			(*cmdq_issue_fn)(struct mmc_queue *, struct request *);
+	void			(*cmdq_complete_fn)(struct request *);
+	void			(*cmdq_error_fn)(struct mmc_queue *);
+	enum blk_eh_timer_return (*cmdq_req_timed_out)(struct request *);
 	struct request_queue	*queue;
 	/*
 	 * FIXME: this counter is not a very reliable way of keeping
@@ -72,16 +80,40 @@ struct mmc_queue {
 	 * associated mmc_queue_req data.
 	 */
 	int			qcnt;
+	struct mmc_queue_req    *mqrq_cmdq;
+
+	struct request			*cmdq_req_peeked;
+	struct work_struct      cmdq_err_work;
+	struct completion       cmdq_shutdown_complete;
+	struct workqueue_struct* workqueue_cmdq;
+	struct work_struct	work_cmdq;
+	void (*cmdq_shutdown)(struct mmc_queue *);
+
+	int tmp_get_card_flag;
 };
 
 extern int mmc_init_queue(struct mmc_queue *, struct mmc_card *, spinlock_t *,
-			  const char *);
+			  const char *, int);
 extern void mmc_cleanup_queue(struct mmc_queue *);
-extern void mmc_queue_suspend(struct mmc_queue *);
+extern int mmc_queue_suspend(struct mmc_queue *,int wait);
 extern void mmc_queue_resume(struct mmc_queue *);
 extern unsigned int mmc_queue_map_sg(struct mmc_queue *,
 				     struct mmc_queue_req *);
 
 extern int mmc_access_rpmb(struct mmc_queue *);
+
+extern int mmc_cmdq_init(struct mmc_queue *mq, struct mmc_card *card);
+extern void mmc_cmdq_clean(struct mmc_queue *mq, struct mmc_card *card);
+extern int mmc_cmdq_init_queue(struct mmc_queue *mq, struct mmc_card * card,
+			spinlock_t *lock, const char *subname);
+extern int mmc_cmdq_mq_init_queue(struct mmc_queue *mq, struct mmc_card * card,
+			spinlock_t *lock);
+extern int mmc_mq_init_queue(struct mmc_queue *mq, int q_depth,
+			     const struct blk_mq_ops *mq_ops, spinlock_t *lock);
+
+extern int mmc_mq_init_request(struct blk_mq_tag_set *set, struct request *req,
+			       unsigned int hctx_idx, unsigned int numa_node);
+extern void mmc_mq_exit_request(struct blk_mq_tag_set *set, struct request *req,
+				unsigned int hctx_idx);
 
 #endif

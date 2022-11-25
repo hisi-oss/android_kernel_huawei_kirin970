@@ -650,8 +650,7 @@ static inline unsigned int dma_get_max_seg_size(struct device *dev)
 	return SZ_64K;
 }
 
-static inline unsigned int dma_set_max_seg_size(struct device *dev,
-						unsigned int size)
+static inline int dma_set_max_seg_size(struct device *dev, unsigned int size)
 {
 	if (dev->dma_parms) {
 		dev->dma_parms->max_segment_size = size;
@@ -816,6 +815,16 @@ static inline int dma_mmap_wc(struct device *dev,
 #define dma_unmap_addr_set(PTR, ADDR_NAME, VAL)  do { } while (0)
 #define dma_unmap_len(PTR, LEN_NAME)             (0)
 #define dma_unmap_len_set(PTR, LEN_NAME, VAL)    do { } while (0)
+#endif
+
+#ifdef CONFIG_HISI_IOMMU_DMA
+void *dma_iommu_alloc(struct device *dev, size_t size,
+				dma_addr_t *dma_handle, gfp_t flags,
+				unsigned long attrs);
+
+void dma_iommu_free(struct device *dev, size_t size,
+				void *vaddr, dma_addr_t dma_handle,
+				unsigned long attrs);
 #endif
 
 #endif

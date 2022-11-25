@@ -375,7 +375,7 @@ int tipc_topsrv_start(struct net *net)
 	topsrv->tipc_conn_new		= tipc_subscrb_connect_cb;
 	topsrv->tipc_conn_release	= tipc_subscrb_release_cb;
 
-	strscpy(topsrv->name, name, sizeof(topsrv->name));
+	strncpy(topsrv->name, name, strlen(name) + 1);
 	tn->topsrv = topsrv;
 	atomic_set(&tn->subscription_count, 0);
 

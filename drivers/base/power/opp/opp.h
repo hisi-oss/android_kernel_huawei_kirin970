@@ -86,7 +86,7 @@ struct dev_pm_opp {
 
 	struct device_node *np;
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_OPP_DEBUG_FS
 	struct dentry *dentry;
 #endif
 };
@@ -104,7 +104,7 @@ struct opp_device {
 	struct list_head node;
 	const struct device *dev;
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_OPP_DEBUG_FS
 	struct dentry *dentry;
 #endif
 };
@@ -150,6 +150,7 @@ struct opp_table {
 	struct list_head node;
 
 	struct blocking_notifier_head head;
+	struct srcu_notifier_head srcu_head;
 	struct list_head dev_list;
 	struct list_head opp_list;
 	struct kref kref;
@@ -174,7 +175,7 @@ struct opp_table {
 	int (*set_opp)(struct dev_pm_set_opp_data *data);
 	struct dev_pm_set_opp_data *set_opp_data;
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_OPP_DEBUG_FS
 	struct dentry *dentry;
 	char dentry_name[NAME_MAX];
 #endif
@@ -199,7 +200,7 @@ void _of_init_opp_table(struct opp_table *opp_table, struct device *dev);
 static inline void _of_init_opp_table(struct opp_table *opp_table, struct device *dev) {}
 #endif
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_OPP_DEBUG_FS
 void opp_debug_remove_one(struct dev_pm_opp *opp);
 int opp_debug_create_one(struct dev_pm_opp *opp, struct opp_table *opp_table);
 int opp_debug_register(struct opp_device *opp_dev, struct opp_table *opp_table);
@@ -217,6 +218,6 @@ static inline int opp_debug_register(struct opp_device *opp_dev,
 static inline void opp_debug_unregister(struct opp_device *opp_dev,
 					struct opp_table *opp_table)
 { }
-#endif		/* DEBUG_FS */
+#endif		/* OPP_DEBUG_FS */
 
 #endif		/* __DRIVER_OPP_H__ */

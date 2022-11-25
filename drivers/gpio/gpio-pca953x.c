@@ -22,8 +22,37 @@
 #include <linux/platform_data/pca953x.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
-
+#include <linux/kthread.h>
+#include <linux/delay.h>
+#include <linux/workqueue.h>
+#include <linux/kernel.h>
+#include <linux/of_gpio.h> // for of_gpio_count and of_get_gpio
 #include <asm/unaligned.h>
+#include <huawei_platform/log/hw_log.h>
+#ifdef CONFIG_HUAWEI_DSM
+#include <dsm/dsm_pub.h>
+#endif
+
+#ifdef HWLOG_TAG
+#undef HWLOG_TAG
+#endif
+
+#define HWLOG_TAG pca953x
+HWLOG_REGIST();
+
+#ifdef CONFIG_HUAWEI_DSM
+/* use i2c client */
+#define DSM_CLIENT_NAME_PCA                     "dsm_i2c"
+#define DSM_PCA953_DETECTION_ERROR_NO           925206303
+#define DSM_REPORT_SLEEP_TIME                   10000
+#define DETECT_WORK_STATE_IDLE                  0
+#define DETECT_WORK_STATE_INITED                1
+#define DETECT_WORK_STATE_SCHEDULED             2
+#endif
+
+
+static struct delayed_work g_chip_detect_work;
+static int g_detect_work_state;
 
 #define PCA953X_INPUT		0
 #define PCA953X_OUTPUT		1
@@ -45,6 +74,7 @@
 #define PCAL953X_INT_MASK	37
 #define PCAL953X_INT_STAT	38
 
+#define PCA_GPIO_DEF_BASE	(-1)
 #define PCA_GPIO_MASK		0x00FF
 #define PCA_INT			0x0100
 #define PCA_PCAL		0x0200
@@ -142,6 +172,28 @@ struct pca953x_chip {
 	int (*write_regs)(struct pca953x_chip *, int, u8 *);
 	int (*read_regs)(struct pca953x_chip *, int, u8 *);
 };
+
+static void pca953x_dsm_client_report_work(struct work_struct *work)
+{
+	struct dsm_client *pca953x_dsm_client = NULL;
+
+	pca953x_dsm_client = dsm_find_client(DSM_CLIENT_NAME_PCA);
+	if (!pca953x_dsm_client) {
+		hwlog_err("%s: dsm_i2c client find fail\n", __func__);
+		return;
+	}
+
+	if (!dsm_client_ocuppy(pca953x_dsm_client)) {
+		hwlog_info("%s: pca953x_dsm_client ocuppy succ\n", __func__);
+		dsm_client_record(pca953x_dsm_client,
+			"pca953x is not detected\n");
+		dsm_client_notify(pca953x_dsm_client,
+			DSM_PCA953_DETECTION_ERROR_NO);
+	} else {
+		hwlog_err("pca953x dsm report fail\n");
+		return;
+	}
+}
 
 static int pca953x_read_single(struct pca953x_chip *chip, int reg, u32 *val,
 				int off)
@@ -645,7 +697,7 @@ static int pca953x_irq_setup(struct pca953x_chip *chip,
 					   NULL,
 					   pca953x_irq_handler,
 					   IRQF_TRIGGER_LOW | IRQF_ONESHOT |
-						   IRQF_SHARED,
+						   IRQF_SHARED | IRQF_NO_SUSPEND,
 					   dev_name(&client->dev), chip);
 		if (ret) {
 			dev_err(&client->dev, "failed to request irq %d\n",
@@ -685,6 +737,15 @@ static int pca953x_irq_setup(struct pca953x_chip *chip,
 }
 #endif
 
+static void dsm_delay_report(void)
+{
+	if (g_detect_work_state == DETECT_WORK_STATE_INITED) {
+		schedule_delayed_work(&g_chip_detect_work,
+			msecs_to_jiffies(DSM_REPORT_SLEEP_TIME));
+		g_detect_work_state = DETECT_WORK_STATE_SCHEDULED;
+	}
+}
+
 static int device_pca953x_init(struct pca953x_chip *chip, u32 invert)
 {
 	int ret;
@@ -693,14 +754,17 @@ static int device_pca953x_init(struct pca953x_chip *chip, u32 invert)
 	chip->regs = &pca953x_regs;
 
 	ret = pca953x_read_regs(chip, chip->regs->output, chip->reg_output);
-	if (ret)
+	if (ret) {
+		dsm_delay_report();
 		goto out;
+	}
 
 	ret = pca953x_read_regs(chip, chip->regs->direction,
 				chip->reg_direction);
-	if (ret)
+	if (ret) {
+		dsm_delay_report();
 		goto out;
-
+	}
 	/* set platform specific polarity inversion */
 	if (invert)
 		memset(val, 0xFF, NBANK(chip));
@@ -710,6 +774,21 @@ static int device_pca953x_init(struct pca953x_chip *chip, u32 invert)
 	ret = pca953x_write_regs(chip, PCA953X_INVERT, val);
 out:
 	return ret;
+}
+
+static int pca_parse_gpio_base(struct device *dev)
+{
+	if (dev) {
+		struct device_node *np = dev->of_node;
+		int gpio_base = PCA_GPIO_DEF_BASE;
+
+		if (of_property_read_u32(np, "linux,gpio-base", &gpio_base))
+			return PCA_GPIO_DEF_BASE;
+		if (gpio_base >= 0)
+			return gpio_base;
+	}
+
+	return PCA_GPIO_DEF_BASE;
 }
 
 static int device_pca957x_init(struct pca953x_chip *chip, u32 invert)
@@ -758,11 +837,18 @@ static int pca953x_probe(struct i2c_client *client,
 	int ret;
 	u32 invert = 0;
 	struct regulator *reg;
+	struct device *dev = &client->dev;
 
 	chip = devm_kzalloc(&client->dev,
 			sizeof(struct pca953x_chip), GFP_KERNEL);
 	if (chip == NULL)
 		return -ENOMEM;
+
+	if (g_detect_work_state == DETECT_WORK_STATE_IDLE) {
+		INIT_DELAYED_WORK(&g_chip_detect_work,
+			pca953x_dsm_client_report_work);
+		g_detect_work_state = DETECT_WORK_STATE_INITED;
+	}
 
 	pdata = dev_get_platdata(&client->dev);
 	if (pdata) {
@@ -773,7 +859,7 @@ static int pca953x_probe(struct i2c_client *client,
 	} else {
 		struct gpio_desc *reset_gpio;
 
-		chip->gpio_start = -1;
+		chip->gpio_start = pca_parse_gpio_base(dev);
 		irq_base = 0;
 
 		/*
@@ -955,11 +1041,56 @@ static const struct of_device_id pca953x_dt_ids[] = {
 
 MODULE_DEVICE_TABLE(of, pca953x_dt_ids);
 
+static int pca953x_suspend(struct device *dev)
+{
+	printk("%s enter\n", __func__);
+	return 0;
+}
+
+static int pca953x_resume(struct device *dev)
+{
+	int ret;
+	int gpio_num;
+	int reset_gpio;
+	int gpio_idx = 0; // we current only use one gpio(rst pin) for ti,tca9539
+	struct device_node *of_node = dev->of_node;
+
+	gpio_num = of_gpio_count(of_node);
+	if (gpio_num != 1) {
+		dev_err(dev, "%s invalid gpio_num(%d), please check "
+		"io_expander_tca9539 in overy.dts\n", __func__, gpio_num);
+		return -1;
+	}
+	reset_gpio = of_get_gpio(of_node, gpio_idx);
+	printk("%s gpio_num(%d) reset_gpio(%d)\n", __func__, gpio_num, reset_gpio);
+	ret = gpio_request(reset_gpio, "reset-pca953x");
+	if (ret) {
+		dev_err(dev, "%s request reset pin(%d) failed\n", __func__, reset_gpio);
+		return ret;
+	}
+	ret = gpio_direction_output(reset_gpio, 0);
+	if (ret) {
+		dev_err(dev, "%s output low level failed\n", __func__);
+		return ret;
+	}
+	mdelay(10);
+	ret = gpio_direction_output(reset_gpio, 1);
+	if (ret) {
+		dev_err(dev, "%s output high level failed\n", __func__);
+	}
+	return ret;
+}
+
+static struct dev_pm_ops pca953x_pm = {
+	.suspend = pca953x_suspend,
+	.resume  = pca953x_resume,
+};
 static struct i2c_driver pca953x_driver = {
 	.driver = {
 		.name	= "pca953x",
 		.of_match_table = pca953x_dt_ids,
 		.acpi_match_table = ACPI_PTR(pca953x_acpi_ids),
+		.pm = &pca953x_pm,
 	},
 	.probe		= pca953x_probe,
 	.remove		= pca953x_remove,

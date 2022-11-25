@@ -167,9 +167,6 @@ struct qed_spq_entry {
 	enum spq_mode			comp_mode;
 	struct qed_spq_comp_cb		comp_cb;
 	struct qed_spq_comp_done	comp_done; /* SPQ_MODE_EBLOCK */
-
-	/* Posted entry for unlimited list entry in EBLOCK mode */
-	struct qed_spq_entry		*post_ent;
 };
 
 struct qed_eq {
@@ -380,7 +377,6 @@ void qed_consq_setup(struct qed_hwfn *p_hwfn);
  * @param p_hwfn
  */
 void qed_consq_free(struct qed_hwfn *p_hwfn);
-int qed_spq_pend_post(struct qed_hwfn *p_hwfn);
 
 /**
  * @file

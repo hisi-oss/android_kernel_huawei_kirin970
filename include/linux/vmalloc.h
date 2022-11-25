@@ -47,7 +47,12 @@ struct vmap_area {
 	unsigned long flags;
 	struct rb_node rb_node;         /* address sorted rbtree */
 	struct list_head list;          /* address sorted list */
-	struct llist_node purge_list;    /* "lazy purge" list */
+	union {
+		struct llist_node purge_list;    /* "lazy purge" list */
+#ifdef CONFIG_HKIP_PRMEM
+		struct prmem_node *node;
+#endif
+	};
 	struct vm_struct *vm;
 	struct rcu_head rcu_head;
 };
@@ -100,6 +105,11 @@ extern void *vmap(struct page **pages, unsigned int count,
 			unsigned long flags, pgprot_t prot);
 extern void vunmap(const void *addr);
 
+#ifdef CONFIG_HISI_LB
+extern void *lb_vmap(struct page **pages, unsigned int count,
+      unsigned int offset, unsigned long flags, pgprot_t prot);
+#endif
+
 extern int remap_vmalloc_range_partial(struct vm_area_struct *vma,
 				       unsigned long uaddr, void *kaddr,
 				       unsigned long size);
@@ -108,6 +118,7 @@ extern int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
 							unsigned long pgoff);
 void vmalloc_sync_all(void);
  
+struct vmap_area *find_vmap_area(unsigned long addr);
 /*
  *	Lowlevel-APIs (not for driver use!)
  */

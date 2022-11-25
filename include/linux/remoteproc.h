@@ -41,6 +41,9 @@
 #include <linux/completion.h>
 #include <linux/idr.h>
 #include <linux/of.h>
+#ifdef CONFIG_HISP_REMOTEPROC
+#include <linux/firmware.h>
+#endif
 
 /**
  * struct resource_table - firmware resource table header
@@ -115,7 +118,16 @@ enum fw_resource_type {
 	RSC_DEVMEM	= 1,
 	RSC_TRACE	= 2,
 	RSC_VDEV	= 3,
+#ifdef CONFIG_HISP_REMOTEPROC
+	RSC_VERSION	= 4,
+	RSC_RDRMEM	= 5,
+	RSC_DYNMEM	= 6,
+	RSC_CDA	= 7,
+	RSC_SHARED_PARA	= 8,
+	RSC_LAST	= 9,
+#else
 	RSC_LAST	= 4,
+#endif
 };
 
 #define FW_RSC_ADDR_ANY (-1)
@@ -337,6 +349,16 @@ struct rproc_ops {
 	int (*stop)(struct rproc *rproc);
 	void (*kick)(struct rproc *rproc, int vqid);
 	void * (*da_to_va)(struct rproc *rproc, u64 da, int len);
+#ifdef CONFIG_HISP_REMOTEPROC
+	int (*request_image)(struct rproc *rproc,
+		const struct firmware **firmware_p, struct device *dev);
+	void (*release_image)(const struct firmware *firmware_p);
+	int (*enable_iommu)(struct rproc *rproc);
+	void (*disable_iommu)(struct rproc *rproc);
+	size_t (*unmap_iommu)(struct rproc *rproc,
+		struct rproc_mem_entry *entry);
+	void (*resource_cleanup)(struct rproc *rproc);
+#endif
 };
 
 /**
@@ -444,6 +466,14 @@ struct rproc {
 	struct resource_table *cached_table;
 	bool has_iommu;
 	bool auto_boot;
+#ifdef CONFIG_HISP_REMOTEPROC
+	struct list_head dynamic_mems;
+	struct list_head reserved_mems;
+	struct list_head caches;
+	struct list_head pages;
+	bool sync_flag;
+	unsigned int ipc_addr;
+#endif
 };
 
 /**

@@ -43,7 +43,9 @@
 #include <net/transp_v6.h>
 #endif
 #include <net/ip_fib.h>
-
+#ifdef CONFIG_MPTCP
+#include <net/mptcp.h>
+#endif
 #include <linux/errqueue.h>
 #include <linux/uaccess.h>
 
@@ -146,17 +148,19 @@ static void ip_cmsg_recv_security(struct msghdr *msg, struct sk_buff *skb)
 
 static void ip_cmsg_recv_dstaddr(struct msghdr *msg, struct sk_buff *skb)
 {
-	__be16 _ports[2], *ports;
 	struct sockaddr_in sin;
+	__be16 *ports;
+	int end;
+
+	end = skb_transport_offset(skb) + 4;
+	if (end > 0 && !pskb_may_pull(skb, end))
+		return;
 
 	/* All current transport protocols have the port numbers in the
 	 * first four bytes of the transport header and this function is
 	 * written with this assumption in mind.
 	 */
-	ports = skb_header_pointer(skb, skb_transport_offset(skb),
-				   sizeof(_ports), &_ports);
-	if (!ports)
-		return;
+	ports = (__be16 *)skb_transport_header(skb);
 
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = ip_hdr(skb)->daddr;
@@ -334,6 +338,7 @@ int ip_cmsg_send(struct sock *sk, struct msghdr *msg, struct ipcm_cookie *ipc,
    sent to multicast group to reach destination designated router.
  */
 struct ip_ra_chain __rcu *ip_ra_chain;
+static DEFINE_SPINLOCK(ip_ra_lock);
 
 
 static void ip_ra_destroy_rcu(struct rcu_head *head)
@@ -354,18 +359,24 @@ int ip_ra_control(struct sock *sk, unsigned char on,
 		return -EINVAL;
 
 	new_ra = on ? kmalloc(sizeof(*new_ra), GFP_KERNEL) : NULL;
+	if (on && !new_ra)
+		return -ENOMEM;
 
+	spin_lock_bh(&ip_ra_lock);
 	for (rap = &ip_ra_chain;
-	     (ra = rtnl_dereference(*rap)) != NULL;
+	     (ra = rcu_dereference_protected(*rap,
+		lockdep_is_held(&ip_ra_lock))) != NULL;
 	     rap = &ra->next) {
 		if (ra->sk == sk) {
 			if (on) {
+				spin_unlock_bh(&ip_ra_lock);
 				kfree(new_ra);
 				return -EADDRINUSE;
 			}
 			/* dont let ip_call_ra_chain() use sk again */
 			ra->sk = NULL;
 			RCU_INIT_POINTER(*rap, ra->next);
+			spin_unlock_bh(&ip_ra_lock);
 
 			if (ra->destructor)
 				ra->destructor(sk);
@@ -379,14 +390,17 @@ int ip_ra_control(struct sock *sk, unsigned char on,
 			return 0;
 		}
 	}
-	if (!new_ra)
+	if (!new_ra) {
+		spin_unlock_bh(&ip_ra_lock);
 		return -ENOBUFS;
+	}
 	new_ra->sk = sk;
 	new_ra->destructor = destructor;
 
 	RCU_INIT_POINTER(new_ra->next, ra);
 	rcu_assign_pointer(*rap, new_ra);
 	sock_hold(sk);
+	spin_unlock_bh(&ip_ra_lock);
 
 	return 0;
 }
@@ -584,7 +598,6 @@ static bool setsockopt_needs_rtnl(int optname)
 	case MCAST_LEAVE_GROUP:
 	case MCAST_LEAVE_SOURCE_GROUP:
 	case MCAST_UNBLOCK_SOURCE:
-	case IP_ROUTER_ALERT:
 		return true;
 	}
 	return false;
@@ -637,6 +650,8 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 
 	/* If optlen==0, it is equivalent to val == 0 */
 
+	if (optname == IP_ROUTER_ALERT)
+		return ip_ra_control(sk, val ? 1 : 0, NULL);
 	if (ip_mroute_opt(optname))
 		return ip_mroute_setsockopt(sk, optname, optval, optlen);
 
@@ -658,7 +673,12 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			break;
 		old = rcu_dereference_protected(inet->inet_opt,
 						lockdep_sock_is_held(sk));
+#ifdef CONFIG_MPTCP
+		if (inet->is_icsk && !is_meta_sk(sk)) {
+#else
 		if (inet->is_icsk) {
+#endif
+
 			struct inet_connection_sock *icsk = inet_csk(sk);
 #if IS_ENABLED(CONFIG_IPV6)
 			if (sk->sk_family == PF_INET ||
@@ -752,6 +772,23 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			inet->tos = val;
 			sk->sk_priority = rt_tos2priority(val);
 			sk_dst_reset(sk);
+#ifdef CONFIG_MPTCP
+			/* Update TOS on mptcp subflow */
+			if (is_meta_sk(sk)) {
+				struct sock *sk_it;
+
+				mptcp_for_each_sk(tcp_sk(sk)->mpcb, sk_it) {
+					if (inet_sk(sk_it)->tos !=
+						inet_sk(sk)->tos) {
+						inet_sk(sk_it)->tos =
+							inet_sk(sk)->tos;
+						sk_it->sk_priority =
+							sk->sk_priority;
+						sk_dst_reset(sk_it);
+					}
+				}
+			}
+#endif
 		}
 		break;
 	case IP_TTL:
@@ -1142,9 +1179,6 @@ mc_msf_out:
 		if (val != 0 && val != 1)
 			goto e_inval;
 		inet->mc_all = val;
-		break;
-	case IP_ROUTER_ALERT:
-		err = ip_ra_control(sk, val ? 1 : 0, NULL);
 		break;
 
 	case IP_FREEBIND:
