@@ -139,7 +139,7 @@ CONFIG_ARM64_SW_TTBR0_PAN=y
 # CONFIG_ARM64_VHE is not set
 # CONFIG_ARM64_UAO is not set
 CONFIG_RANDOMIZE_BASE=y
-CONFIG_CMDLINE="androidboot.android_dt_dir=/disabledtfstab androidboot.boot_devices=ff3c0000.ufs"
+CONFIG_CMDLINE="androidboot.android_dt_dir=/disabledtfstab androidboot.boot_devices=ff3c0000.ufs loop.max_part=7"
 CONFIG_CMDLINE_EXTEND=y
 # CONFIG_EFI is not set
 CONFIG_HISI_PMU_WORKAROUND=y
