@@ -942,16 +942,6 @@ static int loop_set_fd(struct loop_device *lo, fmode_t mode,
 	if (!(lo_flags & LO_FLAGS_READ_ONLY) && file->f_op->fsync)
 		blk_queue_write_cache(lo->lo_queue, true, false);
 
-	if (io_is_direct(lo->lo_backing_file) && inode->i_sb->s_bdev) {
-		/* In case of direct I/O, match underlying block size */
-		unsigned short bsize = bdev_logical_block_size(
-			inode->i_sb->s_bdev);
-
-		blk_queue_logical_block_size(lo->lo_queue, bsize);
-		blk_queue_physical_block_size(lo->lo_queue, bsize);
-		blk_queue_io_min(lo->lo_queue, bsize);
-	}
-
 	loop_update_dio(lo);
 	set_capacity(lo->lo_disk, size);
 	bd_set_size(bdev, size << 9);
@@ -1838,10 +1828,6 @@ static int loop_add(struct loop_device **l, int i)
 
 	/* allocate id, if @id >= 0, we're requesting that specific id */
 	if (i >= 0) {
-		if (i > (INT_MAX - 1)) {
-			pr_err("%s %d i: %d would overflow!\n", __func__, __LINE__, i);
-			goto out_free_dev;
-		}
 		err = idr_alloc(&loop_index_idr, lo, i, i + 1, GFP_KERNEL);
 		if (err == -ENOSPC)
 			err = -EEXIST;
@@ -1851,11 +1837,6 @@ static int loop_add(struct loop_device **l, int i)
 	if (err < 0)
 		goto out_free_dev;
 	i = err;
-
-	if (i >= (int)(1UL << MINORBITS)) {
-		err = -ERANGE;
-		goto out_free_idr;
-	}
 
 	err = -ENOMEM;
 	lo->tag_set.ops = &loop_mq_ops;
@@ -1890,10 +1871,8 @@ static int loop_add(struct loop_device **l, int i)
 
 	err = -ENOMEM;
 	disk = lo->lo_disk = alloc_disk(1 << part_shift);
-	if (!disk) {
-		err = -ENOMEM;
+	if (!disk)
 		goto out_free_queue;
-	}
 
 	/*
 	 * Disable partition scanning by default. The in-kernel partition
