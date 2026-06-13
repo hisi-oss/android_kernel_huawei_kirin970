@@ -1983,19 +1983,31 @@ void module_disable_ro(const struct module *mod)
 	frob_rodata(&mod->init_layout, set_memory_rw);
 }
 
-static inline void hhee_lkm_update(const struct module_layout *layout)
-{
 #ifdef CONFIG_HHEE
+void hhee_lkm_text_update(const void *base, unsigned long text_size)
+{
 	struct arm_smccc_res res;
 
 	if (hhee_check_enable() != HHEE_ENABLE)
 		return;
-	arm_smccc_hvc(HHEE_LKM_UPDATE, (unsigned long)layout->base,
-			layout->text_size, clarify_token, 0, 0, 0, 0, &res);
+
+	if (!base || !text_size)
+		return;
+
+	arm_smccc_hvc(HHEE_LKM_UPDATE, (unsigned long)base,
+		      text_size, clarify_token, 0, 0, 0, 0, &res);
 
 	if (res.a0)
-		pr_err("service from hhee failed test.\n");
+		pr_err("hhee lkm text update failed: base=%px size=%lu ret=%lu\n",
+		       base, text_size, res.a0);
+}
+EXPORT_SYMBOL_GPL(hhee_lkm_text_update);
+#endif
 
+static inline void hhee_lkm_update(const struct module_layout *layout)
+{
+#ifdef CONFIG_HHEE
+	hhee_lkm_text_update(layout->base, layout->text_size);
 #else
 	(void *)layout;
 #endif

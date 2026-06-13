@@ -31,6 +31,10 @@
 
 #include "bpf_jit.h"
 
+#ifdef CONFIG_HHEE
+#include <linux/hisi/hkip_hhee.h>
+#endif
+
 #define TMP_REG_1 (MAX_BPF_JIT_REG + 0)
 #define TMP_REG_2 (MAX_BPF_JIT_REG + 1)
 #define TCALL_CNT (MAX_BPF_JIT_REG + 2)
@@ -931,6 +935,9 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	bpf_flush_icache(header, ctx.image + ctx.idx);
 
 	bpf_jit_binary_lock_ro(header);
+#ifdef CONFIG_HHEE
+	hhee_lkm_text_update(header, header->pages << PAGE_SHIFT);
+#endif
 	prog->bpf_func = (void *)ctx.image;
 	prog->jited = 1;
 	prog->jited_len = image_size;
