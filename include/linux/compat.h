@@ -773,8 +773,6 @@ static inline struct compat_timeval ns_to_compat_timeval(s64 nsec)
 	return ctv;
 }
 
-asmlinkage long compat_sys_delay(unsigned long ns);
-
 #else /* !CONFIG_COMPAT */
 
 #define is_compat_task() (0)
